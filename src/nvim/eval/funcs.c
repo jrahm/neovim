@@ -4550,6 +4550,8 @@ static void f_has(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     "winaltkeys",
     "writebackup",
     "nvim",
+    "colorcolchar",
+    "omnihighlight",
   };
 
   bool n = false;

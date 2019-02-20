@@ -3553,6 +3553,7 @@ static char *set_chars_option(win_T *wp, char_u **varp, bool set)
     { &wp->w_p_lcs_chars.lead,    "lead",     NUL  },
     { &wp->w_p_lcs_chars.trail,   "trail",    NUL  },
     { &wp->w_p_lcs_chars.conceal, "conceal",  NUL  },
+    { &wp->w_p_lcs_chars.colorcol, "colorcol",  NUL  },
   };
 
   if (varp == &p_lcs || varp == &wp->w_p_lcs) {
