@@ -1194,6 +1194,7 @@ struct window_S {
     int tab3;                       ///< third tab character
     int trail;
     int conceal;
+    int colorcol;
   } w_p_lcs_chars;
 
   // 'fillchars' characters. Defaults set in set_chars_option().

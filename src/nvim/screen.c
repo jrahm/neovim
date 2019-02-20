@@ -3980,8 +3980,14 @@ static int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow,
           delay_virttext = false;
 
           if (cells == -1) {
-            schar_from_ascii(linebuf_char[off], ' ');
             cells = 1;
+            if (draw_color_col && VCOL_HLC == *color_cols) {
+              // Draw the colorcolumn character.
+              c = wp->w_p_lcs_chars.colorcol;
+              schar_from_char(linebuf_char[off], c);
+            } else {
+              schar_from_ascii(linebuf_char[off], ' ');
+            }
           }
           col += cells * col_stride;
           if (draw_color_col) {

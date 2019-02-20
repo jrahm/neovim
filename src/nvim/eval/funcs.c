@@ -4241,6 +4241,7 @@ static void f_has(typval_T *argvars, typval_T *rettv, FunPtr fptr)
 #endif
     "nvim",
     "omnihighlight",
+    "colorcolchar",
   };
 
   bool n = false;
