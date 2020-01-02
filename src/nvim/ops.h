@@ -22,6 +22,7 @@ typedef int (*Indenter)(void);
 #define PUT_LINE_SPLIT   16     // split line for linewise register
 #define PUT_LINE_FORWARD 32     // put linewise register below Visual sel.
 #define PUT_BLOCK_INNER  64     // in block mode, do not add trailing spaces
+#define ITER_REGISTER_NULL 0
 
 /*
  * Registers:
@@ -37,7 +38,8 @@ typedef int (*Indenter)(void);
 // The following registers should not be saved in ShaDa file:
 #define STAR_REGISTER 37
 #define PLUS_REGISTER 38
-#define NUM_REGISTERS 39
+#define USER_REGISTERS_START 39
+#define NUM_REGISTERS USER_REGISTERS_START
 
 // Operator IDs; The order must correspond to opchars[] in ops.c!
 #define OP_NOP          0       // no pending operation
@@ -90,6 +92,9 @@ typedef struct yankreg {
   dict_T *additional_data;  ///< Additional data from ShaDa file.
 } yankreg_T;
 
+/// Returns a reference to a user-defined register.
+int get_userreg(const int regname);
+
 /// Convert register name into register index
 ///
 /// @param[in]  regname  Register name.
@@ -111,9 +116,14 @@ static inline int op_reg_index(const int regname)
   } else if (regname == '+') {
     return PLUS_REGISTER;
   } else {
-    return -1;
+    return get_userreg(regname);
   }
 }
+
+struct yank_registers;
+typedef struct yank_registers yank_registers_T;
+
+typedef size_t iter_register_T;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "ops.h.generated.h"
