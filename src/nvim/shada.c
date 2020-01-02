@@ -2485,7 +2485,7 @@ static inline void shada_initialize_registers(WriteMergerState *const wms,
                                               int max_reg_lines)
   FUNC_ATTR_NONNULL_ALL FUNC_ATTR_ALWAYS_INLINE
 {
-  const void *reg_iter = NULL;
+  iter_register_T reg_iter = ITER_REGISTER_NULL;
   const bool limit_reg_lines = max_reg_lines >= 0;
   do {
     yankreg_T reg;
@@ -2516,7 +2516,7 @@ static inline void shada_initialize_registers(WriteMergerState *const wms,
         }
       }
     };
-  } while (reg_iter != NULL);
+  } while (reg_iter != ITER_REGISTER_NULL);
 }
 
 /// Replace numbered mark in WriteMergerState

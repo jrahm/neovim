@@ -2998,6 +2998,15 @@ return {
       defaults={if_true={vi=4000}}
     },
     {
+      full_name='userregfun', abbreviation='urf',
+      type='string', scope={'buffer'},
+      secure=true,
+      vi_def=true,
+      alloced=true,
+      varname='p_urf',
+      defaults={if_true={vi=""}}
+    },
+    {
       full_name='verbose', abbreviation='vbs',
       short_desc=N_("give informative messages"),
       type='number', scope={'global'},

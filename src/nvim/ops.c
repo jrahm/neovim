@@ -54,7 +54,24 @@
 #include "nvim/os/input.h"
 #include "nvim/os/time.h"
 
-static yankreg_T y_regs[NUM_REGISTERS];
+#include "nvim/yanktrie.h"
+
+struct yank_registers {
+  yanktrie_T inner;
+};
+
+yank_registers_T y_regs;
+
+static yankreg_T *get_reg(yank_registers_T *regs, int idx) 
+{
+  return yanktrie_get(&regs->inner, (size_t) idx);
+
+}
+
+static yankreg_T *get_global_reg(int idx)
+{
+  return get_reg(&y_regs, idx);
+}
 
 static yankreg_T *y_previous = NULL; /* ptr to last written yankreg */
 
@@ -763,6 +780,23 @@ char_u *get_expr_line_src(void)
   return vim_strsave(expr_line);
 }
 
+int get_userreg(int regname)
+{
+  if ((regname >= 'a' && regname <= 'z')
+      || (regname >= 'A' && regname <= 'Z')
+      || (regname >= '0' && regname <= '9')
+      || (regname <= 127 && strchr("\"-:.%#=*+_/", regname))
+      || regname == Ctrl_F
+      || regname == Ctrl_P
+      || regname == Ctrl_W
+      || regname == Ctrl_A
+      || (regname + USER_REGISTERS_START) < regname) {
+    return -1;
+  }
+
+  return regname + USER_REGISTERS_START;
+}
+
 /// Returns whether `regname` is a valid name of a yank register.
 /// Note: There is no check for 0 (default register), caller should do this.
 /// The black hole register '_' is regarded as valid.
@@ -778,7 +812,8 @@ bool valid_yank_reg(int regname, bool writing)
       || regname == '-'
       || regname == '_'
       || regname == '*'
-      || regname == '+') {
+      || regname == '+'
+      || get_userreg(regname) != -1) {
     return true;
   }
   return false;
@@ -827,7 +862,7 @@ yankreg_T *get_yank_register(int regname, int mode)
   if (i == -1) {
     i = 0;
   }
-  reg = &y_regs[i];
+  reg = get_global_reg(i);
 
   if (mode == YREG_YANK) {
     // remember the written register for unnamed paste
@@ -1246,6 +1281,86 @@ static void stuffescaped(const char *arg, int literally)
   }
 }
 
+/*
+ * Executes a call to the put() function on a user-defined register to get the
+ * contents of a user defined register.
+ */
+static int eval_urf_put(char_u *ufn, int regname, char_u **argp)
+{
+  char_u regname_str[5];
+  int len;
+
+  len = (*mb_char2len)(regname);
+  regname_str[len] = 0;
+  utf_char2bytes(regname, regname_str);
+
+  typval_T args[3];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_UNKNOWN;
+
+  args[0].vval.v_string = (char_u *)"put";
+  args[1].vval.v_string = regname_str;
+
+  *argp = (char_u *)call_func_retstr((char *)ufn, 3, args);
+  return *argp == NULL;
+}
+
+/*
+ * Executes the yank() function on a user-defined register to set the contents
+ * of that register.
+ */
+static int eval_yank_userreg(const char_u *ufn, int regname, yankreg_T *reg)
+{
+  if (!reg)
+    return -1;
+
+  char_u *totalbuf;
+  size_t totallen = 0;
+  size_t i, j, k;
+  int ret, len;
+  char_u regname_str[5];
+
+  {
+    // Concat the contents of the register to pass into the yank()
+    // user-defined function.
+    for (i = 0; i < reg->y_size; ++i) {
+      totallen += strlen((char *)reg->y_array[i]) + 1;
+    }
+    totalbuf = xmalloc(sizeof(char_u) * totallen);
+    j = 0;
+    for (i = 0; i < reg->y_size; ++i) {
+      for (k = 0; reg->y_array[i][k] != 0; ++k, ++j) {
+        totalbuf[j] = reg->y_array[i][k];
+      }
+      if (i < reg->y_size - 1) {
+        totalbuf[j++] = '\n';
+      }
+    }
+    totalbuf[j++] = 0;
+  }
+
+  len = (*mb_char2len)(regname);
+  regname_str[len] = 0;
+  utf_char2bytes(regname, regname_str);
+
+  typval_T args[4];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_STRING;
+  args[3].v_type = VAR_UNKNOWN;
+
+  args[0].vval.v_string = (char_u *)"yank";
+  args[1].vval.v_string = regname_str;
+  args[2].vval.v_string = totalbuf;
+
+  char_u *dup_ufn = (char_u *)xstrdup((char *)ufn);
+  ret = (int)call_func_retnr(dup_ufn, 3, args);
+  xfree(dup_ufn);
+  xfree(totalbuf);
+  return ret;
+}
+
 // If "regname" is a special register, return true and store a pointer to its
 // value in "argp".
 bool get_spec_reg(
@@ -1329,6 +1444,15 @@ bool get_spec_reg(
   case '_':                     /* black hole: always empty */
     *argp = (char_u *)"";
     return true;
+
+  default:                     /* User-defined registers. */
+    if (get_userreg(regname) != -1) {
+      if (!curbuf->b_p_urf || strlen((char *) curbuf->b_p_urf) == 0)
+        return false;
+      eval_urf_put(curbuf->b_p_urf, regname, argp);
+      *allocated = true;
+      return true;
+    }
   }
 
   return false;
@@ -1373,14 +1497,14 @@ bool cmdline_paste_reg(int regname, bool literally_arg, bool remcr)
 // Shift the delete registers: "9 is cleared, "8 becomes "9, etc.
 static void shift_delete_registers(bool y_append)
 {
-  free_register(&y_regs[9]);  // free register "9
+  free_register(get_global_reg(9));  // free register "9
   for (int n = 9; n > 1; n--) {
-    y_regs[n] = y_regs[n - 1];
+    *get_global_reg(n) = *get_global_reg(n - 1);
   }
   if (!y_append) {
-    y_previous = &y_regs[1];
+    y_previous = get_global_reg(1);
   }
-  y_regs[1].y_array = NULL;  // set register "1 to empty
+  get_global_reg(1)->y_array = NULL;  // set register "1 to empty
 }
 
 /*
@@ -1477,7 +1601,7 @@ int op_delete(oparg_T *oap)
     if (oap->regname != 0 || oap->motion_type == kMTLineWise
         || oap->line_count > 1 || oap->use_reg_one) {
       shift_delete_registers(is_append_register(oap->regname));
-      reg = &y_regs[1];
+      reg = get_global_reg(1);
       op_yank_reg(oap, false, reg, false);
       did_yank = true;
     }
@@ -2436,7 +2560,7 @@ int op_change(oparg_T *oap)
  */
 void init_yank(void)
 {
-  memset(&(y_regs[0]), 0, sizeof(y_regs));
+  init_yanktrie(&y_regs.inner);
 }
 
 #if defined(EXITFREE)
@@ -2445,7 +2569,7 @@ void clear_registers(void)
   int i;
 
   for (i = 0; i < NUM_REGISTERS; i++) {
-    free_register(&y_regs[i]);
+    free_register(get_global_reg(i));
   }
 }
 
@@ -2489,6 +2613,11 @@ bool op_yank(oparg_T *oap, bool message, int deleting)
 
   yankreg_T *reg = get_yank_register(oap->regname, YREG_YANK);
   op_yank_reg(oap, message, reg, is_append_register(oap->regname));
+
+  if (get_userreg(oap->regname) != -1) {
+    return eval_yank_userreg(curbuf->b_p_urf, oap->regname, reg) != -1;
+  }
+
   // op_delete will set_clipboard and do_autocmd
   if (!deleting) {
     set_clipboard(oap->regname, reg);
@@ -2926,7 +3055,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
 
   if (insert_string != NULL) {
     y_type = kMTCharWise;
-    if (regname == '=') {
+    if (regname == '=' || get_userreg(regname) != -1) {
       /* For the = register we need to split the string at NL
        * characters.
        * Loop twice: count the number of lines and save them. */
@@ -3575,9 +3704,9 @@ void ex_display(exarg_T *eap)
       if (y_previous != NULL)
         yb = y_previous;
       else
-        yb = &(y_regs[0]);
+        yb = get_global_reg(0);
     } else
-      yb = &(y_regs[i]);
+      yb = get_global_reg(i);
 
     get_clipboard(name, &yb, true);
 
@@ -5240,6 +5369,10 @@ static void finish_write_reg(int name, yankreg_T *reg, yankreg_T *old_y_previous
   // Send text of clipboard register to the clipboard.
   set_clipboard(name, reg);
 
+  if (get_userreg(name) != -1) {
+    eval_yank_userreg(curbuf->b_p_urf, name, reg);
+  }
+
   // ':let @" = "val"' should change the meaning of the "" register
   if (name != '"') {
     y_previous = old_y_previous;
@@ -5827,7 +5960,7 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
   }
 
   if (explicit_cb_reg) {
-    target = &y_regs[*name == '*' ? STAR_REGISTER : PLUS_REGISTER];
+    target = get_global_reg(*name == '*' ? STAR_REGISTER : PLUS_REGISTER);
     if (writing && (cb_flags & (*name == '*' ? CB_UNNAMED : CB_UNNAMEDPLUS))) {
       clipboard_needs_update = false;
     }
@@ -5844,10 +5977,10 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
 
     if (cb_flags & CB_UNNAMEDPLUS) {
       *name = (cb_flags & CB_UNNAMED && writing) ? '"': '+';
-      target = &y_regs[PLUS_REGISTER];
+      target = get_global_reg(PLUS_REGISTER);
     } else {
       *name = '*';
-      target = &y_regs[STAR_REGISTER];
+      target = get_global_reg(STAR_REGISTER);
     }
     goto end;
   }
@@ -6164,11 +6297,11 @@ static inline bool reg_empty(const yankreg_T *const reg)
 /// Iterate over global registers.
 ///
 /// @see op_register_iter
-const void *op_global_reg_iter(const void *const iter, char *const name,
+iter_register_T op_global_reg_iter(iter_register_T iter, char *const name,
                                yankreg_T *const reg, bool *is_unnamed)
   FUNC_ATTR_NONNULL_ARG(2, 3, 4) FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  return op_reg_iter(iter, y_regs, name, reg, is_unnamed);
+  return op_reg_iter(iter, &y_regs, name, reg, is_unnamed);
 }
 
 /// Iterate over registers `regs`.
@@ -6180,31 +6313,31 @@ const void *op_global_reg_iter(const void *const iter, char *const name,
 ///
 /// @return Pointer that must be passed to next `op_register_iter` call or
 ///         NULL if iteration is over.
-const void *op_reg_iter(const void *const iter, const yankreg_T *const regs,
+iter_register_T op_reg_iter(iter_register_T iter, yank_registers_T *regs,
                         char *const name, yankreg_T *const reg,
                         bool *is_unnamed)
   FUNC_ATTR_NONNULL_ARG(3, 4, 5) FUNC_ATTR_WARN_UNUSED_RESULT
 {
   *name = NUL;
-  const yankreg_T *iter_reg = (iter == NULL
-                               ? &(regs[0])
-                               : (const yankreg_T *const)iter);
-  while (iter_reg - &(regs[0]) < NUM_SAVED_REGISTERS && reg_empty(iter_reg)) {
-    iter_reg++;
-  }
-  if (iter_reg - &(regs[0]) == NUM_SAVED_REGISTERS || reg_empty(iter_reg)) {
-    return NULL;
-  }
-  int iter_off = (int)(iter_reg - &(regs[0]));
-  *name = (char)get_register_name(iter_off);
-  *reg = *iter_reg;
-  *is_unnamed = (iter_reg == y_previous);
-  while (++iter_reg - &(regs[0]) < NUM_SAVED_REGISTERS) {
-    if (!reg_empty(iter_reg)) {
-      return (void *) iter_reg;
+  int iter_idx = (int)(iter == ITER_REGISTER_NULL ? 0 : iter - 1);
+
+  while (iter_idx < NUM_SAVED_REGISTERS && reg_empty(get_reg(regs, iter_idx)))
+    ++iter_idx;
+
+  if (iter_idx >= NUM_SAVED_REGISTERS || reg_empty(get_reg(regs, iter_idx)))
+    return ITER_REGISTER_NULL;
+
+  *reg = *get_reg(regs, iter_idx);
+  *name = (char)get_register_name((int)iter_idx);
+  *is_unnamed = (get_reg(regs, iter_idx) == y_previous);
+
+  while (++iter_idx < NUM_SAVED_REGISTERS) {
+    if (!reg_empty(get_reg(regs, iter_idx))) {
+      return (iter_register_T)(iter_idx + 1);
     }
   }
-  return NULL;
+
+  return ITER_REGISTER_NULL;
 }
 
 /// Get a number of non-empty registers
@@ -6212,8 +6345,8 @@ size_t op_reg_amount(void)
   FUNC_ATTR_WARN_UNUSED_RESULT
 {
   size_t ret = 0;
-  for (size_t i = 0; i < NUM_SAVED_REGISTERS; i++) {
-    if (!reg_empty(y_regs + i)) {
+  for (int i = 0; i < NUM_SAVED_REGISTERS; i++) {
+    if (!reg_empty(get_global_reg(i))) {
       ret++;
     }
   }
@@ -6233,11 +6366,11 @@ bool op_reg_set(const char name, const yankreg_T reg, bool is_unnamed)
   if (i == -1) {
     return false;
   }
-  free_register(&y_regs[i]);
-  y_regs[i] = reg;
+  free_register(get_global_reg(i));
+  *get_global_reg(i) = reg;
 
   if (is_unnamed) {
-    y_previous = &y_regs[i];
+    y_previous = get_global_reg(i);
   }
   return true;
 }
@@ -6253,7 +6386,7 @@ const yankreg_T *op_reg_get(const char name)
   if (i == -1) {
     return NULL;
   }
-  return &y_regs[i];
+  return get_global_reg(i);
 }
 
 /// Set the previous yank register
@@ -6269,6 +6402,6 @@ bool op_reg_set_previous(const char name)
     return false;
   }
 
-  y_previous = &y_regs[i];
+  y_previous = get_global_reg(i);
   return true;
 }

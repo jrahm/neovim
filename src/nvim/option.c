@@ -5615,6 +5615,7 @@ static char_u *get_varp(vimoption_T *p)
 # endif
   case PV_CFU:    return (char_u *)&(curbuf->b_p_cfu);
   case PV_OFU:    return (char_u *)&(curbuf->b_p_ofu);
+  case PV_URF:    return (char_u *)&(curbuf->b_p_urf);
   case PV_EOL:    return (char_u *)&(curbuf->b_p_eol);
   case PV_FIXEOL: return (char_u *)&(curbuf->b_p_fixeol);
   case PV_ET:     return (char_u *)&(curbuf->b_p_et);
@@ -5905,6 +5906,7 @@ void buf_copy_options(buf_T *buf, int flags)
 # endif
       buf->b_p_cfu = vim_strsave(p_cfu);
       buf->b_p_ofu = vim_strsave(p_ofu);
+      buf->b_p_urf = vim_strsave(p_urf);
       buf->b_p_tfu = vim_strsave(p_tfu);
       buf->b_p_sts = p_sts;
       buf->b_p_sts_nopaste = p_sts_nopaste;
