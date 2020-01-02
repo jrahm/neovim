@@ -34,6 +34,8 @@
 // NOTE: Keys AND values must be allocated! khash.h does not make a copy.
 //
 MAP_DECLS(int, int)
+MAP_DECLS(int, ptr_t)
+MAP_DECLS(ptr_t, int)
 MAP_DECLS(cstr_t, ptr_t)
 MAP_DECLS(cstr_t, int)
 MAP_DECLS(ptr_t, ptr_t)

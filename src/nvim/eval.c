@@ -5313,7 +5313,7 @@ bool garbage_collect(bool testing)
 
   // registers (ShaDa additional data)
   {
-    const void *reg_iter = NULL;
+    iter_register_T reg_iter = ITER_REGISTER_NULL;
     do {
       yankreg_T reg;
       char name = NUL;
@@ -5322,7 +5322,7 @@ bool garbage_collect(bool testing)
       if (name != NUL) {
         ABORTING(set_ref_dict)(reg.additional_data, copyID);
       }
-    } while (reg_iter != NULL);
+    } while (reg_iter != ITER_REGISTER_NULL);
   }
 
   // global marks (ShaDa additional data)

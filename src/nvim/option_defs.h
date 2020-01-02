@@ -744,6 +744,7 @@ EXTERN int p_wa;                // 'writeany'
 EXTERN int p_wb;                // 'writebackup'
 EXTERN long p_wd;               // 'writedelay'
 EXTERN int p_cdh;               // 'cdhome'
+EXTERN char_u *p_urf;           // 'userregister'
 
 EXTERN int p_force_on;          ///< options that cannot be turned off.
 EXTERN int p_force_off;         ///< options that cannot be turned on.
@@ -839,6 +840,7 @@ enum {
   BV_WM,
   BV_VSTS,
   BV_VTS,
+  BV_URF,
   BV_COUNT,  // must be the last one
 };
 

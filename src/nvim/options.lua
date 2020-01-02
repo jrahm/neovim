@@ -2674,6 +2674,15 @@ return {
       defaults={if_true=4000}
     },
     {
+      full_name='userregfun', abbreviation='urf',
+      type='string', scope={'buffer'},
+      secure=true,
+      vi_def=true,
+      alloced=true,
+      varname='p_urf',
+      defaults={if_true=""}
+    },
+    {
       full_name='varsofttabstop', abbreviation='vsts',
       short_desc=N_("list of numbers of spaces that <Tab> uses while editing"),
       type='string', list='comma', scope={'buffer'},

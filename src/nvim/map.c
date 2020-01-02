@@ -164,6 +164,8 @@ static inline bool ColorKey_eq(ColorKey ae1, ColorKey ae2)
 }
 
 
+MAP_IMPL(ptr_t, int, DEFAULT_INITIALIZER)
+MAP_IMPL(int, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(int, int, DEFAULT_INITIALIZER)
 MAP_IMPL(cstr_t, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(cstr_t, int, DEFAULT_INITIALIZER)
