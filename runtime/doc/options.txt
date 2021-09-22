@@ -1314,8 +1314,9 @@ A jump table for the options with a short description can be found at |Q_op|.
 'colorcolumn' 'cc'	string	(default "")
 			local to window
 	'colorcolumn' is a comma separated list of screen columns that are
-	highlighted with ColorColumn |hl-ColorColumn|.  Useful to align
-	text.  Will make screen redrawing slower.
+	highlighted with ColorColumn |hl-ColorColumn| and drawn using the
+	colocol option from 'fillchars'.  Useful to align text.  Will make
+	screen redrawing slower.
 	The screen column can be an absolute number, or a number preceded with
 	'+' or '-', which is added to or subtracted from 'textwidth'. >
 
@@ -2433,6 +2434,7 @@ A jump table for the options with a short description can be found at |Q_op|.
 	  diff:c	'-'		deleted lines of the 'diff' option
 	  msgsep:c	' '		message separator 'display'
 	  eob:c		'~'		empty lines at the end of a buffer
+	  colorcol:c	' '		character to display in the colorcolumn
 
 	Any one that is omitted will fall back to the default.  For "stl" and
 	"stlnc" the space will be used when there is highlighting, '^' or '='
@@ -2456,6 +2458,7 @@ A jump table for the options with a short description can be found at |Q_op|.
 	  fold:c	Folded			|hl-Folded|
 	  diff:c	DiffDelete		|hl-DiffDelete|
 	  eob:c		EndOfBuffer		|hl-EndOfBuffer|
+	  colorcol:c	EndOfBuffer		|hl-ColorColumn|
 
 		*'fixendofline'* *'fixeol'* *'nofixendofline'* *'nofixeol'*
 'fixendofline' 'fixeol'	boolean	(default on)
