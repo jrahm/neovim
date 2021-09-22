@@ -183,6 +183,26 @@ local dump_option = function(i, o)
   w('  },')
 end
 
+-- Verify options are correctly ordered. The options with the same first letter
+-- must be together or else some of the options may seem to disappear from
+-- Neovim.
+done_chrs = {}
+last_opt = nil
+for _, o in ipairs(options.options) do
+  if (last_opt == nil) then
+    last_opt = o
+  elseif last_opt.full_name:sub(1, 1) ~= o.full_name:sub(1, 1) then
+    done_chrs[last_opt.full_name:sub(1, 1)] = true
+    last_opt = o
+
+    if done_chrs[o.full_name:sub(1, 1)] then
+      print("Option '" .. o.full_name .. "' must be next to options with the "
+        .. "same starting character.")
+      os.exit(1)
+    end
+  end
+end
+
 w('static vimoption_T options[] = {')
 for i, o in ipairs(options.options) do
   dump_option(i, o)
