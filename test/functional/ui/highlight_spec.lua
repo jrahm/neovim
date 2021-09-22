@@ -868,13 +868,14 @@ describe('CursorLine highlight', function()
                                                         |
     ]])
 
+    command('set fillchars+=colorcol:│')
     command('set colorcolumn=3')
     feed('i  <esc>')
     screen:expect([[
-      {1:{} {7: }                                               |
+      {1:{} {7:│}                                               |
       "{2:a}{7:"} : {3:abc} {3:// 10;}                                  |
-      {1:}} {7: }                                               |
-      {5: ^ }{7: }{5:                                               }|
+      {1:}} {7:│}                                               |
+      {5: ^ }{7:│}{5:                                               }|
                                                         |
     ]])
   end)

@@ -1231,7 +1231,6 @@ struct window_S {
     int trail;
     int *multispace;
     int conceal;
-    int colorcol;
   } w_p_lcs_chars;
 
   // 'fillchars' characters. Defaults set in set_chars_option().
@@ -1246,6 +1245,7 @@ struct window_S {
     int diff;
     int msgsep;
     int eob;
+    int colorcol;
   } w_p_fcs_chars;
 
   /*
