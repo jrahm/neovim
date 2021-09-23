@@ -6657,6 +6657,44 @@ A jump table for the options with a short description can be found at |Q_op|.
 	written to disk (see |crash-recovery|).  Also used for the
 	|CursorHold| autocommand event.
 
+						*'userregfun'* *'urf'*
+'userregfun' 'urf'	string	(default "")
+			global
+	The option specifies a function to be used to handle any registers
+	that Neovim does not natively handle. This option unlocks all
+	characters to be used as registers by the user.
+
+	The 'userregfun' function is called each time a user register is read
+	from or written to.
+
+	The 'userregfun' function must take the following parameters:
+
+		{action} The action being done on this register (either 'yank'
+			or 'put'
+
+		{register} The string holding the name of the register. This
+			is always a single character, though multi-byte
+			characters are allowed.
+
+		{content} If the action is 'yank' this is the content being
+			yanked into the register.
+
+	In case the action is 'put', the 'userregfun' function should return
+	the content to place in that location.
+
+	A very simple example of a 'userregfun' function that behaves exactly
+	like traditional registers would look like: >
+		
+		let s:contents = {}
+		function! MyUserregFunction(action, register, content) abort
+		   if a:action == "put"
+		     return get(s:contents, a:register, "")
+		  else
+		     let s:contents[a:register] = a:content
+		  endif
+		endfunction
+		set userregfun=MyUserregFunction
+<
 					*'varsofttabstop'* *'vsts'*
 'varsofttabstop' 'vsts'	string	(default "")
 			local to buffer
