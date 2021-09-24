@@ -1887,6 +1887,10 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
   bool has_width = false, has_height = false;
   bool has_bufpos = false;
 
+  xfree(fconfig->title);
+  fconfig->n_title = 0;
+  fconfig->title = NULL;
+
   for (size_t i = 0; i < config.size; i++) {
     char *key = config.items[i].key.data;
     Object val = config.items[i].value;
@@ -1899,7 +1903,7 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
       } else {
         api_set_error(err, kErrorTypeValidation,
                       "'row' key must be Integer or Float");
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "col")) {
       has_col = true;
@@ -1910,7 +1914,7 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
       } else {
         api_set_error(err, kErrorTypeValidation,
                       "'col' key must be Integer or Float");
-        return false;
+        goto free_and_fail;
       }
     } else if (strequal(key, "width")) {
       has_width = true;
@@ -1919,7 +1923,7 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
       } else {
         api_set_error(err, kErrorTypeValidation,
                       "'width' key must be a positive Integer");
-        return false;
+        goto free_and_fail;
       }
     } else if (strequal(key, "height")) {
       has_height = true;
@@ -1928,24 +1932,24 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
       } else {
         api_set_error(err, kErrorTypeValidation,
                       "'height' key must be a positive Integer");
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "anchor")) {
       if (val.type != kObjectTypeString) {
         api_set_error(err, kErrorTypeValidation,
                       "'anchor' key must be String");
-        return false;
+        goto free_and_fail;
       }
       if (!parse_float_anchor(val.data.string, &fconfig->anchor)) {
         api_set_error(err, kErrorTypeValidation,
                       "Invalid value of 'anchor' key");
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "relative")) {
       if (val.type != kObjectTypeString) {
         api_set_error(err, kErrorTypeValidation,
                       "'relative' key must be String");
-        return false;
+        goto free_and_fail;
       }
       // ignore empty string, to match nvim_win_get_config
       if (val.data.string.size > 0) {
@@ -1953,8 +1957,23 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
         if (!parse_float_relative(val.data.string, &fconfig->relative)) {
           api_set_error(err, kErrorTypeValidation,
                         "Invalid value of 'relative' key");
-          return false;
+          goto free_and_fail;
         }
+      }
+    } else if (!strcmp(key, "title")) {
+      if (val.type != kObjectTypeString) {
+        api_set_error(err, kErrorTypeValidation,
+                      "Invalid value of 'title' key.");
+        goto free_and_fail;
+      }
+      xfree(fconfig->title);
+      fconfig->n_title = val.data.string.size;
+      fconfig->title = (char_u*) xcalloc(fconfig->n_title, sizeof(char_u));
+      strncpy((char*) fconfig->title, val.data.string.data, fconfig->n_title);
+    } else if (!strcmp(key, "titlehl")) {
+      fconfig->title_hl_id = object_to_hl_id(val, "float win highlight", err);
+      if (ERROR_SET(err)) {
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "win")) {
       has_window = true;
@@ -1962,32 +1981,32 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
           && val.type != kObjectTypeWindow) {
         api_set_error(err, kErrorTypeValidation,
                       "'win' key must be Integer or Window");
-        return false;
+        goto free_and_fail;
       }
       fconfig->window = (Window)val.data.integer;
     } else if (!strcmp(key, "bufpos")) {
       if (val.type != kObjectTypeArray) {
         api_set_error(err, kErrorTypeValidation,
                       "'bufpos' key must be Array");
-        return false;
+        goto free_and_fail;
       }
       if (!parse_float_bufpos(val.data.array, &fconfig->bufpos)) {
         api_set_error(err, kErrorTypeValidation,
                       "Invalid value of 'bufpos' key");
-        return false;
+        goto free_and_fail;
       }
       has_bufpos = true;
     } else if (!strcmp(key, "external")) {
       has_external = fconfig->external
                        = api_object_to_bool(val, "'external' key", false, err);
       if (ERROR_SET(err)) {
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "focusable")) {
       fconfig->focusable
         = api_object_to_bool(val, "'focusable' key", true, err);
       if (ERROR_SET(err)) {
-        return false;
+        goto free_and_fail;
       }
     } else if (strequal(key, "zindex")) {
       if (val.type == kObjectTypeInteger && val.data.integer > 0) {
@@ -1995,37 +2014,37 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
       } else {
         api_set_error(err, kErrorTypeValidation,
                       "'zindex' key must be a positive Integer");
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "border")) {
       parse_border_style(val, fconfig, err);
       if (ERROR_SET(err)) {
-        return false;
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "style")) {
       if (val.type != kObjectTypeString) {
         api_set_error(err, kErrorTypeValidation,
                       "'style' key must be String");
-        return false;
+        goto free_and_fail;
       }
       if (val.data.string.data[0] == NUL) {
         fconfig->style = kWinStyleUnused;
       } else if (striequal(val.data.string.data, "minimal")) {
         fconfig->style = kWinStyleMinimal;
       } else {
-        api_set_error(err, kErrorTypeValidation,
+       api_set_error(err, kErrorTypeValidation,
                       "Invalid value of 'style' key");
       }
     } else if (strequal(key, "noautocmd") && new_win) {
       fconfig->noautocmd
         = api_object_to_bool(val, "'noautocmd' key", false, err);
       if (ERROR_SET(err)) {
-        return false;
+        goto free_and_fail;
       }
     } else {
       api_set_error(err, kErrorTypeValidation,
                     "Invalid key '%s'", key);
-      return false;
+      goto free_and_fail;
     }
   }
 
@@ -2033,7 +2052,7 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
                       && fconfig->relative == kFloatRelativeWindow)) {
     api_set_error(err, kErrorTypeValidation,
                   "'win' key is only valid with relative='win'");
-    return false;
+    goto free_and_fail;
   }
 
   if ((has_relative && fconfig->relative == kFloatRelativeWindow)
@@ -2059,11 +2078,11 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
   if (has_relative && has_external) {
     api_set_error(err, kErrorTypeValidation,
                   "Only one of 'relative' and 'external' must be used");
-    return false;
+    goto free_and_fail;
   } else if (!reconf && !has_relative && !has_external) {
     api_set_error(err, kErrorTypeValidation,
                   "One of 'relative' and 'external' must be used");
-    return false;
+    goto free_and_fail;
   } else if (has_relative) {
     fconfig->external = false;
   }
@@ -2071,19 +2090,24 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
   if (!reconf && !(has_height && has_width)) {
     api_set_error(err, kErrorTypeValidation,
                   "Must specify 'width' and 'height'");
-    return false;
+    goto free_and_fail;
   }
 
   if (fconfig->external && !ui_has(kUIMultigrid)) {
     api_set_error(err, kErrorTypeValidation,
                   "UI doesn't support external windows");
-    return false;
+    goto free_and_fail;
   }
 
   if (has_relative != has_row || has_row != has_col) {
     api_set_error(err, kErrorTypeValidation,
                   "'relative' requires 'row'/'col' or 'bufpos'");
-    return false;
+    goto free_and_fail;
   }
   return true;
+free_and_fail:
+  xfree(fconfig->title);
+  fconfig->n_title = 0;
+  fconfig->title = NULL;
+  return false;
 }

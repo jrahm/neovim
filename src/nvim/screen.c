@@ -5570,6 +5570,11 @@ static void win_redr_border(win_T *wp)
 
   int *adj = wp->w_border_adj;
   int irow = wp->w_height_inner, icol = wp->w_width_inner;
+  char_u* title = wp->w_float_config.title;
+  size_t n_title = wp->w_float_config.n_title;
+  int m8[MAX_MCO + 1];
+  int cc;
+  int len;
 
   if (adj[0]) {
     grid_puts_line_start(grid, 0);
@@ -5577,7 +5582,20 @@ static void win_redr_border(win_T *wp)
       grid_put_schar(grid, 0, 0, chars[0], attrs[0]);
     }
     for (int i = 0; i < icol; i++) {
-      grid_put_schar(grid, 0, i+adj[3], chars[1], attrs[1]);
+      schar_T ch;
+      int attr;
+      if (i > 2 && n_title > 0) {
+        cc = utfc_ptr2char(title, m8);
+        len = utfc_ptr2len(title);
+        n_title -= len;
+        title += len;
+        schar_from_cc(ch, cc, m8);
+        attr = hl_combine_attr(attrs[1], wp->w_float_config.title_attr);
+      } else {
+        memcpy(ch, chars[1], sizeof(schar_T));
+        attr = attrs[1];
+      }
+      grid_put_schar(grid, 0, i+adj[3], ch, attr);
     }
     if (adj[1]) {
       grid_put_schar(grid, 0, icol+adj[3], chars[2], attrs[2]);

@@ -1097,6 +1097,11 @@ typedef struct {
   int border_hl_ids[8];
   int border_attr[8];
   bool noautocmd;
+
+  int title_hl_id;
+  int title_attr;
+  char_u* title;
+  size_t n_title;
 } FloatConfig;
 
 #define FLOAT_CONFIG_INIT ((FloatConfig){ .height = 0, .width = 0, \

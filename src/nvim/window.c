@@ -2785,6 +2785,9 @@ static win_T *win_free_mem(win_T *win, int *dirp, tabpage_T *tp)
       wp = firstwin;
     }
   }
+  xfree(win->w_float_config.title);
+  win->w_float_config.title = NULL;
+  win->w_float_config.n_title = 0;
   win_free(win, tp);
 
   // When deleting the current window of another tab page select a new
