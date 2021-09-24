@@ -5578,6 +5578,20 @@ static void win_redr_border(win_T *wp)
   int cc;
   int len;
 
+  int title_pos = 2;
+  switch (wp->w_float_config.title_pos) {
+    case kTitleLeft:
+      title_pos = 2;
+      break;
+    case kTitleRight:
+      title_pos = icol - 2 - vim_strsize(title);
+      break;
+    case kTitleCenter:
+      title_pos = (icol - vim_strsize(title)) / 2 - 1;
+      break;
+  }
+  title_pos = title_pos < 2 ? 2 : title_pos;
+
   if (adj[0]) {
     grid_puts_line_start(grid, 0);
     if (adj[3]) {
@@ -5586,7 +5600,7 @@ static void win_redr_border(win_T *wp)
     for (int i = 0; i < icol; i++) {
       schar_T ch;
       int attr;
-      if (i > 2 && n_title > 0) {
+      if (i > title_pos && n_title > 0 && i < icol - 2) {
         if (!title_hl) {
           title_hl = wp->w_float_config.title_hl;
           attr = hl_combine_attr(attrs[1], syn_id2attr(-title_hl->userhl));

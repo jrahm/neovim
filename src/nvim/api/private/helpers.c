@@ -1911,7 +1911,7 @@ bool parse_title(FloatConfig* out, const String s)
         ++ i;
       }
       hlbuf[hlbuf_cur++] = 0;
-      hl = syn_check_group(hlbuf, vim_strsize(hlbuf));
+      hl = syn_check_group(hlbuf, (int) strlen((char*)hlbuf));
       hlbuf_cur = 0;
 
       if (out_hlrec_nalloc <= out_hl_cur - 1) { // Leave room for last.
@@ -2031,6 +2031,24 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
 
       if (!parse_title(fconfig, val.data.string)) {
         api_set_error(err, kErrorTypeValidation, "Invalid value for title");
+      }
+    } else if (!strcmp(key, "title_position")) {
+      if (val.type != kObjectTypeString) {
+        api_set_error(err, kErrorTypeValidation,
+                      "Invalid value of 'title_position' key");
+        goto free_and_fail;
+      }
+
+      if (striequal(val.data.string.data, "left")) {
+        fconfig->title_pos = kTitleLeft;
+      } else if (striequal(val.data.string.data, "center")) {
+        fconfig->title_pos = kTitleCenter;
+      } else if (striequal(val.data.string.data, "right")) {
+        fconfig->title_pos = kTitleRight;
+      } else {
+        api_set_error(err, kErrorTypeValidation,
+                      "Invalid value for 'title_position'");
+        goto free_and_fail;
       }
     } else if (!strcmp(key, "win")) {
       has_window = true;
