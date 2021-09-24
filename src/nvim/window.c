@@ -2786,6 +2786,8 @@ static win_T *win_free_mem(win_T *win, int *dirp, tabpage_T *tp)
     }
   }
   xfree(win->w_float_config.title);
+  xfree(win->w_float_config.title_hl);
+  win->w_float_config.title_hl = NULL;
   win->w_float_config.title = NULL;
   win->w_float_config.n_title = 0;
   win_free(win, tp);

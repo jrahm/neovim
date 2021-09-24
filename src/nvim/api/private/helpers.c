@@ -1877,6 +1877,63 @@ static void parse_border_style(Object style, FloatConfig *fconfig, Error *err)
   }
 }
 
+bool parse_title(FloatConfig* out, const String s)
+{
+  // The raw title is going to be at most the length of the string.
+  char_u* out_title_raw = xcalloc(sizeof(char_u), s.size);
+  size_t out_cursor = 0;
+
+  char_u* data = (char_u*) s.data;
+
+  size_t out_hlrec_nalloc = 4;
+  stl_hlrec_t* out_hlrec = xcalloc(sizeof(stl_hlrec_t), out_hlrec_nalloc);
+  out_hlrec[0].start = out_title_raw;
+  out_hlrec[0].userhl = 0;
+  size_t out_hl_cur = 1;
+
+  char_u hlbuf[128];
+  size_t hlbuf_cur = 0;
+
+  int hl;
+
+  for (size_t i = 0; i < s.size; ++ i) {
+    if (data[i] == '\\' && i < s.size - 1) {
+      i ++;
+      out_title_raw[out_cursor++] = data[i];
+    } else if (
+        data[i] == '%' &&
+        i < s.size - 1 && data[i + 1] == '#') {
+      i += 2;
+      while (i < s.size && data[i] != '#') {
+        if (hlbuf_cur < sizeof(hlbuf) - 1) {
+          hlbuf[hlbuf_cur ++]  = data[i];
+        }
+        ++ i;
+      }
+      hlbuf[hlbuf_cur++] = 0;
+      hl = syn_check_group(hlbuf, vim_strsize(hlbuf));
+      hlbuf_cur = 0;
+
+      if (out_hlrec_nalloc <= out_hl_cur - 1) { // Leave room for last.
+        out_hlrec =
+          xrealloc(out_hlrec, sizeof(stl_hlrec_t) * (out_hlrec_nalloc *= 2));
+      }
+
+      out_hlrec[out_hl_cur].start = out_title_raw + out_cursor;
+      out_hlrec[out_hl_cur++].userhl = -hl;
+    } else {
+      out_title_raw[out_cursor++] = data[i];
+    }
+  }
+
+  out->n_title = out_cursor;
+  out_title_raw[out_cursor++] = 0;
+  out->title_hl = out_hlrec;
+  out->title = out_title_raw;
+
+  return true;
+}
+
 bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bool new_win,
                         Error *err)
 {
@@ -1888,6 +1945,8 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
   bool has_bufpos = false;
 
   xfree(fconfig->title);
+  xfree(fconfig->title_hl);
+  fconfig->title_hl = NULL;
   fconfig->n_title = 0;
   fconfig->title = NULL;
 
@@ -1966,14 +2025,12 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
                       "Invalid value of 'title' key.");
         goto free_and_fail;
       }
+
       xfree(fconfig->title);
-      fconfig->n_title = val.data.string.size;
-      fconfig->title = (char_u*) xcalloc(fconfig->n_title, sizeof(char_u));
-      strncpy((char*) fconfig->title, val.data.string.data, fconfig->n_title);
-    } else if (!strcmp(key, "titlehl")) {
-      fconfig->title_hl_id = object_to_hl_id(val, "float win highlight", err);
-      if (ERROR_SET(err)) {
-        goto free_and_fail;
+      xfree(fconfig->title_hl);
+
+      if (!parse_title(fconfig, val.data.string)) {
+        api_set_error(err, kErrorTypeValidation, "Invalid value for title");
       }
     } else if (!strcmp(key, "win")) {
       has_window = true;
@@ -2107,7 +2164,9 @@ bool parse_float_config(Dictionary config, FloatConfig *fconfig, bool reconf, bo
   return true;
 free_and_fail:
   xfree(fconfig->title);
+  xfree(fconfig->title_hl);
   fconfig->n_title = 0;
+  fconfig->title_hl = NULL;
   fconfig->title = NULL;
   return false;
 }

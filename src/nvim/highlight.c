@@ -351,12 +351,6 @@ void update_window_hl(win_T *wp, bool invalid)
       }
       wp->w_float_config.border_attr[i] = attr;
     }
-
-    int attr = wp->w_hl_attrs[HLF_TITLE];
-    if (wp->w_float_config.title_hl_id) {
-      attr = hl_get_ui_attr(HLF_TITLE, wp->w_float_config.title_hl_id, false);
-    }
-    wp->w_float_config.title_attr = attr;
   }
 
   // shadow might cause blending

@@ -1098,8 +1098,7 @@ typedef struct {
   int border_attr[8];
   bool noautocmd;
 
-  int title_hl_id;
-  int title_attr;
+  stl_hlrec_t* title_hl;
   char_u* title;
   size_t n_title;
 } FloatConfig;

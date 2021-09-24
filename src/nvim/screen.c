@@ -5567,11 +5567,13 @@ static void win_redr_border(win_T *wp)
   schar_T *chars = wp->w_float_config.border_chars;
   int *attrs = wp->w_float_config.border_attr;
 
-
   int *adj = wp->w_border_adj;
   int irow = wp->w_height_inner, icol = wp->w_width_inner;
+
   char_u* title = wp->w_float_config.title;
   size_t n_title = wp->w_float_config.n_title;
+  stl_hlrec_t* title_hl = NULL;
+
   int m8[MAX_MCO + 1];
   int cc;
   int len;
@@ -5585,12 +5587,23 @@ static void win_redr_border(win_T *wp)
       schar_T ch;
       int attr;
       if (i > 2 && n_title > 0) {
+        if (!title_hl) {
+          title_hl = wp->w_float_config.title_hl;
+          attr = hl_combine_attr(attrs[1], syn_id2attr(-title_hl->userhl));
+        }
+
         cc = utfc_ptr2char(title, m8);
         len = utfc_ptr2len(title);
         n_title -= len;
         title += len;
+
+        while ((title_hl + 1)->start != NULL &&
+               (title_hl + 1)->start < title) {
+          ++ title_hl;
+          attr = hl_combine_attr(attrs[1], syn_id2attr(-title_hl->userhl));
+        }
+
         schar_from_cc(ch, cc, m8);
-        attr = hl_combine_attr(attrs[1], wp->w_float_config.title_attr);
       } else {
         memcpy(ch, chars[1], sizeof(schar_T));
         attr = attrs[1];
