@@ -1587,7 +1587,7 @@ static const char_u *skip_var_list(const char_u *arg, int *var_count, int *semic
 static const char_u *skip_var_one(const char_u *arg)
 {
   if (*arg == '@' && arg[1] != NUL) {
-    return arg + 2;
+    return arg + 1 + mb_ptr2len(arg + 1);
   }
   return find_name_end(*arg == '$' || *arg == '&' ? arg + 1 : arg,
                        NULL, NULL, FNE_INCL_BR | FNE_CHECK_START);
@@ -1910,10 +1910,13 @@ static char_u *ex_let_one(char_u *arg, typval_T *const tv, const bool copy, cons
       return NULL;
     }
     arg++;
+    int regname = utf_ptr2char(arg);
+    int mblen = utf_ptr2len(arg);
+
     if (op != NULL && vim_strchr((char_u *)"+-*/%", *op) != NULL) {
       emsgf(_(e_letwrong), op);
     } else if (endchars != NULL
-               && vim_strchr(endchars, *skipwhite(arg + 1)) == NULL) {
+               && vim_strchr(endchars, *skipwhite(arg + mblen)) == NULL) {
       EMSG(_(e_letunexp));
     } else {
       char_u *s;
@@ -1921,7 +1924,7 @@ static char_u *ex_let_one(char_u *arg, typval_T *const tv, const bool copy, cons
       char_u *ptofree = NULL;
       const char *p = tv_get_string_chk(tv);
       if (p != NULL && op != NULL && *op == '.') {
-        s = get_reg_contents(*arg == '@' ? '"' : *arg, kGRegExprSrc);
+        s = get_reg_contents(regname == '@' ? '"' : regname, kGRegExprSrc);
         if (s != NULL) {
           ptofree = concat_str(s, (const char_u *)p);
           p = (const char *)ptofree;
@@ -1929,9 +1932,9 @@ static char_u *ex_let_one(char_u *arg, typval_T *const tv, const bool copy, cons
         }
       }
       if (p != NULL) {
-        write_reg_contents(*arg == '@' ? '"' : *arg,
+        write_reg_contents(regname == '@' ? '"' : regname,
                            (const char_u *)p, STRLEN(p), false);
-        arg_end = arg + 1;
+        arg_end = arg + mblen;
       }
       xfree(ptofree);
     }
@@ -4189,13 +4192,14 @@ static int eval7(char_u **arg, typval_T *rettv, int evaluate, int want_string)
   // Register contents: @r.
   case '@':
     ++*arg;
+    int regname = mb_cptr2char_adv((const char_u**) arg);
     if (evaluate) {
       rettv->v_type = VAR_STRING;
-      rettv->vval.v_string = get_reg_contents(**arg, kGRegExprSrc);
+      rettv->vval.v_string = get_reg_contents(regname, kGRegExprSrc);
     }
-    if (**arg != NUL) {
-      ++*arg;
-    }
+    // if (**arg != NUL) {
+    //   ++*arg;
+    // }
     break;
 
   // nested expression: (expression).
