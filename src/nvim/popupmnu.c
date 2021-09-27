@@ -501,7 +501,7 @@ void pum_redraw(void)
 
           w = ptr2cells(p);
 
-          if ((*p == NUL) || (*p == TAB) || *p == '\x1b' || (totwidth + w > pum_width)) {
+          if ((*p == NUL) || (*p == TAB) || (*p == '%' && *(p + 1) == '#') || (totwidth + w > pum_width)) {
             // Display the text that fits or comes before a Tab.
             // First convert it to printable characters.
             char_u *st;
@@ -564,21 +564,22 @@ void pum_redraw(void)
               // start text at next char
               s = NULL;
               width = 0;
-            } else if (*p == '\x1b') {
-              // Continue on if this is an escape character. this means
-              // there is some formatting coming after this.
-              //
-              // read the next attribute from the buffer.
-              char_u hl_attr[200];
+            } else if (*p == '%' && *(p + 1) == '#') {
+              // Parse highlights. Highlights are status-line-like.
+              char_u hl_attr[128];
               unsigned pi = 0;
-              ++p;
-              while (*p != ']' && *p != '\0' && pi < sizeof(hl_attr) - 1) {
-                hl_attr[pi++] = *(p++);
+              p += 2;
+              while (*p != '#' && *p != '\0') {
+                if (pi < sizeof(hl_attr) - 1) {
+                  hl_attr[pi++] = *p;
+                }
+                p ++;
               }
               hl_attr[pi] = 0;
               if (*p == 0)
                 break;
-              cur_attr = hl_combine_attr(attr, syn_id2attr(syn_name2id(hl_attr)));
+              cur_attr =
+                  hl_combine_attr(attr, syn_id2attr(syn_name2id(hl_attr)));
 
               // Start the next char.
               s = NULL;
@@ -947,17 +948,19 @@ int str_dispnsize(char_u *s, int len)
   int on = 1;
 
   while (*s != NUL && --len >= 0) {
-    if (*s == '\x1b')
+    if (*s == '%' && *(s + 1) == '#') {
       on = 0;
-
-    int l = (*mb_ptr2len)(s);
-    if (on)
-      size += ptr2cells(s);
-    s += l;
-    len -= l - 1;
-
-    if (*s == ']')
-      on = 1;
+      s += 2;
+      len -= 2;
+    } else {
+      int l = (*mb_ptr2len)(s);
+      if (on)
+        size += ptr2cells(s);
+      s += l;
+      len -= l - 1;
+      if (*s == '#')
+        on = 1;
+    }
   }
   return size;
 }
