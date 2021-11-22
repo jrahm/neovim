@@ -1081,6 +1081,12 @@ typedef enum {
   kWinStyleMinimal,  /// Minimal UI: no number column, eob markers, etc
 } WinStyle;
 
+typedef enum {
+  kTitleLeft = 0,
+  kTitleCenter,
+  kTitleRight
+} TitlePosition;
+
 typedef struct {
   Window window;
   lpos_T bufpos;
@@ -1098,6 +1104,11 @@ typedef struct {
   int border_hl_ids[8];
   int border_attr[8];
   bool noautocmd;
+
+  stl_hlrec_t* title_hl;
+  char_u* title;
+  size_t n_title;
+  TitlePosition title_pos;
 } FloatConfig;
 
 #define FLOAT_CONFIG_INIT ((FloatConfig){ .height = 0, .width = 0, \
@@ -1107,7 +1118,11 @@ typedef struct {
                                           .focusable = true, \
                                           .zindex = kZIndexFloatDefault, \
                                           .style = kWinStyleUnused, \
-                                          .noautocmd = false })
+                                          .noautocmd = false, \
+                                          .title_hl = NULL, \
+                                          .title = NULL, \
+                                          .n_title = 0, \
+                                          .title_pos = kTitleLeft})
 
 // Structure to store last cursor position and topline.  Used by check_lnums()
 // and reset_lnums().

@@ -62,6 +62,8 @@ return {
     "border";
     "style";
     "noautocmd";
+    "title";
+    "title_position";
   };
   runtime = {
     "is_lua";

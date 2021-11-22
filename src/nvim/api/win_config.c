@@ -437,9 +437,73 @@ static void parse_border_style(Object style, FloatConfig *fconfig, Error *err)
   }
 }
 
+static bool parse_title(FloatConfig* out, String s)
+{
+  // The raw title is going to be at most the length of the string.
+  char_u* out_title_raw = xcalloc(sizeof(char_u), s.size + 1);
+  size_t out_cursor = 0;
+
+  char_u* data = (char_u*) s.data;
+
+  size_t out_hlrec_nalloc = 4;
+  stl_hlrec_t* out_hlrec = xcalloc(sizeof(stl_hlrec_t), out_hlrec_nalloc);
+  out_hlrec[0].start = out_title_raw;
+  out_hlrec[0].userhl = 0;
+  size_t out_hl_cur = 1;
+
+  char_u hlbuf[128];
+  size_t hlbuf_cur = 0;
+
+  int hl;
+
+  for (size_t i = 0; i < s.size; i ++) {
+    if (data[i] == '\\' && i < s.size - 1) {
+      i ++;
+      out_title_raw[out_cursor++] = data[i];
+    } else if (
+        data[i] == '%' &&
+        i < s.size - 1 && data[i + 1] == '#') {
+      i += 2;
+      while (i < s.size && data[i] != '#') {
+        if (hlbuf_cur < sizeof(hlbuf) - 1) {
+          hlbuf[hlbuf_cur ++]  = data[i];
+        }
+        i ++;
+      }
+      hlbuf[hlbuf_cur++] = 0;
+      hl = syn_check_group(hlbuf, (int) strlen((char*)hlbuf));
+      hlbuf_cur = 0;
+
+      if (out_hl_cur >= out_hlrec_nalloc - 1) { // Leave room for last.
+        out_hlrec =
+          xrealloc(out_hlrec, sizeof(stl_hlrec_t) * (out_hlrec_nalloc *= 2));
+      }
+
+      out_hlrec[out_hl_cur].start = out_title_raw + out_cursor;
+      out_hlrec[out_hl_cur++].userhl = -hl;
+    } else {
+      out_title_raw[out_cursor++] = data[i];
+    }
+  }
+
+  out->n_title = out_cursor;
+  out_title_raw[out_cursor++] = 0;
+  out_hlrec[out_hl_cur] = (stl_hlrec_t) { 0, 0 };
+  out->title_hl = out_hlrec;
+  out->title = out_title_raw;
+
+  return true;
+}
+
 static bool parse_float_config(Dict(float_config) *config, FloatConfig *fconfig, bool reconf,
                                bool new_win, Error *err)
 {
+  xfree(fconfig->title);
+  xfree(fconfig->title_hl);
+  fconfig->title_hl = NULL;
+  fconfig->n_title = 0;
+  fconfig->title = NULL;
+
   bool has_relative = false, relative_is_win = false;
   if (config->relative.type == kObjectTypeString) {
     // ignore empty string, to match nvim_win_get_config
@@ -635,5 +699,44 @@ static bool parse_float_config(Dict(float_config) *config, FloatConfig *fconfig,
     }
   }
 
+  if (HAS_KEY(config->title)) {
+    if (!parse_title(fconfig, config->title.data.string)) {
+      api_set_error(err, kErrorTypeValidation,
+                    "Invalid value of 'title' key.");
+      goto free_and_fail;
+    }
+  } else if (config->title.type == kObjectTypeString) {
+    api_set_error(err, kErrorTypeValidation, "'title' must be a string");
+    return false;
+  }
+
+  if (HAS_KEY(config->title_position)) {
+    if (config->title_position.type != kObjectTypeString) {
+      api_set_error(err, kErrorTypeValidation,
+                    "Invalid value of 'title_position' key");
+      goto free_and_fail;
+    }
+
+    if (striequal(config->title_position.data.string.data, "left")) {
+      fconfig->title_pos = kTitleLeft;
+    } else if (striequal(config->title_position.data.string.data, "center")) {
+      fconfig->title_pos = kTitleCenter;
+    } else if (striequal(config->title_position.data.string.data, "right")) {
+      fconfig->title_pos = kTitleRight;
+    } else {
+      api_set_error(err, kErrorTypeValidation,
+                    "Invalid value for 'title_position'");
+      goto free_and_fail;
+    }
+  }
+
   return true;
+
+free_and_fail:
+  xfree(fconfig->title);
+  xfree(fconfig->title_hl);
+  fconfig->n_title = 0;
+  fconfig->title_hl = NULL;
+  fconfig->title = NULL;
+  return false;
 }
