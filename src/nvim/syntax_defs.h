@@ -7,7 +7,7 @@
 #define SST_MAX_ENTRIES 1000   // maximal size for state stack array
 #define SST_FIX_STATES  7      // size of sst_stack[].
 #define SST_DIST        16     // normal distance between entries
-#define SST_INVALID    (synstate_T *)-1        // invalid syn_state pointer
+#define SST_INVALID    ((synstate_T *)-1)      // invalid syn_state pointer
 
 typedef struct syn_state synstate_T;
 
@@ -21,9 +21,7 @@ struct sp_syn {
   int16_t *cont_in_list;        // cont.in group IDs, if non-zero
 };
 
-/*
- * Each keyword has one keyentry, which is linked in a hash list.
- */
+// Each keyword has one keyentry, which is linked in a hash list.
 typedef struct keyentry keyentry_T;
 
 struct keyentry {
@@ -35,9 +33,7 @@ struct keyentry {
   char_u keyword[1];            // actually longer
 };
 
-/*
- * Struct used to store one state of the state stack.
- */
+// Struct used to store one state of the state stack.
 typedef struct buf_state {
   int bs_idx;                    // index of pattern
   int bs_flags;                  // flags for pattern
@@ -46,10 +42,8 @@ typedef struct buf_state {
   reg_extmatch_T *bs_extmatch;   // external matches from start pattern
 } bufstate_T;
 
-/*
- * syn_state contains the syntax state stack for the start of one line.
- * Used by b_sst_array[].
- */
+// syn_state contains the syntax state stack for the start of one line.
+// Used by b_sst_array[].
 struct syn_state {
   synstate_T *sst_next;        // next entry in used or free list
   linenr_T sst_lnum;            // line number for this state
@@ -66,4 +60,4 @@ struct syn_state {
                                 // may have made the state invalid
 };
 
-#endif // NVIM_SYNTAX_DEFS_H
+#endif  // NVIM_SYNTAX_DEFS_H

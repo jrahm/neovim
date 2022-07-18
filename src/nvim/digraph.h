@@ -1,6 +1,7 @@
 #ifndef NVIM_DIGRAPH_H
 #define NVIM_DIGRAPH_H
 
+#include "nvim/eval/funcs.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/types.h"
 

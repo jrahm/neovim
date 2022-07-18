@@ -29,8 +29,6 @@
 #include "nvim/message.h"
 #include "nvim/vim.h"  // For _()
 
-#define utf_char2len(b) ((size_t)utf_char2len(b))
-
 const char *const encode_bool_var_names[] = {
   [kBoolVarTrue] = "true",
   [kBoolVarFalse] = "false",
@@ -69,10 +67,10 @@ int encode_list_write(void *const data, const char *const buf, const size_t len)
     line_end = xmemscan(buf, NL, len);
     if (line_end != buf) {
       const size_t line_length = (size_t)(line_end - buf);
-      char *str = (char *)TV_LIST_ITEM_TV(li)->vval.v_string;
+      char *str = TV_LIST_ITEM_TV(li)->vval.v_string;
       const size_t li_len = (str == NULL ? 0 : strlen(str));
       TV_LIST_ITEM_TV(li)->vval.v_string = xrealloc(str, li_len + line_length + 1);
-      str = (char *)TV_LIST_ITEM_TV(li)->vval.v_string + li_len;
+      str = TV_LIST_ITEM_TV(li)->vval.v_string + li_len;
       memcpy(str, buf, line_length);
       str[line_length] = 0;
       memchrsub(str, NUL, NL, line_length);
@@ -132,9 +130,10 @@ static int conv_error(const char *const msg, const MPConvStack *const mpstack,
     case kMPConvDict: {
       typval_T key_tv = {
         .v_type = VAR_STRING,
-        .vval = { .v_string = (v.data.d.hi == NULL
-                                   ? v.data.d.dict->dv_hashtab.ht_array
-                                   : (v.data.d.hi - 1))->hi_key },
+        .vval = { .v_string =
+                    (char *)(v.data.d.hi ==
+                             NULL ? v.data.d.dict->dv_hashtab.ht_array : (v.data.d.hi -
+                                                                          1))->hi_key },
       };
       char *const key = encode_tv2string(&key_tv, NULL);
       vim_snprintf((char *)IObuff, IOSIZE, key_msg, key);
@@ -265,7 +264,7 @@ int encode_read_from_list(ListReaderState *const state, char *const buf, const s
            || TV_LIST_ITEM_TV(state->li)->vval.v_string != NULL);
     for (size_t i = state->offset; i < state->li_length && p < buf_end; i++) {
       assert(TV_LIST_ITEM_TV(state->li)->vval.v_string != NULL);
-      const char ch = (char)(TV_LIST_ITEM_TV(state->li)->vval.v_string[state->offset++]);
+      const char ch = TV_LIST_ITEM_TV(state->li)->vval.v_string[state->offset++];
       *p++ = (char)(ch == (char)NL ? (char)NUL : ch);
     }
     if (p < buf_end) {
@@ -294,8 +293,8 @@ int encode_read_from_list(ListReaderState *const state, char *const buf, const s
 
 #define TYPVAL_ENCODE_CONV_STRING(tv, buf, len) \
   do { \
-    const char *const buf_ = (const char *)buf; \
-    if (buf == NULL) { \
+    const char *const buf_ = (const char *)(buf); \
+    if ((buf) == NULL) { \
       ga_concat(gap, "''"); \
     } else { \
       const size_t len_ = (len); \
@@ -384,14 +383,14 @@ int encode_read_from_list(ListReaderState *const state, char *const buf, const s
 
 #define TYPVAL_ENCODE_CONV_FUNC_BEFORE_ARGS(tv, len) \
   do { \
-    if (len != 0) { \
+    if ((len) != 0) { \
       ga_concat(gap, ", "); \
     } \
   } while (0)
 
 #define TYPVAL_ENCODE_CONV_FUNC_BEFORE_SELF(tv, len) \
   do { \
-    if ((ptrdiff_t)len != -1) { \
+    if ((ptrdiff_t)(len) != -1) { \
       ga_concat(gap, ", "); \
     } \
   } while (0)
@@ -453,12 +452,12 @@ int encode_read_from_list(ListReaderState *const state, char *const buf, const s
     size_t backref = 0; \
     for (; backref < kv_size(*mpstack); backref++) { \
       const MPConvStackVal mpval = kv_A(*mpstack, backref); \
-      if (mpval.type == conv_type) { \
-        if (conv_type == kMPConvDict) { \
+      if (mpval.type == (conv_type)) { \
+        if ((conv_type) == kMPConvDict) { \
           if ((void *)mpval.data.d.dict == (void *)(val)) { \
             break; \
           } \
-        } else if (conv_type == kMPConvList) { \
+        } else if ((conv_type) == kMPConvList) { \
           if ((void *)mpval.data.l.list == (void *)(val)) { \
             break; \
           } \
@@ -488,19 +487,19 @@ int encode_read_from_list(ListReaderState *const state, char *const buf, const s
     size_t backref = 0; \
     for (; backref < kv_size(*mpstack); backref++) { \
       const MPConvStackVal mpval = kv_A(*mpstack, backref); \
-      if (mpval.type == conv_type) { \
-        if (conv_type == kMPConvDict) { \
-          if ((void *)mpval.data.d.dict == (void *)val) { \
+      if (mpval.type == (conv_type)) { \
+        if ((conv_type) == kMPConvDict) { \
+          if ((void *)mpval.data.d.dict == (void *)(val)) { \
             break; \
           } \
-        } else if (conv_type == kMPConvList) { \
-          if ((void *)mpval.data.l.list == (void *)val) { \
+        } else if ((conv_type) == kMPConvList) { \
+          if ((void *)mpval.data.l.list == (void *)(val)) { \
             break; \
           } \
         } \
       } \
     } \
-    if (conv_type == kMPConvDict) { \
+    if ((conv_type) == kMPConvDict) { \
       vim_snprintf(ebuf, ARRAY_SIZE(ebuf), "{...@%zu}", backref); \
     } else { \
       vim_snprintf(ebuf, ARRAY_SIZE(ebuf), "[...@%zu]", backref); \
@@ -610,10 +609,10 @@ static inline int convert_to_json_string(garray_T *const gap, const char *const 
     // This is done to make resulting values displayable on screen also not from
     // Neovim.
 #define ENCODE_RAW(ch) \
-  (ch >= 0x20 && utf_printable(ch))
+  ((ch) >= 0x20 && utf_printable(ch))
     for (size_t i = 0; i < utf_len;) {
-      const int ch = utf_ptr2char((char_u *)utf_buf + i);
-      const size_t shift = (ch == 0 ? 1 : ((size_t)utf_ptr2len((char_u *)utf_buf + i)));
+      const int ch = utf_ptr2char(utf_buf + i);
+      const size_t shift = (ch == 0 ? 1 : ((size_t)utf_ptr2len(utf_buf + i)));
       assert(shift > 0);
       i += shift;
       switch (ch) {
@@ -652,11 +651,11 @@ static inline int convert_to_json_string(garray_T *const gap, const char *const 
     ga_append(gap, '"');
     ga_grow(gap, (int)str_len);
     for (size_t i = 0; i < utf_len;) {
-      const int ch = utf_ptr2char((char_u *)utf_buf + i);
-      const size_t shift = (ch == 0? 1: utf_char2len(ch));
+      const int ch = utf_ptr2char(utf_buf + i);
+      const size_t shift = (ch == 0 ? 1 : ((size_t)utf_char2len(ch)));
       assert(shift > 0);
       // Is false on invalid unicode, but this should already be handled.
-      assert(ch == 0 || shift == ((size_t)utf_ptr2len((char_u *)utf_buf + i)));
+      assert(ch == 0 || shift == ((size_t)utf_ptr2len(utf_buf + i)));
       switch (ch) {
       case BS:
       case TAB:
@@ -789,7 +788,7 @@ bool encode_check_json_key(const typval_T *const tv)
 #undef TYPVAL_ENCODE_SPECIAL_DICT_KEY_CHECK
 #define TYPVAL_ENCODE_SPECIAL_DICT_KEY_CHECK(label, key) \
   do { \
-    if (!encode_check_json_key(&key)) { \
+    if (!encode_check_json_key(&(key))) { \
       emsg(_("E474: Invalid key in special dictionary")); \
       goto label; \
     } \
@@ -871,7 +870,7 @@ char *encode_tv2echo(typval_T *tv, size_t *len)
   ga_init(&ga, (int)sizeof(char), 80);
   if (tv->v_type == VAR_STRING || tv->v_type == VAR_FUNC) {
     if (tv->vval.v_string != NULL) {
-      ga_concat(&ga, (char *)tv->vval.v_string);
+      ga_concat(&ga, tv->vval.v_string);
     }
   } else {
     const int eve_ret = encode_vim_to_echo(&ga, tv, N_(":echo argument"));
@@ -912,7 +911,7 @@ char *encode_tv2json(typval_T *tv, size_t *len)
 
 #define TYPVAL_ENCODE_CONV_STRING(tv, buf, len) \
   do { \
-    if (buf == NULL) { \
+    if ((buf) == NULL) { \
       msgpack_pack_bin(packer, 0); \
     } else { \
       const size_t len_ = (len); \
@@ -923,7 +922,7 @@ char *encode_tv2json(typval_T *tv, size_t *len)
 
 #define TYPVAL_ENCODE_CONV_STR_STRING(tv, buf, len) \
   do { \
-    if (buf == NULL) { \
+    if ((buf) == NULL) { \
       msgpack_pack_str(packer, 0); \
     } else { \
       const size_t len_ = (len); \
@@ -934,11 +933,11 @@ char *encode_tv2json(typval_T *tv, size_t *len)
 
 #define TYPVAL_ENCODE_CONV_EXT_STRING(tv, buf, len, type) \
   do { \
-    if (buf == NULL) { \
-      msgpack_pack_ext(packer, 0, (int8_t)type); \
+    if ((buf) == NULL) { \
+      msgpack_pack_ext(packer, 0, (int8_t)(type)); \
     } else { \
       const size_t len_ = (len); \
-      msgpack_pack_ext(packer, len_, (int8_t)type); \
+      msgpack_pack_ext(packer, len_, (int8_t)(type)); \
       msgpack_pack_ext_body(packer, buf, len_); \
     } \
   } while (0)

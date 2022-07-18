@@ -55,7 +55,8 @@
 #include "nvim/fileio.h"
 #include "nvim/getchar.h"
 #include "nvim/highlight.h"
-#include "nvim/keymap.h"
+#include "nvim/highlight_group.h"
+#include "nvim/keycodes.h"
 #include "nvim/log.h"
 #include "nvim/macros.h"
 #include "nvim/main.h"
@@ -70,7 +71,6 @@
 #include "nvim/os/input.h"
 #include "nvim/screen.h"
 #include "nvim/state.h"
-#include "nvim/syntax.h"
 #include "nvim/terminal.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
@@ -172,8 +172,20 @@ void terminal_teardown(void)
   pmap_init(ptr_t, &invalidated_terminals);
 }
 
+static void term_output_callback(const char *s, size_t len, void *user_data)
+{
+  terminal_send((Terminal *)user_data, (char *)s, len);
+}
+
 // public API {{{
 
+/// Initializes terminal properties, and triggers TermOpen.
+///
+/// The PTY process (TerminalOptions.data) was already started by termopen(),
+/// via ex_terminal() or the term:// BufReadCmd.
+///
+/// @param buf Buffer used for presentation of the terminal.
+/// @param opts PTY process channel, various terminal properties and callbacks.
 Terminal *terminal_open(buf_T *buf, TerminalOptions opts)
 {
   // Create a new terminal instance and configure it
@@ -195,6 +207,7 @@ Terminal *terminal_open(buf_T *buf, TerminalOptions opts)
   vterm_screen_set_callbacks(rv->vts, &vterm_screen_callbacks, rv);
   vterm_screen_set_damage_merge(rv->vts, VTERM_DAMAGE_SCROLL);
   vterm_screen_reset(rv->vts, 1);
+  vterm_output_set_callback(rv->vt, term_output_callback, rv);
   // force a initial refresh of the screen to ensure the buffer will always
   // have as many lines as screen rows when refresh_scrollback is called
   rv->invalid_start = 0;
@@ -215,11 +228,13 @@ Terminal *terminal_open(buf_T *buf, TerminalOptions opts)
   set_option_value("wrap", false, NULL, OPT_LOCAL);
   set_option_value("list", false, NULL, OPT_LOCAL);
   if (buf->b_ffname != NULL) {
-    buf_set_term_title(buf, (char *)buf->b_ffname);
+    buf_set_term_title(buf, buf->b_ffname);
   }
   RESET_BINDING(curwin);
   // Reset cursor in current window.
   curwin->w_cursor = (pos_T){ .lnum = 1, .col = 0, .coladd = 0 };
+  // Initialize to check if the scrollback buffer has been allocated inside a TermOpen autocmd
+  rv->sb_buffer = NULL;
   // Apply TermOpen autocmds _before_ configuring the scrollback buffer.
   apply_autocmds(EVENT_TERMOPEN, NULL, NULL, false, buf);
   // Local 'scrollback' _after_ autocmds.
@@ -242,7 +257,8 @@ Terminal *terminal_open(buf_T *buf, TerminalOptions opts)
     snprintf(var, sizeof(var), "terminal_color_%d", i);
     char *name = get_config_string(var);
     if (name) {
-      color_val = name_to_color(name);
+      int dummy;
+      color_val = name_to_color(name, &dummy);
       xfree(name);
 
       if (color_val != -1) {
@@ -260,8 +276,12 @@ Terminal *terminal_open(buf_T *buf, TerminalOptions opts)
   return rv;
 }
 
-void terminal_close(Terminal *term, int status)
+/// Closes the Terminal buffer.
+///
+/// May call terminal_destroy, which sets caller storage to NULL.
+void terminal_close(Terminal **termpp, int status)
 {
+  Terminal *term = *termpp;
   if (term->destroy) {
     return;
   }
@@ -270,7 +290,7 @@ void terminal_close(Terminal *term, int status)
   if (entered_free_all_mem) {
     // If called from close_buffer() inside free_all_mem(), the main loop has
     // already been freed, so it is not safe to call the close callback here.
-    terminal_destroy(term);
+    terminal_destroy(termpp);
     return;
   }
 #endif
@@ -311,10 +331,14 @@ void terminal_close(Terminal *term, int status)
       term->opts.close_cb(term->opts.data);
     }
   } else if (!only_destroy) {
-    // This was called by channel_process_exit_cb() not in process_teardown().
+    // Associated channel has been closed and the editor is not exiting.
     // Do not call the close callback now. Wait for the user to press a key.
     char msg[sizeof("\r\n[Process exited ]") + NUMBUFLEN];
-    snprintf(msg, sizeof msg, "\r\n[Process exited %d]", status);
+    if (((Channel *)term->opts.data)->streamtype == kChannelStreamInternal) {
+      snprintf(msg, sizeof msg, "\r\n[Terminal closed]");
+    } else {
+      snprintf(msg, sizeof msg, "\r\n[Process exited %d]", status);
+    }
     terminal_receive(term, msg, strlen(msg));
   }
 
@@ -326,6 +350,7 @@ void terminal_close(Terminal *term, int status)
     save_v_event_T save_v_event;
     dict_T *dict = get_v_event(&save_v_event);
     tv_dict_add_nr(dict, S_LEN("status"), status);
+    tv_dict_set_keys_readonly(dict);
     apply_autocmds(EVENT_TERMCLOSE, NULL, NULL, false, buf);
     restore_v_event(dict, &save_v_event);
   }
@@ -340,7 +365,6 @@ void terminal_check_size(Terminal *term)
   int curwidth, curheight;
   vterm_get_size(term->vt, &curheight, &curwidth);
   uint16_t width = 0, height = 0;
-
 
   FOR_ALL_TAB_WINDOWS(tp, wp) {
     if (wp->w_buffer && wp->w_buffer->terminal == term) {
@@ -363,6 +387,7 @@ void terminal_check_size(Terminal *term)
   invalidate_terminal(term, -1, -1);
 }
 
+/// Implements MODE_TERMINAL state. :help Terminal-mode
 void terminal_enter(void)
 {
   buf_T *buf = curbuf;
@@ -379,13 +404,13 @@ void terminal_enter(void)
 
   int save_state = State;
   s->save_rd = RedrawingDisabled;
-  State = TERM_FOCUS;
-  mapped_ctrl_c |= TERM_FOCUS;  // Always map CTRL-C to avoid interrupt.
+  State = MODE_TERMINAL;
+  mapped_ctrl_c |= MODE_TERMINAL;  // Always map CTRL-C to avoid interrupt.
   RedrawingDisabled = false;
 
   // Disable these options in terminal-mode. They are nonsense because cursor is
   // placed at end of buffer to "follow" output. #11072
-  win_T *save_curwin = curwin;
+  handle_T save_curwin = curwin->handle;
   bool save_w_p_cul = curwin->w_p_cul;
   char_u *save_w_p_culopt = NULL;
   char_u save_w_p_culopt_flags = curwin->w_p_culopt_flags;
@@ -412,7 +437,7 @@ void terminal_enter(void)
   curwin->w_redr_status = true;  // For mode() in statusline. #8323
   ui_busy_start();
   apply_autocmds(EVENT_TERMENTER, NULL, NULL, false, curbuf);
-  trigger_modechanged();
+  may_trigger_modechanged();
 
   s->state.execute = terminal_execute;
   s->state.check = terminal_check;
@@ -423,7 +448,7 @@ void terminal_enter(void)
   RedrawingDisabled = s->save_rd;
   apply_autocmds(EVENT_TERMLEAVE, NULL, NULL, false, curbuf);
 
-  if (save_curwin == curwin) {  // save_curwin may be invalid (window closed)!
+  if (save_curwin == curwin->handle) {  // Else: window was closed.
     curwin->w_p_cul = save_w_p_cul;
     if (save_w_p_culopt) {
       xfree(curwin->w_p_culopt);
@@ -491,6 +516,7 @@ static int terminal_check(VimState *state)
   return 1;
 }
 
+/// Processes one char of terminal-mode input.
 static int terminal_execute(VimState *state, int key)
 {
   TerminalState *s = (TerminalState *)state;
@@ -565,8 +591,11 @@ static int terminal_execute(VimState *state, int key)
   return 1;
 }
 
-void terminal_destroy(Terminal *term)
+/// Frees the given Terminal structure and sets the caller storage to NULL (in the spirit of
+/// XFREE_CLEAR).
+void terminal_destroy(Terminal **termpp)
 {
+  Terminal *term = *termpp;
   buf_T *buf = handle_get_buffer(term->buf_handle);
   if (buf) {
     term->buf_handle = 0;
@@ -587,6 +616,7 @@ void terminal_destroy(Terminal *term)
     xfree(term->sb_buffer);
     vterm_free(term->vt);
     xfree(term);
+    *termpp = NULL;  // coverity[dead-store]
   }
 }
 
@@ -636,7 +666,6 @@ void terminal_paste(long count, char_u **y_array, size_t y_size)
     return;
   }
   vterm_keyboard_start_paste(curbuf->terminal->vt);
-  terminal_flush_output(curbuf->terminal);
   size_t buff_len = STRLEN(y_array[0]);
   char_u *buff = xmalloc(buff_len);
   for (int i = 0; i < count; i++) {  // -V756
@@ -654,8 +683,8 @@ void terminal_paste(long count, char_u **y_array, size_t y_size)
       char_u *dst = buff;
       char_u *src = y_array[j];
       while (*src != '\0') {
-        len = (size_t)utf_ptr2len(src);
-        int c = utf_ptr2char(src);
+        len = (size_t)utf_ptr2len((char *)src);
+        int c = utf_ptr2char((char *)src);
         if (!is_filter_char(c)) {
           memcpy(dst, src, len);
           dst += len;
@@ -667,14 +696,6 @@ void terminal_paste(long count, char_u **y_array, size_t y_size)
   }
   xfree(buff);
   vterm_keyboard_end_paste(curbuf->terminal->vt);
-  terminal_flush_output(curbuf->terminal);
-}
-
-void terminal_flush_output(Terminal *term)
-{
-  size_t len = vterm_output_read(term->vt, term->textbuf,
-                                 sizeof(term->textbuf));
-  terminal_send(term, term->textbuf, len);
 }
 
 void terminal_send_key(Terminal *term, int c)
@@ -693,8 +714,6 @@ void terminal_send_key(Terminal *term, int c)
   } else {
     vterm_keyboard_unichar(term->vt, (uint32_t)c, mod);
   }
-
-  terminal_flush_output(term);
 }
 
 void terminal_receive(Terminal *term, char *data, size_t len)
@@ -712,7 +731,6 @@ static int get_rgb(VTermState *state, VTermColor color)
   vterm_state_convert_color_to_rgb(state, &color);
   return RGB_(color.rgb.red, color.rgb.green, color.rgb.blue);
 }
-
 
 void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr, int *term_attrs)
 {
@@ -744,8 +762,8 @@ void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr, int *te
     int vt_fg_idx = ((!fg_default && fg_indexed) ? cell.fg.indexed.idx + 1 : 0);
     int vt_bg_idx = ((!bg_default && bg_indexed) ? cell.bg.indexed.idx + 1 : 0);
 
-    bool fg_set = vt_fg_idx && vt_fg_idx <= 16 && term->color_set[vt_fg_idx-1];
-    bool bg_set = vt_bg_idx && vt_bg_idx <= 16 && term->color_set[vt_bg_idx-1];
+    bool fg_set = vt_fg_idx && vt_fg_idx <= 16 && term->color_set[vt_fg_idx - 1];
+    bool bg_set = vt_bg_idx && vt_bg_idx <= 16 && term->color_set[vt_bg_idx - 1];
 
     int hl_attrs = (cell.attrs.bold ? HL_BOLD : 0)
                    | (cell.attrs.italic ? HL_ITALIC : 0)
@@ -1317,9 +1335,6 @@ static bool send_mouse_event(Terminal *term, int c)
     }
 
     mouse_action(term, button, row, col - offset, pressed, 0);
-    size_t len = vterm_output_read(term->vt, term->textbuf,
-                                   sizeof(term->textbuf));
-    terminal_send(term, term->textbuf, len);
     return false;
   }
 
@@ -1344,20 +1359,19 @@ static bool send_mouse_event(Terminal *term, int c)
     return mouse_win == curwin;
   }
 
-  // ignore left release action if it was not proccessed above
+  // ignore left release action if it was not processed above
   // to prevent leaving Terminal mode after entering to it using a mouse
   if (c == K_LEFTRELEASE && mouse_win->w_buffer->terminal == term) {
     return false;
   }
 
 end:
-  ins_char_typebuf(c);
+  ins_char_typebuf(vgetc_char, vgetc_mod_mask);
   return true;
 }
 
 // }}}
 // terminal buffer refresh & misc {{{
-
 
 static void fetch_row(Terminal *term, int row, int end_col)
 {
@@ -1368,27 +1382,21 @@ static void fetch_row(Terminal *term, int row, int end_col)
   while (col < end_col) {
     VTermScreenCell cell;
     fetch_cell(term, row, col, &cell);
-    int cell_len = 0;
     if (cell.chars[0]) {
+      int cell_len = 0;
       for (int i = 0; cell.chars[i]; i++) {
-        cell_len += utf_char2bytes((int)cell.chars[i],
-                                   (uint8_t *)ptr + cell_len);
+        cell_len += utf_char2bytes((int)cell.chars[i], ptr + cell_len);
       }
-    } else {
-      *ptr = ' ';
-      cell_len = 1;
-    }
-    char c = *ptr;
-    ptr += cell_len;
-    if (c != ' ') {
-      // only increase the line length if the last character is not whitespace
+      ptr += cell_len;
       line_len = (size_t)(ptr - term->textbuf);
+    } else {
+      *ptr++ = ' ';
     }
     col += cell.width;
   }
 
-  // trim trailing whitespace
-  term->textbuf[line_len] = 0;
+  // end of line
+  term->textbuf[line_len] = NUL;
 }
 
 static bool fetch_cell(Terminal *term, int row, int col, VTermScreenCell *cell)
@@ -1451,7 +1459,8 @@ static void refresh_terminal(Terminal *term)
   long ml_added = buf->b_ml.ml_line_count - ml_before;
   adjust_topline(term, buf, ml_added);
 }
-// Calls refresh_terminal() on all invalidated_terminals.
+
+/// Calls refresh_terminal() on all invalidated_terminals.
 static void refresh_timer_cb(TimeWatcher *watcher, void *data)
 {
   refresh_pending = false;
@@ -1483,8 +1492,16 @@ static void refresh_size(Terminal *term, buf_T *buf)
   term->opts.resize_cb((uint16_t)width, (uint16_t)height, term->opts.data);
 }
 
-/// Adjusts scrollback storage after 'scrollback' option changed.
-static void on_scrollback_option_changed(Terminal *term, buf_T *buf)
+void on_scrollback_option_changed(Terminal *term)
+{
+  // Scrollback buffer may not exist yet, e.g. if 'scrollback' is set in a TermOpen autocmd.
+  if (term->sb_buffer != NULL) {
+    refresh_terminal(term);
+  }
+}
+
+/// Adjusts scrollback storage and the terminal buffer scrollback lines
+static void adjust_scrollback(Terminal *term, buf_T *buf)
 {
   if (buf->b_p_scbk < 1) {  // Local 'scrollback' was set to -1.
     buf->b_p_scbk = SB_MAX;
@@ -1503,7 +1520,7 @@ static void on_scrollback_option_changed(Terminal *term, buf_T *buf)
       term->sb_current--;
       xfree(term->sb_buffer[term->sb_current]);
     }
-    deleted_lines(1, (long)diff);
+    deleted_lines(1, (linenr_T)diff);
   }
 
   // Resize the scrollback storage.
@@ -1526,7 +1543,7 @@ static void refresh_scrollback(Terminal *term, buf_T *buf)
   int row_offset = term->sb_pending;
   while (term->sb_pending > 0 && buf->b_ml.ml_line_count < height) {
     fetch_row(term, term->sb_pending - row_offset - 1, width);
-    ml_append(0, (uint8_t *)term->textbuf, 0, false);
+    ml_append(0, term->textbuf, 0, false);
     appended_lines(0, 1);
     term->sb_pending--;
   }
@@ -1544,7 +1561,7 @@ static void refresh_scrollback(Terminal *term, buf_T *buf)
     }
     fetch_row(term, -term->sb_pending - row_offset, width);
     int buf_index = (int)buf->b_ml.ml_line_count - height;
-    ml_append(buf_index, (uint8_t *)term->textbuf, 0, false);
+    ml_append(buf_index, term->textbuf, 0, false);
     appended_lines(buf_index, 1);
     term->sb_pending--;
   }
@@ -1556,7 +1573,7 @@ static void refresh_scrollback(Terminal *term, buf_T *buf)
     deleted_lines(buf->b_ml.ml_line_count, 1);
   }
 
-  on_scrollback_option_changed(term, buf);
+  adjust_scrollback(term, buf);
 }
 
 // Refresh the screen (visible part of the buffer when the terminal is
@@ -1584,10 +1601,10 @@ static void refresh_screen(Terminal *term, buf_T *buf)
     fetch_row(term, r, width);
 
     if (linenr <= buf->b_ml.ml_line_count) {
-      ml_replace(linenr, (uint8_t *)term->textbuf, true);
+      ml_replace(linenr, term->textbuf, true);
       changed++;
     } else {
-      ml_append(linenr - 1, (uint8_t *)term->textbuf, 0, false);
+      ml_append(linenr - 1, term->textbuf, 0, false);
       added++;
     }
   }
@@ -1631,7 +1648,7 @@ static int linenr_to_row(Terminal *term, int linenr)
 
 static bool is_focused(Terminal *term)
 {
-  return State & TERM_FOCUS && curbuf->terminal == term;
+  return State & MODE_TERMINAL && curbuf->terminal == term;
 }
 
 static char *get_config_string(char *key)

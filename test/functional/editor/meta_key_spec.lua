@@ -27,6 +27,14 @@ describe('meta-keys #8226 #13042', function()
     command('nnoremap <A-j> Aalt-j<Esc>')
     feed('<A-j><M-l>')
     expect('llo<ESC>;<ESC>;alt-jmeta-l')
+    -- Unmapped ALT-chord with characters containing K_SPECIAL bytes
+    command('nnoremap … A…<Esc>')
+    feed('<A-…><M-…>')
+    expect('llo<ESC>;<ESC>;alt-jmeta-l<ESC>…<ESC>…')
+    command("execute 'nnoremap' nr2char(0x40000000) 'AMAX<Esc>'")
+    command("call nvim_input('<A-'.nr2char(0x40000000).'>')")
+    command("call nvim_input('<M-'.nr2char(0x40000000).'>')")
+    expect('llo<ESC>;<ESC>;alt-jmeta-l<ESC>…<ESC>…<ESC>MAX<ESC>MAX')
   end)
 
   it('ALT/META, visual-mode', function()
@@ -36,13 +44,20 @@ describe('meta-keys #8226 #13042', function()
     expect('peach')
     -- Unmapped ALT-chord resolves isolated (non-ALT) ESC mapping. #13086 #15869
     command('vnoremap <ESC> A<lt>ESC>')
-    feed('viw<A-;><ESC>viw<M-;><ESC>')
+    feed('viw<A-;><Esc>viw<M-;><Esc>')
     expect('peach<ESC>;<ESC>;')
     -- Mapped ALT-chord behaves as mapped.
     command('vnoremap <M-l> Ameta-l<Esc>')
     command('vnoremap <A-j> Aalt-j<Esc>')
     feed('viw<A-j>viw<M-l>')
     expect('peach<ESC>;<ESC>;alt-jmeta-l')
+    -- Unmapped ALT-chord with characters containing K_SPECIAL bytes
+    feed('viw<A-…><Esc>viw<M-…><Esc>')
+    expect('peach<ESC>;<ESC>;alt-jmeta-l<ESC>…<ESC>…')
+    command("execute 'inoremap' nr2char(0x40000000) 'MAX'")
+    command("call nvim_input('viw<A-'.nr2char(0x40000000).'><Esc>')")
+    command("call nvim_input('viw<M-'.nr2char(0x40000000).'><Esc>')")
+    expect('peach<ESC>;<ESC>;alt-jmeta-l<ESC>…<ESC>…<ESC>MAX<ESC>MAX')
   end)
 
   it('ALT/META insert-mode', function()
@@ -88,5 +103,42 @@ describe('meta-keys #8226 #13042', function()
     feed('<Esc>j')
     eq({ 0, 2, 1, 0, }, funcs.getpos('.'))
     eq('nt', eval('mode(1)'))
+  end)
+
+  it('ALT/META when recording a macro #13235', function()
+    command('inoremap <M-Esc> <lt>M-ESC>')
+    feed('ifoo<CR>bar<CR>baz<Esc>gg0')
+    -- <M-"> is reinterpreted as <Esc>"
+    feed('qrviw"ayC// This is some text: <M-">apq')
+    expect([[
+      // This is some text: foo
+      bar
+      baz]])
+    -- Should not insert an extra double quote or trigger <M-Esc> when replaying
+    feed('j0@rj0@@')
+    expect([[
+      // This is some text: foo
+      // This is some text: bar
+      // This is some text: baz]])
+    command('%delete')
+  end)
+
+  it('ALT/META with special key when recording a macro', function()
+    command('inoremap <M-Esc> <lt>M-ESC>')
+    command('noremap <S-Tab> "')
+    command('noremap! <S-Tab> "')
+    feed('ifoo<CR>bar<CR>baz<Esc>gg0')
+    -- <M-S-Tab> is reinterpreted as <Esc><S-Tab>
+    feed('qrviw<S-Tab>ayC// This is some text: <M-S-Tab>apq')
+    expect([[
+      // This is some text: foo
+      bar
+      baz]])
+    -- Should not insert an extra double quote or trigger <M-Esc> when replaying
+    feed('j0@rj0@@')
+    expect([[
+      // This is some text: foo
+      // This is some text: bar
+      // This is some text: baz]])
   end)
 end)

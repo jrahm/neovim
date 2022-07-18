@@ -49,7 +49,6 @@
 # define DFLT_FFS_VI  ""
 #endif
 
-
 // Possible values for 'encoding'
 #define ENC_UCSBOM     "ucs-bom"       // check for BOM at start of file
 
@@ -57,7 +56,7 @@
 #define ENC_DFLT       "utf-8"
 
 // end-of-line style
-#define EOL_UNKNOWN     -1      // not defined yet
+#define EOL_UNKNOWN     (-1)    // not defined yet
 #define EOL_UNIX        0       // NL
 #define EOL_DOS         1       // CR NL
 #define EOL_MAC         2       // CR
@@ -67,6 +66,7 @@
 #define FO_WRAP_COMS    'c'
 #define FO_RET_COMS     'r'
 #define FO_OPEN_COMS    'o'
+#define FO_NO_OPEN_COMS '/'
 #define FO_Q_COMS       'q'
 #define FO_Q_NUMBER     'n'
 #define FO_Q_SECOND     '2'
@@ -85,7 +85,7 @@
 
 #define DFLT_FO_VI      "vt"
 #define DFLT_FO_VIM     "tcqj"
-#define FO_ALL          "tcroq2vlb1mMBn,aw]jp"   // for do_set()
+#define FO_ALL          "tcro/q2vlb1mMBn,aw]jp"   // for do_set()
 
 // characters for the p_cpo option:
 #define CPO_ALTREAD     'a'     // ":read" sets alternate file name
@@ -118,7 +118,7 @@
 #define CPO_REMMARK     'R'     // remove marks when filtering
 #define CPO_BUFOPT      's'
 #define CPO_BUFOPTGLOB  'S'
-#define CPO_TAGPAT      't'
+#define CPO_TAGPAT      't'     // tag pattern is used for "n"
 #define CPO_UNDO        'u'     // "u" undoes itself
 #define CPO_BACKSPACE   'v'     // "v" keep deleted text
 #define CPO_FWRITE      'W'     // "w!" doesn't overwrite readonly files
@@ -152,6 +152,11 @@
 #define MOUSE_ALL       "anvichr"       // all possible characters
 #define MOUSE_NONE      ' '             // don't use Visual selection
 #define MOUSE_NONEF     'x'             // forced modeless selection
+
+// default vertical and horizontal mouse scroll values.
+// Note: This should be in sync with the default mousescroll option.
+#define MOUSESCROLL_VERT_DFLT   3
+#define MOUSESCROLL_HOR_DFLT    6
 
 #define COCU_ALL        "nvic"          // flags for 'concealcursor'
 
@@ -265,7 +270,7 @@ enum {
   STL_CLICK_FUNC      = '@',  ///< Click region start.
 };
 /// C string containing all 'statusline' option flags
-#define STL_ALL ((char_u[]) { \
+#define STL_ALL ((char[]) { \
     STL_FILEPATH, STL_FULLPATH, STL_FILENAME, STL_COLUMN, STL_VIRTCOL, \
     STL_VIRTCOL_ALT, STL_LINE, STL_NUMLINES, STL_BUFNO, STL_KEYMAP, STL_OFFSET, \
     STL_OFFSET_X, STL_BYTEVAL, STL_BYTEVAL_X, STL_ROFLAG, STL_ROFLAG_ALT, \
@@ -333,9 +338,9 @@ EXTERN unsigned bo_flags;
 #ifdef IN_OPTION_C
 static char *(p_bo_values[]) = { "all", "backspace", "cursor", "complete",
                                  "copy", "ctrlg", "error", "esc", "ex",
-                                 "hangul", "insertmode", "lang", "mess",
-                                 "showmatch", "operator", "register", "shell",
-                                 "spell", "wildmode", NULL };
+                                 "hangul", "lang", "mess", "showmatch",
+                                 "operator", "register", "shell", "spell",
+                                 "wildmode", NULL };
 #endif
 
 // values for the 'belloff' option
@@ -391,7 +396,7 @@ EXTERN char_u *p_csl;         // 'completeslash'
 EXTERN long p_pb;               // 'pumblend'
 EXTERN long p_ph;               // 'pumheight'
 EXTERN long p_pw;               // 'pumwidth'
-EXTERN char_u *p_cpo;         // 'cpoptions'
+EXTERN char *p_cpo;             // 'cpoptions'
 EXTERN char_u *p_csprg;       // 'cscopeprg'
 EXTERN int p_csre;              // 'cscoperelative'
 EXTERN char_u *p_csqf;        // 'cscopequickfix'
@@ -427,13 +432,13 @@ EXTERN int p_ea;                // 'equalalways'
 EXTERN char_u *p_ep;          // 'equalprg'
 EXTERN int p_eb;                // 'errorbells'
 EXTERN char_u *p_ef;          // 'errorfile'
-EXTERN char_u *p_efm;         // 'errorformat'
-EXTERN char_u *p_gefm;        // 'grepformat'
+EXTERN char *p_efm;         // 'errorformat'
+EXTERN char *p_gefm;        // 'grepformat'
 EXTERN char_u *p_gp;          // 'grepprg'
 EXTERN char_u *p_ei;          // 'eventignore'
 EXTERN int p_exrc;              // 'exrc'
 EXTERN char_u *p_fencs;       // 'fileencodings'
-EXTERN char_u *p_ffs;         // 'fileformats'
+EXTERN char *p_ffs;           // 'fileformats'
 EXTERN int p_fic;               // 'fileignorecase'
 EXTERN char_u *p_fcl;         // 'foldclose'
 EXTERN long p_fdls;             // 'foldlevelstart'
@@ -484,7 +489,6 @@ EXTERN char_u *p_iconstring;  // 'iconstring'
 EXTERN int p_ic;                // 'ignorecase'
 EXTERN int p_is;                // 'incsearch'
 EXTERN char_u *p_icm;         // 'inccommand'
-EXTERN int p_im;                // 'insertmode'
 EXTERN char_u *p_isf;         // 'isfname'
 EXTERN char_u *p_isi;         // 'isident'
 EXTERN char_u *p_isp;         // 'isprint'
@@ -492,9 +496,10 @@ EXTERN int p_js;                // 'joinspaces'
 EXTERN char_u *p_jop;           // 'jumpooptions'
 EXTERN unsigned jop_flags;
 #ifdef IN_OPTION_C
-static char *(p_jop_values[]) = { "stack", NULL };
+static char *(p_jop_values[]) = { "stack", "view", NULL };
 #endif
 #define JOP_STACK               0x01
+#define JOP_VIEW                0x02
 EXTERN char_u *p_kp;          // 'keywordprg'
 EXTERN char_u *p_km;          // 'keymodel'
 EXTERN char_u *p_langmap;     // 'langmap'
@@ -512,7 +517,7 @@ EXTERN int p_lz;                // 'lazyredraw'
 EXTERN int p_lpl;               // 'loadplugins'
 EXTERN int p_magic;             // 'magic'
 EXTERN char_u *p_menc;        // 'makeencoding'
-EXTERN char_u *p_mef;         // 'makeef'
+EXTERN char *p_mef;         // 'makeef'
 EXTERN char_u *p_mp;          // 'makeprg'
 EXTERN char_u *p_cc;          // 'colorcolumn'
 EXTERN int p_cc_cols[256];      // array for 'colorcolumn' columns
@@ -523,11 +528,14 @@ EXTERN long p_mmd;              // 'maxmapdepth'
 EXTERN long p_mmp;              // 'maxmempattern'
 EXTERN long p_mis;              // 'menuitems'
 EXTERN char_u *p_msm;         // 'mkspellmem'
-EXTERN long p_mle;              // 'modelineexpr'
+EXTERN int p_mle;              // 'modelineexpr'
 EXTERN long p_mls;              // 'modelines'
 EXTERN char_u *p_mouse;       // 'mouse'
 EXTERN char_u *p_mousem;      // 'mousemodel'
-EXTERN long p_mousef;           // 'mousefocus'
+EXTERN int p_mousef;           // 'mousefocus'
+EXTERN char_u *p_mousescroll;  // 'mousescroll'
+EXTERN long p_mousescroll_vert INIT(= MOUSESCROLL_VERT_DFLT);
+EXTERN long p_mousescroll_hor INIT(= MOUSESCROLL_HOR_DFLT);
 EXTERN long p_mouset;           // 'mousetime'
 EXTERN int p_more;              // 'more'
 EXTERN char_u *p_opfunc;      // 'operatorfunc'
@@ -556,7 +564,6 @@ static char *(p_rdb_values[]) = {
 #define RDB_NODELTA            0x008
 
 EXTERN long p_rdt;              // 'redrawtime'
-EXTERN int p_remap;             // 'remap'
 EXTERN long p_re;               // 'regexpengine'
 EXTERN long p_report;           // 'report'
 EXTERN long p_pvh;              // 'previewheight'
@@ -570,7 +577,7 @@ EXTERN char_u *p_rtp;         // 'runtimepath'
 EXTERN long p_scbk;             // 'scrollback'
 EXTERN long p_sj;               // 'scrolljump'
 EXTERN long p_so;               // 'scrolloff'
-EXTERN char_u *p_sbo;         // 'scrollopt'
+EXTERN char *p_sbo;             // 'scrollopt'
 EXTERN char_u *p_sections;    // 'sections'
 EXTERN int p_secure;            // 'secure'
 EXTERN char_u *p_sel;         // 'selection'
@@ -617,6 +624,7 @@ EXTERN int p_stmp;              // 'shelltemp'
 EXTERN int p_ssl;               // 'shellslash'
 #endif
 EXTERN char_u *p_stl;         // 'statusline'
+EXTERN char *p_wbr;         // 'winbar'
 EXTERN int p_sr;                // 'shiftround'
 EXTERN char_u *p_shm;         // 'shortmess'
 EXTERN char_u *p_sbr;         // 'showbreak'
@@ -677,7 +685,6 @@ EXTERN int p_tr;                ///< 'tagrelative'
 EXTERN char_u *p_tags;          ///< 'tags'
 EXTERN int p_tgst;              ///< 'tagstack'
 EXTERN int p_tbidi;             ///< 'termbidi'
-EXTERN int p_terse;             ///< 'terse'
 EXTERN int p_to;                ///< 'tildeop'
 EXTERN int p_timeout;           ///< 'timeout'
 EXTERN long p_tm;               ///< 'timeoutlen'
@@ -705,12 +712,14 @@ EXTERN int p_vb;                ///< 'visualbell'
 EXTERN char_u *p_ve;            ///< 'virtualedit'
 EXTERN unsigned ve_flags;
 #ifdef IN_OPTION_C
-static char *(p_ve_values[]) = { "block", "insert", "all", "onemore", NULL };
+static char *(p_ve_values[]) = { "block", "insert", "all", "onemore", "none", "NONE", NULL };
 #endif
-#define VE_BLOCK       5       // includes "all"
-#define VE_INSERT      6       // includes "all"
-#define VE_ALL         4
-#define VE_ONEMORE     8
+#define VE_BLOCK       5U      // includes "all"
+#define VE_INSERT      6U      // includes "all"
+#define VE_ALL         4U
+#define VE_ONEMORE     8U
+#define VE_NONE        16U     // "none"
+#define VE_NONEU       32U     // "NONE"
 EXTERN long p_verbose;          // 'verbose'
 #ifdef IN_OPTION_C
 char_u *p_vfile = (char_u *)"";   // used before options are initialized
@@ -772,6 +781,7 @@ enum {
   BV_CINK,
   BV_CINO,
   BV_CINW,
+  BV_CINSD,
   BV_CM,
   BV_CMS,
   BV_COM,
@@ -871,6 +881,7 @@ enum {
   WV_LBR,
   WV_NU,
   WV_RNU,
+  WV_VE,
   WV_NUW,
   WV_PVW,
   WV_RL,
@@ -894,13 +905,16 @@ enum {
   WV_FCS,
   WV_LCS,
   WV_WINBL,
+  WV_WBR,
   WV_COUNT,  // must be the last one
 };
 
 // Value for b_p_ul indicating the global value must be used.
-#define NO_LOCAL_UNDOLEVEL -123456
+#define NO_LOCAL_UNDOLEVEL (-123456)
 
 #define SB_MAX 100000  // Maximum 'scrollback' value.
+
+#define TABSTOP_MAX 9999
 
 /// Stores an identifier of a script or channel that last set an option.
 typedef struct {

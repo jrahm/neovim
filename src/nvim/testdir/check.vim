@@ -12,9 +12,9 @@ endfunc
 " Command to check for the absence of a feature.
 command -nargs=1 CheckNotFeature call CheckNotFeature(<f-args>)
 func CheckNotFeature(name)
-  if !has(a:name, 1)
-    throw 'Checking for non-existent feature ' .. a:name
-  endif
+  " if !has(a:name, 1)
+  "   throw 'Checking for non-existent feature ' .. a:name
+  " endif
   if has(a:name)
     throw 'Skipped: ' .. a:name .. ' feature present'
   endif
@@ -55,11 +55,28 @@ func CheckMSWindows()
   endif
 endfunc
 
+" Command to check for NOT running on MS-Windows
+command CheckNotMSWindows call CheckNotMSWindows()
+func CheckNotMSWindows()
+  if has('win32')
+    throw 'Skipped: does not work on MS-Windows'
+  endif
+endfunc
+
 " Command to check for running on Unix
 command CheckUnix call CheckUnix()
 func CheckUnix()
   if !has('unix')
     throw 'Skipped: only works on Unix'
+  endif
+endfunc
+
+" Command to check for not running on a BSD system.
+" TODO: using this checks should not be needed
+command CheckNotBSD call CheckNotBSD()
+func CheckNotBSD()
+  if has('bsd')
+    throw 'Skipped: does not work on BSD'
   endif
 endfunc
 
@@ -104,6 +121,14 @@ func CheckNotGui()
   endif
 endfunc
 
+" Command to check that test is not running as root
+command CheckNotRoot call CheckNotRoot()
+func CheckNotRoot()
+  if IsRoot()
+    throw 'Skipped: cannot run test as root'
+  endif
+endfunc
+
 " Command to check that the current language is English
 command CheckEnglish call CheckEnglish()
 func CheckEnglish()
@@ -112,11 +137,11 @@ func CheckEnglish()
   endif
 endfunc
 
-" Command to check for NOT running on MS-Windows
-command CheckNotMSWindows call CheckNotMSWindows()
-func CheckNotMSWindows()
-  if has('win32')
-    throw 'Skipped: does not work on MS-Windows'
+" Command to check for not running under ASAN
+command CheckNotAsan call CheckNotAsan()
+func CheckNotAsan()
+  if execute('version') =~# '-fsanitize=[a-z,]*\<address\>'
+    throw 'Skipped: does not work with ASAN'
   endif
 endfunc
 

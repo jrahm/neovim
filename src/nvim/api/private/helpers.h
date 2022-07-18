@@ -63,16 +63,30 @@
 #define PUT(dict, k, v) \
   kv_push(dict, ((KeyValuePair) { .key = cstr_to_string(k), .value = v }))
 
+#define PUT_C(dict, k, v) \
+  kv_push_c(dict, ((KeyValuePair) { .key = cstr_as_string(k), .value = v }))
+
 #define PUT_BOOL(dict, name, condition) PUT(dict, name, BOOLEAN_OBJ(condition));
 
 #define ADD(array, item) \
   kv_push(array, item)
+
+#define ADD_C(array, item) \
+  kv_push_c(array, item)
 
 #define FIXED_TEMP_ARRAY(name, fixsize) \
   Array name = ARRAY_DICT_INIT; \
   Object name##__items[fixsize]; \
   name.size = fixsize; \
   name.items = name##__items; \
+
+#define MAXSIZE_TEMP_ARRAY(name, maxsize) \
+  Array name = ARRAY_DICT_INIT; \
+  Object name##__items[maxsize]; \
+  name.capacity = maxsize; \
+  name.items = name##__items; \
+
+#define cbuf_as_string(d, s) ((String) { .data = d, .size = s })
 
 #define STATIC_CSTR_AS_STRING(s) ((String) { .data = s, .size = sizeof(s) - 1 })
 
@@ -138,10 +152,28 @@ typedef struct {
       msg_list = saved_msg_list;  /* Restore the exception context. */ \
   } while (0)
 
+// Useful macro for executing some `code` for each item in an array.
+#define FOREACH_ITEM(a, __foreach_item, code) \
+  for (size_t (__foreach_item##_index) = 0; (__foreach_item##_index) < (a).size; \
+       (__foreach_item##_index)++) { \
+    Object __foreach_item = (a).items[__foreach_item##_index]; \
+    code; \
+  }
+
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/private/helpers.h.generated.h"
 # include "keysets.h.generated.h"
 #endif
 
+#define WITH_SCRIPT_CONTEXT(channel_id, code) \
+  do { \
+    const sctx_T save_current_sctx = current_sctx; \
+    current_sctx.sc_sid = \
+      (channel_id) == LUA_INTERNAL_CALL ? SID_LUA : SID_API_CLIENT; \
+    current_sctx.sc_lnum = 0; \
+    current_channel_id = channel_id; \
+    code; \
+    current_sctx = save_current_sctx; \
+  } while (0);
 
 #endif  // NVIM_API_PRIVATE_HELPERS_H

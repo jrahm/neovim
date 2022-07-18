@@ -529,9 +529,9 @@ void free_homedir(void)
 /// again soon.
 /// @param src String containing environment variables to expand
 /// @see {expand_env}
-char_u *expand_env_save(char_u *src)
+char *expand_env_save(char *src)
 {
-  return expand_env_save_opt(src, false);
+  return (char *)expand_env_save_opt((char_u *)src, false);
 }
 
 /// Similar to expand_env_save() but when "one" is `true` handle the string as
@@ -580,14 +580,14 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
 
   int prefix_len = (prefix == NULL) ? 0 : (int)STRLEN(prefix);
 
-  char_u *src = skipwhite(srcp);
+  char_u *src = (char_u *)skipwhite((char *)srcp);
   dstlen--;  // leave one char space for "\,"
   while (*src && dstlen > 0) {
     // Skip over `=expr`.
     if (src[0] == '`' && src[1] == '=') {
       var = src;
       src += 2;
-      (void)skip_expr(&src);
+      (void)skip_expr((char **)&src);
       if (*src == '`') {
         src++;
       }
@@ -644,7 +644,7 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
 #endif
       } else if (src[1] == NUL  // home directory
                  || vim_ispathsep(src[1])
-                 || vim_strchr((char_u *)" ,\t\n", src[1]) != NULL) {
+                 || vim_strchr(" ,\t\n", src[1]) != NULL) {
         var = (char_u *)homedir;
         tail = src + 1;
       } else {  // user directory
@@ -663,7 +663,7 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
         // Get the user directory. If this fails the shell is used to expand
         // ~user, which is slower and may fail on old versions of /bin/sh.
         var = (*dst == NUL) ? NULL
-                            : (char_u *)os_get_user_directory((char *)dst + 1);
+                            : (char_u *)os_get_userdir((char *)dst + 1);
         mustfree = true;
         if (var == NULL) {
           expand_T xpc;
@@ -698,7 +698,7 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
 
       // If "var" contains white space, escape it with a backslash.
       // Required for ":e ~/tt" when $HOME includes a space.
-      if (esc && var != NULL && vim_strpbrk(var, (char_u *)" \t") != NULL) {
+      if (esc && var != NULL && strpbrk((char *)var, " \t") != NULL) {
         char_u *p = vim_strsave_escaped(var, (char_u *)" \t");
 
         if (mustfree) {
@@ -715,12 +715,12 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
         int c = (int)STRLEN(var);
         // if var[] ends in a path separator and tail[] starts
         // with it, skip a character
-        if (*var != NUL && after_pathsep((char *)dst, (char *)dst + c)
+        if (after_pathsep((char *)dst, (char *)dst + c)
 #if defined(BACKSLASH_IN_FILENAME)
             && dst[-1] != ':'
 #endif
             && vim_ispathsep(*tail)) {
-          ++tail;
+          tail++;
         }
         dst += c;
         src = tail;
@@ -738,7 +738,7 @@ void expand_env_esc(char_u *restrict srcp, char_u *restrict dst, int dstlen, boo
       at_start = false;
       if (src[0] == '\\' && src[1] != NUL) {
         *dst++ = *src++;
-        --dstlen;
+        dstlen--;
       } else if ((src[0] == ' ' || src[0] == ',') && !one) {
         at_start = true;
       }
@@ -805,7 +805,7 @@ static char *remove_tail(char *path, char *pend, char *dirname)
   char *new_tail = pend - len - 1;
 
   if (new_tail >= path
-      && fnamencmp((char_u *)new_tail, (char_u *)dirname, len) == 0
+      && FNAMENCMP((char_u *)new_tail, (char_u *)dirname, len) == 0
       && (new_tail == path || after_pathsep(path, new_tail))) {
     return new_tail;
   }
@@ -878,17 +878,15 @@ const void *vim_env_iter_rev(const char delim, const char *const val, const void
   }
 }
 
-
 /// @param[out] exe_name should be at least MAXPATHL in size
 void vim_get_prefix_from_exepath(char *exe_name)
 {
   // TODO(bfredl): param could have been written as "char exe_name[MAXPATHL]"
   // but c_grammar.lua does not recognize it (yet).
-  xstrlcpy(exe_name, (char *)get_vim_var_str(VV_PROGPATH),
-           MAXPATHL * sizeof(*exe_name));
-  char *path_end = (char *)path_tail_with_sep((char_u *)exe_name);
+  xstrlcpy(exe_name, get_vim_var_str(VV_PROGPATH), MAXPATHL * sizeof(*exe_name));
+  char *path_end = path_tail_with_sep(exe_name);
   *path_end = '\0';  // remove the trailing "nvim.exe"
-  path_end = (char *)path_tail((char_u *)exe_name);
+  path_end = path_tail(exe_name);
   *path_end = '\0';  // remove the trailing "bin/"
 }
 
@@ -940,7 +938,7 @@ char *vim_getenv(const char *name)
   // - the directory name from 'helpfile' (unless it contains '$')
   // - the executable name from argv[0]
   if (vim_path == NULL) {
-    if (p_hf != NULL && vim_strchr(p_hf, '$') == NULL) {
+    if (p_hf != NULL && vim_strchr((char *)p_hf, '$') == NULL) {
       vim_path = (char *)p_hf;
     }
 
@@ -957,7 +955,7 @@ char *vim_getenv(const char *name)
 
     if (vim_path != NULL) {
       // remove the file name
-      char *vim_path_end = (char *)path_tail((char_u *)vim_path);
+      char *vim_path_end = path_tail(vim_path);
 
       // remove "doc/" from 'helpfile', if present
       if (vim_path == (char *)p_hf) {
@@ -1035,7 +1033,7 @@ char *vim_getenv(const char *name)
 ///                  a list of them.
 ///
 /// @return length of the string put into dst, does not include NUL byte.
-size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst, size_t dstlen,
+size_t home_replace(const buf_T *const buf, const char *src, char *const dst, size_t dstlen,
                     const bool one)
   FUNC_ATTR_NONNULL_ARG(3)
 {
@@ -1048,7 +1046,7 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
   }
 
   if (buf != NULL && buf->b_help) {
-    const size_t dlen = STRLCPY(dst, path_tail(src), dstlen);
+    const size_t dlen = STRLCPY(dst, path_tail((char *)src), dstlen);
     return MIN(dlen, dstlen - 1);
   }
 
@@ -1072,8 +1070,8 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
     size_t usedlen = 0;
     size_t flen = strlen(homedir_env_mod);
     char_u *fbuf = NULL;
-    (void)modify_fname((char_u *)":p", false, &usedlen,
-                       (char_u **)&homedir_env_mod, &fbuf, &flen);
+    (void)modify_fname(":p", false, &usedlen,
+                       &homedir_env_mod, (char **)&fbuf, &flen);
     flen = strlen(homedir_env_mod);
     assert(homedir_env_mod != homedir_env);
     if (vim_ispathsep(homedir_env_mod[flen - 1])) {
@@ -1087,9 +1085,9 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
   }
 
   if (!one) {
-    src = skipwhite(src);
+    src = skipwhite((char *)src);
   }
-  char *dst_p = (char *)dst;
+  char *dst_p = dst;
   while (*src && dstlen > 0) {
     // Here we are at the beginning of a file name.
     // First, check to see if the beginning of the file name matches
@@ -1102,7 +1100,7 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
     size_t len = dirlen;
     for (;;) {
       if (len
-          && fnamencmp(src, (char_u *)p, len) == 0
+          && FNAMENCMP(src, (char_u *)p, len) == 0
           && (vim_ispathsep(src[len])
               || (!one && (src[len] == ',' || src[len] == ' '))
               || src[len] == NUL)) {
@@ -1111,10 +1109,9 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
           *dst_p++ = '~';
         }
 
-        // If it's just the home directory, add  "/".
-        if (!vim_ispathsep(src[0]) && --dstlen > 0) {
-          *dst_p++ = '/';
-        }
+        // Do not add directory separator into dst, because dst is
+        // expected to just return the directory name without the
+        // directory separator '/'.
         break;
       }
       if (p == homedir_env_mod) {
@@ -1126,11 +1123,11 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
 
     // if (!one) skip to separator: space or comma.
     while (*src && (one || (*src != ',' && *src != ' ')) && --dstlen > 0) {
-      *dst_p++ = (char)(*src++);
+      *dst_p++ = *src++;
     }
     // Skip separator.
     while ((*src == ' ' || *src == ',') && --dstlen > 0) {
-      *dst_p++ = (char)(*src++);
+      *dst_p++ = *src++;
     }
   }
   // If (dstlen == 0) out of space, what to do???
@@ -1140,26 +1137,26 @@ size_t home_replace(const buf_T *const buf, const char_u *src, char_u *const dst
   if (must_free) {
     xfree(homedir_env_mod);
   }
-  return (size_t)(dst_p - (char *)dst);
+  return (size_t)(dst_p - dst);
 }
 
 /// Like home_replace, store the replaced string in allocated memory.
 /// @param buf When not NULL, check for help files
 /// @param src Input file name
-char_u *home_replace_save(buf_T *buf, char_u *src) FUNC_ATTR_NONNULL_RET
+char *home_replace_save(buf_T *buf, char *src)
+  FUNC_ATTR_NONNULL_RET
 {
   size_t len = 3;             // space for "~/" and trailing NUL
   if (src != NULL) {          // just in case
     len += STRLEN(src);
   }
-  char_u *dst = xmalloc(len);
+  char *dst = xmalloc(len);
   home_replace(buf, src, dst, len, true);
   return dst;
 }
 
-
 /// Function given to ExpandGeneric() to obtain an environment variable name.
-char_u *get_env_name(expand_T *xp, int idx)
+char *get_env_name(expand_T *xp, int idx)
 {
 #define ENVNAMELEN 100
   // this static buffer is needed to avoid a memory leak in ExpandGeneric
@@ -1169,7 +1166,7 @@ char_u *get_env_name(expand_T *xp, int idx)
   if (envname) {
     STRLCPY(name, envname, ENVNAMELEN);
     xfree(envname);
-    return name;
+    return (char *)name;
   }
   return NULL;
 }
@@ -1193,7 +1190,7 @@ bool os_setenv_append_path(const char *fname)
     internal_error("os_setenv_append_path()");
     return false;
   }
-  const char *tail = (char *)path_tail_with_sep((char_u *)fname);
+  const char *tail = path_tail_with_sep((char *)fname);
   size_t dirlen = (size_t)(tail - fname);
   assert(tail >= fname && dirlen + 1 < sizeof(os_buf));
   xstrlcpy(os_buf, fname, dirlen + 1);
@@ -1227,10 +1224,10 @@ bool os_shell_is_cmdexe(const char *sh)
   }
   if (striequal(sh, "$COMSPEC")) {
     const char *comspec = os_getenv("COMSPEC");
-    return striequal("cmd.exe", (char *)path_tail((char_u *)comspec));
+    return striequal("cmd.exe", path_tail(comspec));
   }
   if (striequal(sh, "cmd.exe") || striequal(sh, "cmd")) {
     return true;
   }
-  return striequal("cmd.exe", (char *)path_tail((char_u *)sh));
+  return striequal("cmd.exe", path_tail(sh));
 }

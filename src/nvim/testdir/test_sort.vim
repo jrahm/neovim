@@ -12,6 +12,7 @@ func Compare2(a, b) abort
 endfunc
 
 func Test_sort_strings()
+  CheckNotMSWindows  " FIXME: Why does this fail with MSVC?
   " numbers compared as strings
   call assert_equal([1, 2, 3], sort([3, 2, 1]))
   call assert_equal([13, 28, 3], sort([3, 28, 13]))
@@ -58,6 +59,7 @@ endfunc
 func Test_sort_numbers()
   call assert_equal([3, 13, 28], sort([13, 28, 3], 'N'))
   call assert_equal(['3', '13', '28'], sort(['13', '28', '3'], 'N'))
+  call assert_equal([3997, 4996], sort([4996, 3997], 'Compare1'))
 endfunc
 
 func Test_sort_float()
@@ -1354,7 +1356,7 @@ func Test_sort_cmd()
     endif
   endfor
 
-  " Needs atleast two lines for this test
+  " Needs at least two lines for this test
   call setline(1, ['line1', 'line2'])
   call assert_fails('sort no', 'E474:')
   call assert_fails('sort c', 'E475:')
@@ -1485,6 +1487,22 @@ func Test_sort_last_search_pat()
   sort //
   call assert_equal(['2a', '3b', '1c'], getline(1, '$'))
   close!
+endfunc
+
+" Test for :sort with no last search pattern
+func Test_sort_with_no_last_search_pat()
+  let lines =<< trim [SCRIPT]
+    call setline(1, ['3b', '1c', '2a'])
+    call assert_fails('sort //', 'E35:')
+    call writefile(v:errors, 'Xresult')
+    qall!
+  [SCRIPT]
+  call writefile(lines, 'Xscript')
+  if RunVim([], [], '--clean -S Xscript')
+    call assert_equal([], readfile('Xresult'))
+  endif
+  call delete('Xscript')
+  call delete('Xresult')
 endfunc
 
 " Test for retaining marks across a :sort

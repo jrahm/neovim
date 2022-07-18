@@ -19,6 +19,8 @@
 // regexp.c
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "regexp.h.generated.h"
+
+# include "regexp_bt.h.generated.h"
 #endif
 
 #endif  // NVIM_REGEXP_H

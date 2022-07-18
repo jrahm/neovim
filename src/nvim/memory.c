@@ -10,10 +10,12 @@
 
 #include "nvim/api/extmark.h"
 #include "nvim/context.h"
-#include "nvim/decoration.h"
+#include "nvim/decoration_provider.h"
 #include "nvim/eval.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_group.h"
 #include "nvim/lua/executor.h"
+#include "nvim/mapping.h"
 #include "nvim/memfile.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
@@ -523,6 +525,95 @@ void time_to_bytes(time_t time_, uint8_t buf[8])
   }
 }
 
+#define ARENA_BLOCK_SIZE 4096
+
+void arena_start(Arena *arena, ArenaMem *reuse_blk)
+{
+  if (reuse_blk && *reuse_blk) {
+    arena->cur_blk = (char *)(*reuse_blk);
+    *reuse_blk = NULL;
+  } else {
+    arena->cur_blk = xmalloc(ARENA_BLOCK_SIZE);
+  }
+  arena->pos = 0;
+  arena->size = ARENA_BLOCK_SIZE;
+  // address is the same as as (struct consumed_blk *)arena->cur_blk
+  struct consumed_blk *blk = arena_alloc(arena, sizeof(struct consumed_blk), true);
+  assert((char *)blk == (char *)arena->cur_blk);
+  blk->prev = NULL;
+}
+
+/// Finnish the allocations in an arena.
+///
+/// This does not immedately free the memory, but leaves existing allocated
+/// objects valid, and returns an opaque ArenaMem handle, which can be used to
+/// free the allocations using `arena_mem_free`, when the objects allocated
+/// from the arena are not needed anymore.
+ArenaMem arena_finish(Arena *arena)
+{
+  struct consumed_blk *res = (struct consumed_blk *)arena->cur_blk;
+  *arena = (Arena)ARENA_EMPTY;
+  return res;
+}
+
+void *arena_alloc(Arena *arena, size_t size, bool align)
+{
+  if (align) {
+    arena->pos = (arena->pos + (ARENA_ALIGN - 1)) & ~(ARENA_ALIGN - 1);
+  }
+  if (arena->pos + size > arena->size) {
+    if (size > (arena->size - sizeof(struct consumed_blk)) >> 1) {
+      // if allocation is too big, allocate a large block with the requested
+      // size, but still with block pointer head. We do this even for
+      // arena->size / 2, as there likely is space left for the next
+      // small allocation in the current block.
+      char *alloc = xmalloc(size + sizeof(struct consumed_blk));
+      struct consumed_blk *cur_blk = (struct consumed_blk *)arena->cur_blk;
+      struct consumed_blk *fix_blk = (struct consumed_blk *)alloc;
+      fix_blk->prev = cur_blk->prev;
+      cur_blk->prev = fix_blk;
+      return (alloc + sizeof(struct consumed_blk));
+    } else {
+      struct consumed_blk *prev_blk = (struct consumed_blk *)arena->cur_blk;
+      arena->cur_blk = xmalloc(ARENA_BLOCK_SIZE);
+      arena->pos = 0;
+      arena->size = ARENA_BLOCK_SIZE;
+      struct consumed_blk *blk = arena_alloc(arena, sizeof(struct consumed_blk), true);
+      blk->prev = prev_blk;
+    }
+  }
+
+  char *mem = arena->cur_blk + arena->pos;
+  arena->pos += size;
+  return mem;
+}
+
+void arena_mem_free(ArenaMem mem, ArenaMem *reuse_blk)
+{
+  struct consumed_blk *b = mem;
+  // peel of the first block, as it is guaranteed to be ARENA_BLOCK_SIZE,
+  // not a custom fix_blk
+  if (reuse_blk && *reuse_blk == NULL && b != NULL) {
+    *reuse_blk = b;
+    b = b->prev;
+    (*reuse_blk)->prev = NULL;
+  }
+
+  while (b) {
+    struct consumed_blk *prev = b->prev;
+    xfree(b);
+    b = prev;
+  }
+}
+
+char *arena_memdupz(Arena *arena, const char *buf, size_t size)
+{
+  char *mem = arena_alloc(arena, size + 1, false);
+  memcpy(mem, buf, size);
+  mem[size] = NUL;
+  return mem;
+}
+
 #if defined(EXITFREE)
 
 # include "nvim/buffer.h"
@@ -596,14 +687,13 @@ void free_all_mem(void)
 
   // Clear menus.
   do_cmdline_cmd("aunmenu *");
+  do_cmdline_cmd("tlunmenu *");
   do_cmdline_cmd("menutranslate clear");
 
   // Clear mappings, abbreviations, breakpoints.
-  do_cmdline_cmd("lmapclear");
-  do_cmdline_cmd("xmapclear");
-  do_cmdline_cmd("mapclear");
-  do_cmdline_cmd("mapclear!");
-  do_cmdline_cmd("abclear");
+  // NB: curbuf not used with local=false arg
+  map_clear_mode(curbuf, MAP_ALL_MODES, false, false);
+  map_clear_mode(curbuf, MAP_ALL_MODES, false, true);
   do_cmdline_cmd("breakdel *");
   do_cmdline_cmd("profdel *");
   do_cmdline_cmd("set keymap=");
@@ -630,7 +720,6 @@ void free_all_mem(void)
   clear_sb_text(true);            // free any scrollback text
 
   // Free some global vars.
-  xfree(last_mode);
   xfree(last_cmdline);
   xfree(new_last_cmdline);
   set_keep_msg(NULL, 0);
@@ -661,7 +750,6 @@ void free_all_mem(void)
   ResetRedobuff();
   ResetRedobuff();
 
-
   // highlight info
   free_highlight();
 
@@ -690,13 +778,13 @@ void free_all_mem(void)
     bufref_T bufref;
     set_bufref(&bufref, buf);
     nextbuf = buf->b_next;
-    close_buffer(NULL, buf, DOBUF_WIPE, false);
+    close_buffer(NULL, buf, DOBUF_WIPE, false, false);
     // Didn't work, try next one.
     buf = bufref_valid(&bufref) ? nextbuf : firstbuf;
   }
 
   // free screenlines (can't display anything now!)
-  screen_free_all_mem();
+  grid_free_all_mem();
 
   clear_hl_tables(false);
   list_free_log();
@@ -706,7 +794,7 @@ void free_all_mem(void)
   decor_free_all_mem();
 
   nlua_free_all_mem();
+  ui_free_all_mem();
 }
 
 #endif
-

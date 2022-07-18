@@ -7,11 +7,11 @@ Getting started
 If you want to help but don't know where to start, here are some
 low-risk/isolated tasks:
 
-- [Merge a Vim patch].
 - Try a [complexity:low] issue.
 - Fix bugs found by [Clang](#clang-scan-build), [PVS](#pvs-studio) or
   [Coverity](#coverity).
 - [Improve documentation][wiki-contribute-help]
+- [Merge a Vim patch] (familiarity with Vim is *strongly* recommended)
 
 Reporting problems
 ------------------
@@ -92,7 +92,7 @@ the VCS/git logs more valuable. The general structure of a commit message is:
 ```
 
 - Prefix the commit subject with one of these [_types_](https://github.com/commitizen/conventional-commit-types/blob/master/index.json):
-    - `build`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `test`, `vim-patch`, `chore`
+    - `build`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `test`, `vim-patch`, `dist`
     - You can **ignore this for "fixup" commits** or any commits you expect to be squashed.
 - Append optional scope to _type_ such as `(lsp)`, `(treesitter)`, `(float)`, …
 - _Description_ shouldn't start with a capital letter or end in a period.
@@ -289,7 +289,7 @@ as context, use the `-W` argument as well.
 [complexity:low]: https://github.com/neovim/neovim/issues?q=is%3Aopen+is%3Aissue+label%3Acomplexity%3Alow
 [master error list]: https://raw.githubusercontent.com/neovim/doc/gh-pages/reports/clint/errors.json
 [wiki-contribute-help]: https://github.com/neovim/neovim/wiki/contribute-%3Ahelp
-[pr-draft]: https://docs.github.com/en/github/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request
+[pr-draft]: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request
 [pr-ready]: https://docs.github.com/en/github/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-stage-of-a-pull-request
 [uncrustify]: http://uncrustify.sourceforge.net/
 [lua-language-server]: https://github.com/sumneko/lua-language-server/

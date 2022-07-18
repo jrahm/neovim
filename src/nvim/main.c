@@ -9,30 +9,35 @@
 #include <string.h>
 
 #include "nvim/ascii.h"
-#include "nvim/aucmd.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/channel.h"
 #include "nvim/charset.h"
 #include "nvim/decoration.h"
+#include "nvim/decoration_provider.h"
 #include "nvim/diff.h"
 #include "nvim/eval.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
+#include "nvim/ex_getln.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
-#include "nvim/getchar.h"
 #include "nvim/hashtab.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_group.h"
 #include "nvim/iconv.h"
 #include "nvim/if_cscope.h"
 #include "nvim/lua/executor.h"
 #include "nvim/main.h"
+#include "nvim/mapping.h"
+#include "nvim/ui_client.h"
 #include "nvim/vim.h"
 #ifdef HAVE_LOCALE_H
 # include <locale.h>
 #endif
 #include "nvim/garray.h"
+#include "nvim/grid.h"
 #include "nvim/log.h"
 #include "nvim/mark.h"
 #include "nvim/mbyte.h"
@@ -110,14 +115,12 @@ static const char *err_too_many_args = N_("Too many edit arguments");
 static const char *err_extra_cmd =
   N_("Too many \"+command\", \"-c command\" or \"--cmd command\" arguments");
 
-
 void event_init(void)
 {
   loop_init(&main_loop, NULL);
   resize_events = multiqueue_new_child(main_loop.events);
 
   // early msgpack-rpc initialization
-  msgpack_rpc_init_method_table();
   msgpack_rpc_helpers_init();
   input_init();
   signal_init();
@@ -125,6 +128,7 @@ void event_init(void)
   channel_init();
   terminal_init();
   ui_init();
+  TIME_MSG("event init");
 }
 
 /// @returns false if main_loop could not be closed gracefully
@@ -154,10 +158,11 @@ bool event_teardown(void)
 void early_init(mparm_T *paramp)
 {
   env_init();
-  fs_init();
+  cmdline_init();
   eval_init();          // init global variables
   init_path(argv0 ? argv0 : "nvim");
   init_normal_cmds();   // Init the table of Normal mode commands.
+  runtime_init();
   highlight_init();
 
 #ifdef WIN32
@@ -167,6 +172,8 @@ void early_init(mparm_T *paramp)
   snprintf(windowsVersion, sizeof(windowsVersion), "%d.%d",
            (int)ovi.dwMajorVersion, (int)ovi.dwMinorVersion);
 #endif
+
+  TIME_MSG("early init");
 
 #if defined(HAVE_LOCALE_H)
   // Setup to use the current locale (for ctype() and many other things).
@@ -180,8 +187,7 @@ void early_init(mparm_T *paramp)
   if (!win_alloc_first()) {
     os_exit(0);
   }
-
-  init_yank();                  // init yank buffers
+  TIME_MSG("init first window");
 
   alist_init(&global_alist);    // Init the argument list to empty.
   global_alist.id = 0;
@@ -230,6 +236,10 @@ int main(int argc, char **argv)
   // `argc` and `argv` are also copied, so that they can be changed.
   init_params(&params, argc, argv);
 
+  // Since os_open is called during the init_startuptime, we need to call
+  // fs_init before it.
+  fs_init();
+
   init_startuptime(&params);
 
   // Need to find "--clean" before actually parsing arguments.
@@ -249,11 +259,13 @@ int main(int argc, char **argv)
   // Check if we have an interactive window.
   check_and_set_isatty(&params);
 
-  nlua_init();
-
   // Process the command line arguments.  File names are put in the global
   // argument list "global_alist".
   command_line_scan(&params);
+
+  nlua_init();
+
+  TIME_MSG("init lua interpreter");
 
   if (embedded_mode) {
     const char *err;
@@ -263,6 +275,9 @@ int main(int argc, char **argv)
   }
 
   server_init(params.listen_addr);
+  if (params.remote) {
+    remote_request(&params, params.remote, params.server_addr, argc, argv);
+  }
 
   if (GARGCOUNT > 0) {
     fname = get_fname(&params, cwd);
@@ -335,15 +350,30 @@ int main(int argc, char **argv)
     TIME_MSG("init screen for UI");
   }
 
-  init_default_mappings();  // Default mappings.
+  if (ui_client_channel_id) {
+    ui_client_init(ui_client_channel_id);
+    ui_client_execute(ui_client_channel_id);
+    abort();  // unreachable
+  }
+
+  // Default mappings (incl. menus)
+  Error err = ERROR_INIT;
+  Object o = nlua_exec(STATIC_CSTR_AS_STRING("return vim._init_default_mappings()"),
+                       (Array)ARRAY_DICT_INIT, &err);
+  assert(!ERROR_SET(&err));
+  api_clear_error(&err);
+  assert(o.type == kObjectTypeNil);
+  api_free_object(o);
   TIME_MSG("init default mappings");
 
   init_default_autocmds();
   TIME_MSG("init default autocommands");
 
+  bool vimrc_none = params.use_vimrc != NULL && strequal(params.use_vimrc, "NONE");
+
   // Reset 'loadplugins' for "-u NONE" before "--cmd" arguments.
   // Allows for setting 'loadplugins' there.
-  if (params.use_vimrc != NULL && strequal(params.use_vimrc, "NONE")) {
+  if (vimrc_none) {
     // When using --clean we still want to load plugins
     p_lpl = params.clean;
   }
@@ -351,14 +381,23 @@ int main(int argc, char **argv)
   // Execute --cmd arguments.
   exe_pre_commands(&params);
 
+  if (!vimrc_none || params.clean) {
+    // Sources ftplugin.vim and indent.vim. We do this *before* the user startup scripts to ensure
+    // ftplugins run before FileType autocommands defined in the init file (which allows those
+    // autocommands to overwrite settings from ftplugins).
+    filetype_plugin_enable();
+  }
+
   // Source startup scripts.
   source_startup_scripts(&params);
 
   // If using the runtime (-u is not NONE), enable syntax & filetype plugins.
-  if (params.use_vimrc == NULL || !strequal(params.use_vimrc, "NONE")) {
-    // Does ":filetype plugin indent on".
+  if (!vimrc_none || params.clean) {
+    // Sources filetype.lua and filetype.vim unless the user explicitly disabled it with :filetype
+    // off.
     filetype_maybe_enable();
-    // Sources syntax/syntax.vim, which calls `:filetype on`.
+    // Sources syntax/syntax.vim. We do this *after* the user startup scripts so that users can
+    // disable syntax highlighting with `:syntax off` if they wish.
     syn_maybe_enable();
   }
 
@@ -426,7 +465,7 @@ int main(int argc, char **argv)
   // writing end of the pipe doesn't like, e.g., in case stdin and stderr
   // are the same terminal: "cat | vim -".
   // Using autocommands here may cause trouble...
-  if (params.edit_type == EDIT_STDIN && !recoverymode) {
+  if ((params.edit_type == EDIT_STDIN || stdin_fd >= 0) && !recoverymode) {
     read_stdin();
   }
 
@@ -485,7 +524,7 @@ int main(int argc, char **argv)
 
   // Need to jump to the tag before executing the '-c command'.
   // Makes "vim -c '/return' -t main" work.
-  handle_tag(params.tagname);
+  handle_tag((char_u *)params.tagname);
 
   // Execute any "+", "-c" and "-S" arguments.
   if (params.n_commands > 0) {
@@ -500,11 +539,6 @@ int main(int argc, char **argv)
 
   // 'autochdir' has been postponed.
   do_autochdir();
-
-  // start in insert mode
-  if (p_im) {
-    need_start_insertmode = true;
-  }
 
   set_vim_var_nr(VV_VIM_DID_ENTER, 1L);
   apply_autocmds(EVENT_VIMENTER, NULL, NULL, false, curbuf);
@@ -614,8 +648,7 @@ void getout(int exitval)
           bufref_T bufref;
 
           set_bufref(&bufref, buf);
-          apply_autocmds(EVENT_BUFWINLEAVE, buf->b_fname,
-                         buf->b_fname, false, buf);
+          apply_autocmds(EVENT_BUFWINLEAVE, buf->b_fname, buf->b_fname, false, buf);
           if (bufref_valid(&bufref)) {
             buf_set_changedtick(buf, -1);  // note that we did it already
           }
@@ -776,9 +809,9 @@ static void init_locale(void)
 
   char localepath[MAXPATHL] = { 0 };
   snprintf(localepath, sizeof(localepath), "%s", get_vim_var_str(VV_PROGPATH));
-  char *tail = (char *)path_tail_with_sep((char_u *)localepath);
+  char *tail = path_tail_with_sep(localepath);
   *tail = NUL;
-  tail = (char *)path_tail((char_u *)localepath);
+  tail = path_tail(localepath);
   xstrlcpy(tail, "share/locale",
            sizeof(localepath) - (size_t)(tail - localepath));
   bindtextdomain(PROJECT_NAME, localepath);
@@ -786,6 +819,112 @@ static void init_locale(void)
   TIME_MSG("locale set");
 }
 #endif
+
+static uint64_t server_connect(char *server_addr, const char **errmsg)
+{
+  if (server_addr == NULL) {
+    *errmsg = "no address specified";
+    return 0;
+  }
+  CallbackReader on_data = CALLBACK_READER_INIT;
+  const char *error = NULL;
+  bool is_tcp = strrchr(server_addr, ':') ? true : false;
+  // connected to channel
+  uint64_t chan = channel_connect(is_tcp, server_addr, true, on_data, 50, &error);
+  if (error) {
+    *errmsg = error;
+    return 0;
+  }
+  return chan;
+}
+
+/// Handle remote subcommands
+static void remote_request(mparm_T *params, int remote_args, char *server_addr, int argc,
+                           char **argv)
+{
+  const char *connect_error = NULL;
+  uint64_t chan = server_connect(server_addr, &connect_error);
+  Object rvobj = OBJECT_INIT;
+
+  if (strequal(argv[remote_args], "--remote-ui-test")) {
+    if (!chan) {
+      emsg(connect_error);
+      exit(1);
+    }
+
+    ui_client_channel_id = chan;
+    return;
+  }
+
+  Array args = ARRAY_DICT_INIT;
+  String arg_s;
+  for (int t_argc = remote_args; t_argc < argc; t_argc++) {
+    arg_s = cstr_to_string(argv[t_argc]);
+    ADD(args, STRING_OBJ(arg_s));
+  }
+
+  Error err = ERROR_INIT;
+  Array a = ARRAY_DICT_INIT;
+  ADD(a, INTEGER_OBJ((int)chan));
+  ADD(a, CSTR_TO_OBJ(server_addr));
+  ADD(a, CSTR_TO_OBJ(connect_error));
+  ADD(a, ARRAY_OBJ(args));
+  String s = STATIC_CSTR_AS_STRING("return vim._cs_remote(...)");
+  Object o = nlua_exec(s, a, &err);
+  api_free_array(a);
+  if (ERROR_SET(&err)) {
+    mch_errmsg(err.msg);
+    mch_errmsg("\n");
+    os_exit(2);
+  }
+
+  if (o.type == kObjectTypeDictionary) {
+    rvobj.data.dictionary = o.data.dictionary;
+  } else {
+    mch_errmsg("vim._cs_remote returned unexpected value\n");
+    os_exit(2);
+  }
+
+  TriState should_exit = kNone;
+  TriState tabbed = kNone;
+
+  for (size_t i = 0; i < rvobj.data.dictionary.size; i++) {
+    if (strcmp(rvobj.data.dictionary.items[i].key.data, "errmsg") == 0) {
+      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeString) {
+        mch_errmsg("vim._cs_remote returned an unexpected type for 'errmsg'\n");
+        os_exit(2);
+      }
+      mch_errmsg(rvobj.data.dictionary.items[i].value.data.string.data);
+      mch_errmsg("\n");
+      os_exit(2);
+    } else if (strcmp(rvobj.data.dictionary.items[i].key.data, "tabbed") == 0) {
+      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeBoolean) {
+        mch_errmsg("vim._cs_remote returned an unexpected type for 'tabbed'\n");
+        os_exit(2);
+      }
+      tabbed = rvobj.data.dictionary.items[i].value.data.boolean ? kTrue : kFalse;
+    } else if (strcmp(rvobj.data.dictionary.items[i].key.data, "should_exit") == 0) {
+      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeBoolean) {
+        mch_errmsg("vim._cs_remote returned an unexpected type for 'should_exit'\n");
+        os_exit(2);
+      }
+      should_exit = rvobj.data.dictionary.items[i].value.data.boolean ? kTrue : kFalse;
+    }
+  }
+  if (should_exit == kNone || tabbed == kNone) {
+    mch_errmsg("vim._cs_remote didn't return a value for should_exit or tabbed, bailing\n");
+    os_exit(2);
+  }
+  api_free_object(o);
+
+  if (should_exit == kTrue) {
+    os_exit(0);
+  }
+  if (tabbed == kTrue) {
+    params->window_count = argc - remote_args - 1;
+    params->window_layout = WIN_TABS;
+  }
+}
 
 /// Decides whether text (as opposed to commands) will be read from stdin.
 /// @see EDIT_STDIN
@@ -808,7 +947,6 @@ static void command_line_scan(mparm_T *parmp)
   bool had_stdin_file = false;          // found explicit "-" argument
   bool had_minmin = false;              // found "--" argument
   int want_argument;                    // option argument with argument
-  int c;
   long n;
 
   argc--;
@@ -830,7 +968,7 @@ static void command_line_scan(mparm_T *parmp)
       // Optional argument.
     } else if (argv[0][0] == '-' && !had_minmin) {
       want_argument = false;
-      c = argv[0][argv_idx++];
+      char c = argv[0][argv_idx++];
       switch (c) {
       case NUL:    // "nvim -"  read from stdin
         if (exmode_active) {
@@ -853,6 +991,8 @@ static void command_line_scan(mparm_T *parmp)
         // "--version" give version message
         // "--noplugin[s]" skip plugins
         // "--cmd <cmd>" execute cmd before vimrc
+        // "--remote" execute commands remotey on a server
+        // "--server" name of vim server to send remote commands to
         if (STRICMP(argv[0] + argv_idx, "help") == 0) {
           usage();
           os_exit(0);
@@ -891,6 +1031,11 @@ static void command_line_scan(mparm_T *parmp)
           argv_idx += 6;
         } else if (STRNICMP(argv[0] + argv_idx, "literal", 7) == 0) {
           // Do nothing: file args are always literal. #7679
+        } else if (STRNICMP(argv[0] + argv_idx, "remote", 6) == 0) {
+          parmp->remote = parmp->argc - argc;
+        } else if (STRNICMP(argv[0] + argv_idx, "server", 6) == 0) {
+          want_argument = true;
+          argv_idx += 6;
         } else if (STRNICMP(argv[0] + argv_idx, "noplugin", 8) == 0) {
           p_lpl = false;
         } else if (STRNICMP(argv[0] + argv_idx, "cmd", 3) == 0) {
@@ -903,6 +1048,8 @@ static void command_line_scan(mparm_T *parmp)
           parmp->use_vimrc = "NONE";
           parmp->clean = true;
           set_option_value("shadafile", 0L, "NONE", 0);
+        } else if (STRNICMP(argv[0] + argv_idx, "luamod-dev", 9) == 0) {
+          nlua_disable_preload = true;
         } else {
           if (argv[0][argv_idx]) {
             mainerr(err_opt_unknown, argv[0]);
@@ -987,7 +1134,7 @@ static void command_line_scan(mparm_T *parmp)
         }
         parmp->edit_type = EDIT_QF;
         if (argv[0][argv_idx]) {  // "-q{errorfile}"
-          parmp->use_ef = (char_u *)argv[0] + argv_idx;
+          parmp->use_ef = argv[0] + argv_idx;
           argv_idx = -1;
         } else if (argc > 1) {    // "-q {errorfile}"
           want_argument = true;
@@ -1016,7 +1163,7 @@ static void command_line_scan(mparm_T *parmp)
         }
         parmp->edit_type = EDIT_TAG;
         if (argv[0][argv_idx]) {  // "-t{tag}"
-          parmp->tagname = (char_u *)argv[0] + argv_idx;
+          parmp->tagname = argv[0] + argv_idx;
           argv_idx = -1;
         } else {  // "-t {tag}"
           want_argument = true;
@@ -1120,12 +1267,15 @@ static void command_line_scan(mparm_T *parmp)
           } else if (strequal(argv[-1], "--listen")) {
             // "--listen {address}"
             parmp->listen_addr = argv[0];
+          } else if (strequal(argv[-1], "--server")) {
+            // "--server {address}"
+            parmp->server_addr = argv[0];
           }
           // "--startuptime <file>" already handled
           break;
 
         case 'q':    // "-q {errorfile}" QuickFix mode
-          parmp->use_ef = (char_u *)argv[0];
+          parmp->use_ef = argv[0];
           break;
 
         case 'i':    // "-i {shada}" use for shada
@@ -1166,7 +1316,7 @@ scripterror:
         }
 
         case 't':    // "-t {tag}"
-          parmp->tagname = (char_u *)argv[0];
+          parmp->tagname = argv[0];
           break;
         case 'u':    // "-u {vimrc}" vim inits file
           parmp->use_vimrc = argv[0];
@@ -1211,12 +1361,11 @@ scripterror:
 
       // Add the file to the global argument list.
       ga_grow(&global_alist.al_ga, 1);
-      char_u *p = vim_strsave((char_u *)argv[0]);
+      char *p = xstrdup(argv[0]);
 
-      if (parmp->diff_mode && os_isdir(p) && GARGCOUNT > 0
-          && !os_isdir(alist_name(&GARGLIST[0]))) {
-        char_u *r = (char_u *)concat_fnames((char *)p,
-                                            (char *)path_tail(alist_name(&GARGLIST[0])), true);
+      if (parmp->diff_mode && os_isdir((char_u *)p) && GARGCOUNT > 0
+          && !os_isdir((char_u *)alist_name(&GARGLIST[0]))) {
+        char *r = concat_fnames(p, path_tail(alist_name(&GARGLIST[0])), true);
         xfree(p);
         p = r;
       }
@@ -1274,6 +1423,8 @@ static void init_params(mparm_T *paramp, int argc, char **argv)
   paramp->use_debug_break_level = -1;
   paramp->window_count = -1;
   paramp->listen_addr = NULL;
+  paramp->server_addr = NULL;
+  paramp->remote = 0;
 }
 
 /// Initialize global startuptime file if "--startuptime" passed as an argument.
@@ -1320,7 +1471,7 @@ static void init_path(const char *exename)
     path_guess_exepath(exename, exepath, sizeof(exepath));
   }
   set_vim_var_string(VV_PROGPATH, exepath, -1);
-  set_vim_var_string(VV_PROGNAME, (char *)path_tail((char_u *)exename), -1);
+  set_vim_var_string(VV_PROGNAME, path_tail(exename), -1);
 
 #ifdef WIN32
   // Append the process start directory to $PATH, so that ":!foo" finds tools
@@ -1332,7 +1483,7 @@ static void init_path(const char *exename)
 /// Get filename from command line, if any.
 static char_u *get_fname(mparm_T *parmp, char_u *cwd)
 {
-  return alist_name(&GARGLIST[0]);
+  return (char_u *)alist_name(&GARGLIST[0]);
 }
 
 /*
@@ -1349,7 +1500,6 @@ static void set_window_layout(mparm_T *paramp)
   }
 }
 
-
 /*
  * "-q errorfile": Load the error file now.
  * If the error file can't be read, exit before doing anything else.
@@ -1361,7 +1511,7 @@ static void handle_quickfix(mparm_T *paramp)
       set_string_option_direct("ef", -1, paramp->use_ef, OPT_FREE, SID_CARG);
     }
     vim_snprintf((char *)IObuff, IOSIZE, "cfile %s", p_ef);
-    if (qf_init(NULL, p_ef, p_efm, true, IObuff, p_menc) < 0) {
+    if (qf_init(NULL, (char *)p_ef, p_efm, true, (char *)IObuff, (char *)p_menc) < 0) {
       msg_putchar('\n');
       os_exit(3);
     }
@@ -1549,7 +1699,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
 
   // When w_arg_idx is -1 remove the window (see create_windows()).
   if (curwin->w_arg_idx == -1) {
-    win_close(curwin, true);
+    win_close(curwin, true, false);
     advance = false;
   }
 
@@ -1561,7 +1711,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
     // When w_arg_idx is -1 remove the window (see create_windows()).
     if (curwin->w_arg_idx == -1) {
       arg_idx++;
-      win_close(curwin, true);
+      win_close(curwin, true, false);
       advance = false;
       continue;
     }
@@ -1599,8 +1749,8 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
       // at the ATTENTION prompt close the window.
       swap_exists_did_quit = false;
       (void)do_ecmd(0, arg_idx < GARGCOUNT
-          ? alist_name(&GARGLIST[arg_idx]) : NULL,
-                    NULL, NULL, ECMD_LASTL, ECMD_HIDE, curwin);
+                    ? alist_name(&GARGLIST[arg_idx])
+                    : NULL, NULL, NULL, ECMD_LASTL, ECMD_HIDE, curwin);
       if (swap_exists_did_quit) {
         // abort or quit selected
         if (got_int || only_one_window()) {
@@ -1608,7 +1758,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
           did_emsg = FALSE;             // avoid hit-enter prompt
           getout(1);
         }
-        win_close(curwin, true);
+        win_close(curwin, true, false);
         advance = false;
       }
       if (arg_idx == GARGCOUNT - 1) {
@@ -1663,7 +1813,7 @@ static void exe_pre_commands(mparm_T *parmp)
 
   if (cnt > 0) {
     curwin->w_cursor.lnum = 0;     // just in case..
-    sourcing_name = (char_u *)_("pre-vimrc command line");
+    sourcing_name = _("pre-vimrc command line");
     current_sctx.sc_sid = SID_CMDARG;
     for (i = 0; i < cnt; i++) {
       do_cmdline_cmd(cmds[i]);
@@ -1690,7 +1840,7 @@ static void exe_commands(mparm_T *parmp)
   if (parmp->tagname == NULL && curwin->w_cursor.lnum <= 1) {
     curwin->w_cursor.lnum = 0;
   }
-  sourcing_name = (char_u *)"command line";
+  sourcing_name = "command line";
   current_sctx.sc_sid = SID_CARG;
   current_sctx.sc_seq = 0;
   for (i = 0; i < parmp->n_commands; i++) {
@@ -1802,9 +1952,7 @@ static bool do_user_initialization(void)
   if (do_source((char *)user_vimrc, true, DOSO_VIMRC) != FAIL) {
     do_exrc = p_exrc;
     if (do_exrc) {
-      do_exrc = (path_full_compare((char_u *)VIMRC_FILE, user_vimrc,
-                                   false, true)
-                 != kEqualFiles);
+      do_exrc = (path_full_compare(VIMRC_FILE, (char *)user_vimrc, false, true) != kEqualFiles);
     }
     xfree(user_vimrc);
     return do_exrc;
@@ -1830,8 +1978,7 @@ static bool do_user_initialization(void)
       if (do_source(vimrc, true, DOSO_VIMRC) != FAIL) {
         do_exrc = p_exrc;
         if (do_exrc) {
-          do_exrc = (path_full_compare((char_u *)VIMRC_FILE, (char_u *)vimrc,
-                                       false, true) != kEqualFiles);
+          do_exrc = (path_full_compare(VIMRC_FILE, vimrc, false, true) != kEqualFiles);
         }
         xfree(vimrc);
         xfree(config_dirs);
@@ -1876,14 +2023,14 @@ static void source_startup_scripts(const mparm_T *const parmp)
       // do_user_initialization.
 #if defined(UNIX)
       // If vimrc file is not owned by user, set 'secure' mode.
-      if (!file_owned(VIMRC_FILE))
+      if (!os_file_owned(VIMRC_FILE))  // NOLINT(readability/braces)
 #endif
       secure = p_secure;
 
       if (do_source(VIMRC_FILE, true, DOSO_VIMRC) == FAIL) {
 #if defined(UNIX)
         // if ".exrc" is not owned by user set 'secure' mode
-        if (!file_owned(EXRC_FILE)) {
+        if (!os_file_owned(EXRC_FILE)) {
           secure = p_secure;
         } else {
           secure = 0;
@@ -1911,39 +2058,22 @@ static int execute_env(char *env)
 {
   const char *initstr = os_getenv(env);
   if (initstr != NULL) {
-    char_u *save_sourcing_name = sourcing_name;
+    char_u *save_sourcing_name = (char_u *)sourcing_name;
     linenr_T save_sourcing_lnum = sourcing_lnum;
-    sourcing_name = (char_u *)env;
+    sourcing_name = env;
     sourcing_lnum = 0;
     const sctx_T save_current_sctx = current_sctx;
     current_sctx.sc_sid = SID_ENV;
     current_sctx.sc_seq = 0;
     current_sctx.sc_lnum = 0;
     do_cmdline_cmd((char *)initstr);
-    sourcing_name = save_sourcing_name;
+    sourcing_name = (char *)save_sourcing_name;
     sourcing_lnum = save_sourcing_lnum;
     current_sctx = save_current_sctx;
     return OK;
   }
   return FAIL;
 }
-
-#ifdef UNIX
-/// Checks if user owns file.
-/// Use both uv_fs_stat() and uv_fs_lstat() through os_fileinfo() and
-/// os_fileinfo_link() respectively for extra security.
-static bool file_owned(const char *fname)
-{
-  assert(fname != NULL);
-  uid_t uid = getuid();
-  FileInfo file_info;
-  bool file_owned = os_fileinfo(fname, &file_info)
-                    && file_info.stat.st_uid == uid;
-  bool link_owned = os_fileinfo_link(fname, &file_info)
-                    && file_info.stat.st_uid == uid;
-  return file_owned && link_owned;
-}
-#endif
 
 /// Prints the following then exits:
 /// - An error message `errstr`
@@ -1952,8 +2082,9 @@ static bool file_owned(const char *fname)
 /// @param errstr  string containing an error message
 /// @param str     string to append to the primary error message, or NULL
 static void mainerr(const char *errstr, const char *str)
+  FUNC_ATTR_NORETURN
 {
-  char *prgname = (char *)path_tail((char_u *)argv0);
+  char *prgname = path_tail(argv0);
 
   signal_stop();              // kill us with CTRL-C here, if you like
 
@@ -1975,6 +2106,8 @@ static void mainerr(const char *errstr, const char *str)
 /// Prints version information for "nvim -v" or "nvim --version".
 static void version(void)
 {
+  // TODO(bfred): not like this?
+  nlua_init();
   info_message = true;  // use mch_msg(), not mch_errmsg()
   list_version();
   msg_putchar('\n');
@@ -2022,10 +2155,11 @@ static void usage(void)
   mch_msg(_("  --headless            Don't start a user interface\n"));
   mch_msg(_("  --listen <address>    Serve RPC API from this address\n"));
   mch_msg(_("  --noplugin            Don't load plugins\n"));
+  mch_msg(_("  --remote[-subcommand] Execute commands remotely on a server\n"));
+  mch_msg(_("  --server <address>    Specify RPC server to send commands to\n"));
   mch_msg(_("  --startuptime <file>  Write startup timing messages to <file>\n"));
   mch_msg(_("\nSee \":help startup-options\" for all options.\n"));
 }
-
 
 /*
  * Check the result of the ATTENTION dialog:

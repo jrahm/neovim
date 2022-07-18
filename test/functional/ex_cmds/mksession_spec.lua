@@ -1,14 +1,20 @@
 local lfs = require('lfs')
 local helpers = require('test.functional.helpers')(after_each)
+local Screen = require('test.functional.ui.screen')
 
 local clear = helpers.clear
 local command = helpers.command
 local get_pathsep = helpers.get_pathsep
+local iswin = helpers.iswin
 local eq = helpers.eq
+local neq = helpers.neq
 local funcs = helpers.funcs
 local matches = helpers.matches
 local pesc = helpers.pesc
 local rmdir = helpers.rmdir
+local sleep = helpers.sleep
+local meths = helpers.meths
+local expect_exit = helpers.expect_exit
 
 local file_prefix = 'Xtest-functional-ex_cmds-mksession_spec'
 
@@ -30,7 +36,8 @@ describe(':mksession', function()
     -- If the same :terminal is displayed in multiple windows, :mksession
     -- should restore it as such.
 
-    -- Create two windows showing the same :terminal buffer.
+    -- Create three windows: first two from top show same terminal, third -
+    -- another one (created earlier).
     command('terminal')
     command('split')
     command('terminal')
@@ -38,13 +45,13 @@ describe(':mksession', function()
     command('mksession '..session_file)
 
     -- Create a new test instance of Nvim.
-    command('qall!')
+    expect_exit(command, 'qall!')
     clear()
     -- Restore session.
     command('source '..session_file)
 
-    eq({2,2,4},
-      {funcs.winbufnr(1), funcs.winbufnr(2), funcs.winbufnr(3)})
+    eq(funcs.winbufnr(1), funcs.winbufnr(2))
+    neq(funcs.winbufnr(1), funcs.winbufnr(3))
   end)
 
   it('restores tab-local working directories', function()
@@ -91,12 +98,7 @@ describe(':mksession', function()
     command('tabnext 1')
     eq(cwd_dir .. get_pathsep() .. tmpfile_base .. '1', funcs.expand('%:p'))
     command('tabnext 2')
-    -- :mksession stores paths using unix slashes, but Nvim doesn't adjust these
-    -- for absolute paths in all cases yet. Absolute paths are used in the
-    -- session file after :tcd, so we need to expect unix slashes here for now
-    -- eq(cwd_dir .. get_pathsep() .. tmpfile_base .. '2', funcs.expand('%:p'))
-    eq(cwd_dir:gsub([[\]], '/') .. '/' .. tmpfile_base .. '2',
-      funcs.expand('%:p'))
+    eq(cwd_dir .. get_pathsep() .. tmpfile_base .. '2', funcs.expand('%:p'))
   end)
 
   it('restores CWD for :terminal buffers #11288', function()
@@ -105,10 +107,14 @@ describe(':mksession', function()
     local session_path = cwd_dir..'/'..session_file
 
     command('cd '..tab_dir)
-    command('terminal echo $PWD')
+    command('terminal')
     command('cd '..cwd_dir)
     command('mksession '..session_path)
-    command('qall!')
+    command('bdelete!')
+    if iswin() then
+      sleep(100)  -- Make sure all child processes have exited.
+    end
+    expect_exit(command, 'qall!')
 
     -- Create a new test instance of Nvim.
     clear()
@@ -116,6 +122,83 @@ describe(':mksession', function()
 
     local expected_cwd = cwd_dir..'/'..tab_dir
     matches('^term://'..pesc(expected_cwd)..'//%d+:', funcs.expand('%'))
-    command('qall!')
+    command('bdelete!')
+    if iswin() then
+      sleep(100)  -- Make sure all child processes have exited.
+    end
+  end)
+
+  it('restores CWD for :terminal buffer at root directory #16988', function()
+    if iswin() then
+      pending('N/A for Windows')
+      return
+    end
+
+    local screen
+    local cwd_dir = funcs.fnamemodify('.', ':p:~'):gsub([[[\/]*$]], '')
+    local session_path = cwd_dir..'/'..session_file
+
+    screen = Screen.new(50, 6)
+    screen:attach({rgb=false})
+    local expected_screen = [[
+      ^/                                                 |
+                                                        |
+      [Process exited 0]                                |
+                                                        |
+                                                        |
+                                                        |
+    ]]
+
+    command('cd /')
+    command('terminal echo $PWD')
+
+    -- Verify that the terminal's working directory is "/".
+    screen:expect(expected_screen)
+
+    command('cd '..cwd_dir)
+    command('mksession '..session_path)
+    expect_exit(command, 'qall!')
+
+    -- Create a new test instance of Nvim.
+    clear()
+    screen = Screen.new(50, 6)
+    screen:attach({rgb=false})
+    command('silent source '..session_path)
+
+    -- Verify that the terminal's working directory is "/".
+    screen:expect(expected_screen)
+  end)
+
+  it('restores a session when there is a float #18432', function()
+    local tmpfile = file_prefix .. '-tmpfile-float'
+
+    command('edit ' .. tmpfile)
+    local buf = meths.create_buf(false, true)
+    local config = {
+      relative = 'editor',
+      focusable = false,
+      width = 10,
+      height = 3,
+      row = 0,
+      col = 1,
+      style = 'minimal'
+    }
+    meths.open_win(buf, false, config)
+    local cmdheight = meths.get_option('cmdheight')
+    command('mksession ' .. session_file)
+
+    -- Create a new test instance of Nvim.
+    clear()
+
+    command('source ' .. session_file)
+
+    eq(tmpfile, funcs.expand('%'))
+    -- Check that there is only a single window, which indicates the floating
+    -- window was not restored.
+    eq(1, funcs.winnr('$'))
+    -- The command-line height should remain the same as it was.
+    eq(cmdheight, meths.get_option('cmdheight'))
+
+    os.remove(tmpfile)
   end)
 end)

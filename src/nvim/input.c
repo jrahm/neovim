@@ -9,9 +9,9 @@
 
 #include "nvim/func_attr.h"
 #include "nvim/getchar.h"
+#include "nvim/input.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
-#include "nvim/input.h"
 #include "nvim/mouse.h"
 #include "nvim/os/input.h"
 #include "nvim/ui.h"
@@ -39,9 +39,10 @@ int ask_yesno(const char *const str, const bool direct)
   const int save_State = State;
 
   no_wait_return++;
-  State = CONFIRM;  // Mouse behaves like with :confirm.
+  State = MODE_CONFIRM;  // Mouse behaves like with :confirm.
   setmouse();  // Disable mouse in xterm.
   no_mapping++;
+  allow_keys++;  // no mapping here, but recognize keys
 
   int r = ' ';
   while (r != 'y' && r != 'n') {
@@ -62,6 +63,7 @@ int ask_yesno(const char *const str, const bool direct)
   State = save_State;
   setmouse();
   no_mapping--;
+  allow_keys--;
 
   return r;
 }
@@ -105,7 +107,7 @@ int get_keystroke(MultiQueue *events)
     // terminal code to complete.
     n = os_inchar(buf + len, maxlen, len == 0 ? -1L : 100L, 0, events);
     if (n > 0) {
-      // Replace zero and CSI by a special key code.
+      // Replace zero and K_SPECIAL by a special key code.
       n = fix_input_buffer(buf + len, n);
       len += n;
       waited = 0;
@@ -142,7 +144,7 @@ int get_keystroke(MultiQueue *events)
       continue;
     }
     buf[len >= buflen ? buflen - 1 : len] = NUL;
-    n = utf_ptr2char(buf);
+    n = utf_ptr2char((char *)buf);
     break;
   }
   xfree(buf);
@@ -172,6 +174,7 @@ int get_number(int colon, int *mouse_used)
   }
 
   no_mapping++;
+  allow_keys++;  // no mapping here, but recognize keys
   for (;;) {
     ui_cursor_goto(msg_row, msg_col);
     c = safe_vgetc();
@@ -205,6 +208,7 @@ int get_number(int colon, int *mouse_used)
     }
   }
   no_mapping--;
+  allow_keys--;
   return n;
 }
 
@@ -231,7 +235,7 @@ int prompt_for_number(int *mouse_used)
   save_cmdline_row = cmdline_row;
   cmdline_row = 0;
   save_State = State;
-  State = ASKMORE;  // prevents a screen update when using a timer
+  State = MODE_ASKMORE;  // prevents a screen update when using a timer
   // May show different mouse shape.
   setmouse();
 

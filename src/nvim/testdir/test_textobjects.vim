@@ -1,8 +1,7 @@
 " Test for textobjects
 
-if !has('textobjects')
-  finish
-endif
+source check.vim
+CheckFeature textobjects
 
 func CpoM(line, useM, expected)
   new
@@ -42,6 +41,24 @@ func Test_inner_block_with_cpo_M_right_backslash()
   call CpoM('(red (blue\) green)', 1, ['red (blue\) green', 'blue\', 'red (blue\) green'])
 endfunc
 
+func Test_inner_block_single_char()
+  new
+  call setline(1, "(a)")
+
+  set selection=inclusive
+  let @" = ''
+  call assert_nobeep('norm! 0faviby')
+  call assert_equal('a', @")
+
+  set selection=exclusive
+  let @" = ''
+  call assert_nobeep('norm! 0faviby')
+  call assert_equal('a', @")
+
+  set selection&
+  bwipe!
+endfunc
+
 func Test_quote_selection_selection_exclusive()
   new
   call setline(1, "a 'bcde' f")
@@ -50,11 +67,11 @@ func Test_quote_selection_selection_exclusive()
   exe "norm! fdvhi'y"
   call assert_equal('bcde', @")
 
-  let @"='dummy'
+  let @" = 'dummy'
   exe "norm! $gevi'y"
   call assert_equal('bcde', @")
 
-  let @"='dummy'
+  let @" = 'dummy'
   exe "norm! 0fbhvi'y"
   call assert_equal('bcde', @")
 
@@ -188,10 +205,18 @@ func Test_string_html_objects()
     call assert_equal("<div><div\nattr=\"attr\"\n></div></div>", @", e)
 
     set quoteescape&
+
+    " this was going beyond the end of the line
+    %del
+    sil! norm i"\
+    sil! norm i"\
+    sil! norm i"\
+    call assert_equal('"\', getline(1))
+
+    bwipe!
   endfor
 
   set enc=utf-8
-  bwipe!
 endfunc
 
 func Test_empty_html_tag()
@@ -207,6 +232,10 @@ func Test_empty_html_tag()
   call setline(1, '<div></div>')
   normal 0f<vitsaaa
   call assert_equal('aaa', getline(1))
+
+  " selecting a tag block in an non-empty blank line should fail
+  call setline(1, '    ')
+  call assert_beeps('normal $vaty')
 
   bwipe!
 endfunc
@@ -340,6 +369,168 @@ func Test_sentence_with_cursor_on_delimiter()
   call assert_equal(3, getcurpos()[1])
 
   %delete _
+endfunc
+
+" Test for the paragraph (ap) text object
+func Test_paragraph()
+  new
+  call setline(1, ['First line.', 'Second line.', 'Third line.'])
+  call cursor(2, 1)
+  normal vapy
+  call assert_equal("First line.\nSecond line.\nThird line.\n", @")
+
+  call cursor(2, 1)
+  call assert_beeps('normal vapapy')
+
+  call setline(1, ['First line.', 'Second line.', '  ', ''])
+  call cursor(1, 1)
+  normal vapy
+  call assert_equal("First line.\nSecond line.\n  \n\n", @")
+
+  call setline(1, ['', '', '', 'First line.', 'Second line.'])
+  call cursor(2, 1)
+  normal yap
+  call assert_equal("\n\n\nFirst line.\nSecond line.\n", @")
+  call assert_beeps('normal 3yap')
+  exe "normal \<C-C>"
+
+  %d
+  call setline(1, ['  ', '  ', '  '])
+  call cursor(2, 1)
+  normal Vipy
+  call assert_equal("  \n  \n  \n", @")
+  call cursor(2, 1)
+  call assert_beeps("normal Vipip")
+  exe "normal \<C-C>"
+
+  close!
+endfunc
+
+" Tests for text object aw
+func Test_textobj_a_word()
+  new
+  call append(0, ['foobar,eins,foobar', 'foo,zwei,foo    '])
+  " diw
+  norm! 1gg0diw
+  call assert_equal([',eins,foobar', 'foo,zwei,foo    ', ''], getline(1,'$'))
+  " daw
+  norm! 2ggEdaw
+  call assert_equal([',eins,foobar', 'foo,zwei,', ''], getline(1, '$'))
+  " daw the last word in a line
+  call setline(1, ['foo bar', 'foo bar', ''])
+  call cursor(1, 5)
+  normal daw
+  call assert_equal('foo', getline(1))
+  " aw in visual mode
+  call cursor(2, 5)
+  normal! vawx
+  call assert_equal('foo', getline(2))
+  %d
+  call append(0, ["foo\teins\tfoobar", "foo\tzwei\tfoo   "])
+  " diW
+  norm! 2ggwd2iW
+  call assert_equal(['foo	eins	foobar', 'foo	foo   ', ''], getline(1,'$'))
+  " daW
+  norm! 1ggd2aW
+  call assert_equal(['foobar', 'foo	foo   ', ''], getline(1,'$'))
+
+  %d
+  call append(0, ["foo\teins\tfoobar", "foo\tzwei\tfoo   "])
+  " aw in visual line mode switches to characterwise mode
+  norm! 2gg$Vawd
+  call assert_equal(['foo	eins	foobar', 'foo	zwei	foo'], getline(1,'$'))
+  norm! 1gg$Viwd
+  call assert_equal(['foo	eins	', 'foo	zwei	foo'], getline(1,'$'))
+
+  " visually selecting a tab before a word with 'selection' set to 'exclusive'
+  set selection=exclusive
+  normal gg3lvlawy
+  call assert_equal("\teins", @")
+  " visually selecting a tab before a word with 'selection' set to 'inclusive'
+  set selection=inclusive
+  normal gg3lvlawy
+  call assert_equal("\teins\t", @")
+  set selection&
+
+  " selecting a word with no non-space characters in a buffer fails
+  %d
+  call setline(1, '    ')
+  call assert_beeps('normal 3lyaw')
+
+  " visually selecting words backwards with no more words to select
+  call setline(1, 'one two')
+  call assert_beeps('normal 2lvh2aw')
+  exe "normal \<C-C>"
+  call assert_beeps('normal $vh3aw')
+  exe "normal \<C-C>"
+  call setline(1, ['', 'one two'])
+  call assert_beeps('normal 2G2lvh3aw')
+  exe "normal \<C-C>"
+
+  " selecting words forward with no more words to select
+  %d
+  call setline(1, 'one a')
+  call assert_beeps('normal 0y3aw')
+  call setline(1, 'one two ')
+  call assert_beeps('normal 0y3aw')
+  call assert_beeps('normal 03ly2aw')
+
+  " clean up
+  bw!
+endfunc
+
+" Test for is and as text objects
+func Test_textobj_sentence()
+  new
+  call append(0, ['This is a test. With some sentences!', '',
+        \ 'Even with a question? And one more. And no sentence here'])
+  " Test for dis - does not remove trailing whitespace
+  norm! 1gg0dis
+  call assert_equal([' With some sentences!', '',
+        \ 'Even with a question? And one more. And no sentence here', ''],
+        \ getline(1,'$'))
+  " Test for das - removes leading whitespace
+  norm! 3ggf?ldas
+  call assert_equal([' With some sentences!', '',
+        \ 'Even with a question? And no sentence here', ''], getline(1,'$'))
+  " when used in visual mode, is made characterwise
+  norm! 3gg$Visy
+  call assert_equal('v', visualmode())
+  " reset visualmode()
+  norm! 3ggVy
+  norm! 3gg$Vasy
+  call assert_equal('v', visualmode())
+  " basic testing for textobjects a< and at
+  %d
+  call setline(1, ['<div> ','<a href="foobar" class="foo">xyz</a>','    </div>', ' '])
+  " a<
+  norm! 1gg0da<
+  call assert_equal([' ', '<a href="foobar" class="foo">xyz</a>', '    </div>', ' '], getline(1,'$'))
+  norm! 1pj
+  call assert_equal([' <div>', '<a href="foobar" class="foo">xyz</a>', '    </div>', ' '], getline(1,'$'))
+  " at
+  norm! d2at
+  call assert_equal([' '], getline(1,'$'))
+  %d
+  call setline(1, ['<div> ','<a href="foobar" class="foo">xyz</a>','    </div>', ' '])
+  " i<
+  norm! 1gg0di<
+  call assert_equal(['<> ', '<a href="foobar" class="foo">xyz</a>', '    </div>', ' '], getline(1,'$'))
+  norm! 1Pj
+  call assert_equal(['<div> ', '<a href="foobar" class="foo">xyz</a>', '    </div>', ' '], getline(1,'$'))
+  norm! d2it
+  call assert_equal(['<div></div>',' '], getline(1,'$'))
+  " basic testing for a[ and i[ text object
+  %d
+  call setline(1, [' ', '[', 'one [two]', 'thre', ']'])
+  norm! 3gg0di[
+  call assert_equal([' ', '[', ']'], getline(1,'$'))
+  call setline(1, [' ', '[', 'one [two]', 'thre', ']'])
+  norm! 3gg0ftd2a[
+  call assert_equal([' '], getline(1,'$'))
+
+  " clean up
+  bw!
 endfunc
 
 " Test for quote (', " and `) textobjects

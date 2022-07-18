@@ -16,6 +16,7 @@
 
 #include "nvim/api/private/helpers.h"
 #include "nvim/buffer.h"
+#include "nvim/lib/kvec.h"
 #include "nvim/lua/treesitter.h"
 #include "nvim/memline.h"
 #include "tree_sitter/api.h"
@@ -104,6 +105,7 @@ static struct luaL_Reg treecursor_meta[] = {
   { NULL, NULL }
 };
 
+static kvec_t(TSQueryCursor *) cursors = KV_INITIAL_VALUE;
 static PMap(cstr_t) langs = MAP_INIT;
 
 static void build_meta(lua_State *L, const char *tname, const luaL_Reg *meta)
@@ -208,7 +210,7 @@ int tslua_inspect_lang(lua_State *L)
 
   size_t nsymbols = (size_t)ts_language_symbol_count(lang);
 
-  lua_createtable(L, nsymbols-1, 1);  // [retval, symbols]
+  lua_createtable(L, nsymbols - 1, 1);  // [retval, symbols]
   for (size_t i = 0; i < nsymbols; i++) {
     TSSymbolType t = ts_language_symbol_type(lang, i);
     if (t == TSSymbolTypeAuxiliary) {
@@ -298,15 +300,15 @@ static const char *input_cb(void *payload, uint32_t byte_index, TSPoint position
     *bytes_read = 0;
     return "";
   }
-  char_u *line = ml_get_buf(bp, position.row+1, false);
+  char_u *line = ml_get_buf(bp, position.row + 1, false);
   size_t len = STRLEN(line);
   if (position.column > len) {
     *bytes_read = 0;
     return "";
   }
-  size_t tocopy = MIN(len-position.column, BUFSIZE);
+  size_t tocopy = MIN(len - position.column, BUFSIZE);
 
-  memcpy(buf, line+position.column, tocopy);
+  memcpy(buf, line + position.column, tocopy);
   // Translate embedded \n to NUL
   memchrsub(buf, '\n', '\0', tocopy);
   *bytes_read = (uint32_t)tocopy;
@@ -334,7 +336,7 @@ static void push_ranges(lua_State *L, const TSRange *ranges, const unsigned int 
     lua_pushinteger(L, ranges[i].end_point.column);
     lua_rawseti(L, -2, 4);
 
-    lua_rawseti(L, -2, i+1);
+    lua_rawseti(L, -2, i + 1);
   }
 }
 
@@ -389,7 +391,7 @@ static int parser_parse(lua_State *L)
     return luaL_error(L, "An error occurred when parsing.");
   }
 
-  // The new tree will be pushed to the stack, without copy, owwership is now to
+  // The new tree will be pushed to the stack, without copy, ownership is now to
   // the lua GC.
   // Old tree is still owned by the lua GC.
   uint32_t n_ranges = 0;
@@ -527,7 +529,6 @@ static int parser_set_ranges(lua_State *L)
   size_t tbl_len = lua_objlen(L, 2);
   TSRange *ranges = xmalloc(sizeof(TSRange) * tbl_len);
 
-
   // [ parser, ranges ]
   for (size_t index = 0; index < tbl_len; index++) {
     lua_rawgeti(L, 2, index + 1);  // [ parser, ranges, range ]
@@ -555,7 +556,6 @@ static int parser_get_ranges(lua_State *L)
   push_ranges(L, ranges, len);
   return 1;
 }
-
 
 // Tree methods
 
@@ -653,7 +653,6 @@ static bool node_check(lua_State *L, int index, TSNode *res)
   }
   return false;
 }
-
 
 static int node_tostring(lua_State *L)
 {
@@ -1037,7 +1036,7 @@ static void set_match(lua_State *L, TSQueryMatch *match, int nodeidx)
 {
   for (int i = 0; i < match->capture_count; i++) {
     push_node(L, match->captures[i].node, nodeidx);
-    lua_rawseti(L, -2, match->captures[i].index+1);
+    lua_rawseti(L, -2, match->captures[i].index + 1);
   }
 }
 
@@ -1049,14 +1048,13 @@ static int query_next_match(lua_State *L)
   TSQuery *query = query_check(L, lua_upvalueindex(3));
   TSQueryMatch match;
   if (ts_query_cursor_next_match(cursor, &match)) {
-    lua_pushinteger(L, match.pattern_index+1);  // [index]
+    lua_pushinteger(L, match.pattern_index + 1);  // [index]
     lua_createtable(L, ts_query_capture_count(query), 2);  // [index, match]
     set_match(L, &match, lua_upvalueindex(2));
     return 2;
   }
   return 0;
 }
-
 
 static int query_next_capture(lua_State *L)
 {
@@ -1082,7 +1080,7 @@ static int query_next_capture(lua_State *L)
   if (ts_query_cursor_next_capture(cursor, &match, &capture_index)) {
     TSQueryCapture capture = match.captures[capture_index];
 
-    lua_pushinteger(L, capture.index+1);  // [index]
+    lua_pushinteger(L, capture.index + 1);  // [index]
     push_node(L, capture.node, lua_upvalueindex(2));  // [index, node]
 
     // Now check if we need to run the predicates
@@ -1094,7 +1092,7 @@ static int query_next_capture(lua_State *L)
 
       lua_pushvalue(L, lua_upvalueindex(4));  // [index, node, match]
       set_match(L, &match, lua_upvalueindex(2));
-      lua_pushinteger(L, match.pattern_index+1);
+      lua_pushinteger(L, match.pattern_index + 1);
       lua_setfield(L, -2, "pattern");
 
       if (match.capture_count > 1) {
@@ -1116,13 +1114,17 @@ static int node_rawquery(lua_State *L)
     return 0;
   }
   TSQuery *query = query_check(L, 2);
-  // TODO(bfredl): these are expensive allegedly,
-  // use a reuse list later on?
-  TSQueryCursor *cursor = ts_query_cursor_new();
+
+  TSQueryCursor *cursor;
+  if (kv_size(cursors) > 0) {
+    cursor = kv_pop(cursors);
+  } else {
+    cursor = ts_query_cursor_new();
+  }
   // TODO(clason): API introduced after tree-sitter release 0.19.5
   // remove guard when minimum ts version is bumped to 0.19.6+
 #ifdef NVIM_TS_HAS_SET_MATCH_LIMIT
-  ts_query_cursor_set_match_limit(cursor, 32);
+  ts_query_cursor_set_match_limit(cursor, 64);
 #endif
   ts_query_cursor_exec(cursor, query, node);
 
@@ -1161,7 +1163,8 @@ static int node_rawquery(lua_State *L)
 static int querycursor_gc(lua_State *L)
 {
   TSLua_cursor *ud = luaL_checkudata(L, 1, TS_META_QUERYCURSOR);
-  ts_query_cursor_delete(ud->cursor);
+  kv_push(cursors, ud->cursor);
+  ud->cursor = NULL;
   return 0;
 }
 
@@ -1197,7 +1200,6 @@ int tslua_parse_query(lua_State *L)
   lua_setmetatable(L, -2);  // [udata]
   return 1;
 }
-
 
 static const char *query_err_string(TSQueryError err)
 {
@@ -1273,7 +1275,7 @@ static int query_inspect(lua_State *L)
                                                        &strlen);
         lua_pushlstring(L, str, strlen);  // [retval, patterns, pat, pred, item]
       } else if (step[k].type == TSQueryPredicateStepTypeCapture) {
-        lua_pushnumber(L, step[k].value_id+1);  // [..., pat, pred, item]
+        lua_pushnumber(L, step[k].value_id + 1);  // [..., pat, pred, item]
       } else {
         abort();
       }
@@ -1281,7 +1283,7 @@ static int query_inspect(lua_State *L)
     }
     // last predicate should have ended with TypeDone
     lua_pop(L, 1);  // [retval, patters, pat]
-    lua_rawseti(L, -2, i+1);  // [retval, patterns]
+    lua_rawseti(L, -2, i + 1);  // [retval, patterns]
   }
   lua_setfield(L, -2, "patterns");  // [retval]
 
@@ -1291,7 +1293,7 @@ static int query_inspect(lua_State *L)
     uint32_t strlen;
     const char *str = ts_query_capture_name_for_id(query, i, &strlen);
     lua_pushlstring(L, str, strlen);  // [retval, captures, capture]
-    lua_rawseti(L, -2, i+1);
+    lua_rawseti(L, -2, i + 1);
   }
   lua_setfield(L, -2, "captures");  // [retval]
 

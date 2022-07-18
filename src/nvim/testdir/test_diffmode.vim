@@ -540,7 +540,7 @@ func Test_diffopt_hiddenoff()
 
   bwipe!
   bwipe!
-  set nohidden diffopt&
+  set hidden& diffopt&
 endfunc
 
 func Test_diffoff_hidden()
@@ -577,7 +577,7 @@ func Test_diffoff_hidden()
 
   bwipe!
   bwipe!
-  set nohidden diffopt&
+  set hidden& diffopt&
 endfunc
 
 func Test_setting_cursor()
@@ -1017,6 +1017,32 @@ func Test_diff_with_cursorline()
   call delete('Xtest_diff_cursorline')
 endfunc
 
+func Test_diff_with_cursorline_number()
+  CheckScreendump
+
+  let lines =<< trim END
+      hi CursorLine ctermbg=red ctermfg=white
+      hi CursorLineNr ctermbg=white ctermfg=black cterm=underline
+      set cursorline number
+      call setline(1, ["baz", "foo", "foo", "bar"])
+      2
+      vnew
+      call setline(1, ["foo", "foo", "bar"])
+      windo diffthis
+      1wincmd w
+  END
+  call writefile(lines, 'Xtest_diff_cursorline_number')
+  let buf = RunVimInTerminal('-S Xtest_diff_cursorline_number', {})
+
+  call VerifyScreenDump(buf, 'Test_diff_with_cursorline_number_01', {})
+  call term_sendkeys(buf, ":set cursorlineopt=number\r")
+  call VerifyScreenDump(buf, 'Test_diff_with_cursorline_number_02', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('Xtest_diff_cursorline_number')
+endfunc
+
 func Test_diff_with_cursorline_breakindent()
   CheckScreendump
 
@@ -1146,6 +1172,35 @@ func Test_diff_followwrap()
   bwipe!
 endfunc
 
+func Test_diff_maintains_change_mark()
+  func DiffMaintainsChangeMark()
+    enew!
+    call setline(1, ['a', 'b', 'c', 'd'])
+    diffthis
+    new
+    call setline(1, ['a', 'b', 'c', 'e'])
+    " Set '[ and '] marks
+    2,3yank
+    call assert_equal([2, 3], [line("'["), line("']")])
+    " Verify they aren't affected by the implicit diff
+    diffthis
+    call assert_equal([2, 3], [line("'["), line("']")])
+    " Verify they aren't affected by an explicit diff
+    diffupdate
+    call assert_equal([2, 3], [line("'["), line("']")])
+    bwipe!
+    bwipe!
+  endfunc
+
+  set diffopt-=internal
+  call DiffMaintainsChangeMark()
+  set diffopt+=internal
+  call DiffMaintainsChangeMark()
+
+  set diffopt&
+  delfunc DiffMaintainsChangeMark
+endfunc
+
 func Test_diff_rnu()
   CheckScreendump
 
@@ -1239,5 +1294,42 @@ func Test_diff_filler_cursorcolumn()
   call delete('Xtest_diff_cuc')
 endfunc
 
+
+func Test_diff_binary()
+  CheckScreendump
+
+  let content =<< trim END
+    call setline(1, ['a', 'b', "c\n", 'd', 'e', 'f', 'g'])
+    vnew
+    call setline(1, ['A', 'b', 'c', 'd', 'E', 'f', 'g'])
+    windo diffthis
+    wincmd p
+    norm! gg0
+    redraw!
+  END
+  call writefile(content, 'Xtest_diff_bin')
+  let buf = RunVimInTerminal('-S Xtest_diff_bin', {})
+
+  " Test using internal diff
+  call VerifyScreenDump(buf, 'Test_diff_bin_01', {})
+
+  " Test using internal diff and case folding
+  call term_sendkeys(buf, ":set diffopt+=icase\<cr>")
+  call term_sendkeys(buf, "\<C-l>")
+  call VerifyScreenDump(buf, 'Test_diff_bin_02', {})
+  " Test using external diff
+  call term_sendkeys(buf, ":set diffopt=filler\<cr>")
+  call term_sendkeys(buf, "\<C-l>")
+  call VerifyScreenDump(buf, 'Test_diff_bin_03', {})
+  " Test using external diff and case folding
+  call term_sendkeys(buf, ":set diffopt=filler,icase\<cr>")
+  call term_sendkeys(buf, "\<C-l>")
+  call VerifyScreenDump(buf, 'Test_diff_bin_04', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('Xtest_diff_bin')
+  set diffopt&vim
+endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

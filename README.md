@@ -1,4 +1,6 @@
-[![Neovim](https://raw.githubusercontent.com/neovim/neovim.github.io/master/logos/neovim-logo-300x87.png)](https://neovim.io)
+<h1 align="center">
+  <img src="https://raw.githubusercontent.com/neovim/neovim.github.io/master/logos/neovim-logo-300x87.png" alt="Neovim">
+</h1>
 
 [Documentation](https://neovim.io/doc/general/) |
 [Chat](https://app.element.io/#/room/#neovim:matrix.org) |
@@ -61,7 +63,7 @@ After installing the dependencies, run the following command.
 
 To install to a non-default location:
 
-    make CMAKE_INSTALL_PREFIX=/full/path/
+    make CMAKE_BUILD_TYPE=RelWithDebInfo CMAKE_INSTALL_PREFIX=/full/path/
     make install
 
 CMake hints for inspecting the build:
@@ -79,8 +81,10 @@ Project layout
 --------------
 
     ├─ ci/              build automation
-    ├─ cmake/           build scripts
-    ├─ runtime/         user plugins/docs
+    ├─ cmake/           CMake utils
+    ├─ cmake.config/    CMake defines
+    ├─ cmake.deps/      subproject to fetch and build dependencies (optional)
+    ├─ runtime/         plugins and docs
     ├─ src/nvim/        application source code (see src/nvim/README.md)
     │  ├─ api/          API subsystem
     │  ├─ eval/         VimL subsystem
@@ -91,7 +95,6 @@ Project layout
     │  ├─ msgpack_rpc/  RPC subsystem
     │  ├─ os/           low-level platform code
     │  └─ tui/          built-in UI
-    ├─ third-party/     CMake subproject to build dependencies
     └─ test/            tests (see test/README.md)
 
 License
@@ -119,7 +122,7 @@ Apache 2.0 license, except for contributions copied from Vim (identified by the
 [Managed packages]: https://github.com/neovim/neovim/wiki/Installing-Neovim#install-from-package
 [Debian]: https://packages.debian.org/testing/neovim
 [Ubuntu]: http://packages.ubuntu.com/search?keywords=neovim
-[Fedora]: https://apps.fedoraproject.org/packages/neovim
+[Fedora]: https://packages.fedoraproject.org/pkgs/neovim/neovim/
 [Arch Linux]: https://www.archlinux.org/packages/?q=neovim
 [Void Linux]: https://voidlinux.org/packages/?arch=x86_64&q=neovim
 [Gentoo]: https://packages.gentoo.org/packages/app-editors/neovim

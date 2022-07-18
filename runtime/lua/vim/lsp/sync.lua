@@ -79,7 +79,7 @@ local function compute_line_length(line, offset_encoding)
   local length
   local _
   if offset_encoding == 'utf-16' then
-     _, length = str_utfindex(line)
+    _, length = str_utfindex(line)
   elseif offset_encoding == 'utf-32' then
     length, _ = str_utfindex(line)
   else
@@ -100,7 +100,7 @@ local function align_end_position(line, byte, offset_encoding)
   -- If on the first byte, or an empty string: the trivial case
   if byte == 1 or #line == 0 then
     char = byte
-  -- Called in the case of extending an empty line "" -> "a"
+    -- Called in the case of extending an empty line "" -> "a"
   elseif byte == #line + 1 then
     char = compute_line_length(line, offset_encoding) + 1
   else
@@ -130,14 +130,38 @@ end
 ---@param new_lastline integer new_lastline from on_lines, adjusted to 1-index
 ---@param offset_encoding string utf-8|utf-16|utf-32|nil (fallback to utf-8)
 ---@returns table<int, int> line_idx, byte_idx, and char_idx of first change position
-local function compute_start_range(prev_lines, curr_lines, firstline, lastline, new_lastline, offset_encoding)
+local function compute_start_range(
+  prev_lines,
+  curr_lines,
+  firstline,
+  lastline,
+  new_lastline,
+  offset_encoding
+)
+  local char_idx
+  local byte_idx
   -- If firstline == lastline, no existing text is changed. All edit operations
   -- occur on a new line pointed to by lastline. This occurs during insertion of
   -- new lines(O), the new newline is inserted at the line indicated by
   -- new_lastline.
+  if firstline == lastline then
+    local line_idx
+    local line = prev_lines[firstline - 1]
+    if line then
+      line_idx = firstline - 1
+      byte_idx = #line + 1
+      char_idx = compute_line_length(line, offset_encoding) + 1
+    else
+      line_idx = firstline
+      byte_idx = 1
+      char_idx = 1
+    end
+    return { line_idx = line_idx, byte_idx = byte_idx, char_idx = char_idx }
+  end
+
   -- If firstline == new_lastline, the first change occurred on a line that was deleted.
   -- In this case, the first byte change is also at the first byte of firstline
-  if firstline == new_lastline or firstline == lastline then
+  if firstline == new_lastline then
     return { line_idx = firstline, byte_idx = 1, char_idx = 1 }
   end
 
@@ -158,14 +182,12 @@ local function compute_start_range(prev_lines, curr_lines, firstline, lastline, 
   end
 
   -- Convert byte to codepoint if applicable
-  local char_idx
-  local byte_idx
-  if start_byte_idx == 1 or (#prev_line == 0 and start_byte_idx == 1)then
+  if start_byte_idx == 1 or (#prev_line == 0 and start_byte_idx == 1) then
     byte_idx = start_byte_idx
     char_idx = 1
   elseif start_byte_idx == #prev_line + 1 then
     byte_idx = start_byte_idx
-    char_idx = compute_line_length(prev_line, offset_encoding)  + 1
+    char_idx = compute_line_length(prev_line, offset_encoding) + 1
   else
     byte_idx = start_byte_idx + str_utf_start(prev_line, start_byte_idx)
     char_idx = byte_to_utf(prev_line, byte_idx, offset_encoding)
@@ -188,14 +210,30 @@ end
 ---@param new_lastline integer
 ---@param offset_encoding string
 ---@returns (int, int) end_line_idx and end_col_idx of range
-local function compute_end_range(prev_lines, curr_lines, start_range, firstline, lastline, new_lastline, offset_encoding)
+local function compute_end_range(
+  prev_lines,
+  curr_lines,
+  start_range,
+  firstline,
+  lastline,
+  new_lastline,
+  offset_encoding
+)
   -- If firstline == new_lastline, the first change occurred on a line that was deleted.
   -- In this case, the last_byte...
   if firstline == new_lastline then
-      return { line_idx = (lastline - new_lastline + firstline), byte_idx = 1, char_idx = 1 }, { line_idx = firstline, byte_idx = 1, char_idx = 1 }
+    return { line_idx = (lastline - new_lastline + firstline), byte_idx = 1, char_idx = 1 }, {
+      line_idx = firstline,
+      byte_idx = 1,
+      char_idx = 1,
+    }
   end
   if firstline == lastline then
-      return { line_idx = firstline, byte_idx = 1, char_idx = 1 }, { line_idx = new_lastline - lastline + firstline, byte_idx = 1, char_idx = 1 }
+    return { line_idx = firstline, byte_idx = 1, char_idx = 1 }, {
+      line_idx = new_lastline - lastline + firstline,
+      byte_idx = 1,
+      char_idx = 1,
+    }
   end
   -- Compare on last line, at minimum will be the start range
   local start_line_idx = start_range.line_idx
@@ -218,14 +256,18 @@ local function compute_end_range(prev_lines, curr_lines, start_range, firstline,
     local max_length
     if start_line_idx == prev_line_idx then
       -- Search until beginning of difference
-      max_length = min(prev_line_length - start_range.byte_idx, curr_line_length - start_range.byte_idx) + 1
+      max_length = min(
+        prev_line_length - start_range.byte_idx,
+        curr_line_length - start_range.byte_idx
+      ) + 1
     else
       max_length = min(prev_line_length, curr_line_length) + 1
     end
     for idx = 0, max_length do
       byte_offset = idx
       if
-        str_byte(prev_line, prev_line_length - byte_offset) ~= str_byte(curr_line, curr_line_length - byte_offset)
+        str_byte(prev_line, prev_line_length - byte_offset)
+        ~= str_byte(curr_line, curr_line_length - byte_offset)
       then
         break
       end
@@ -239,8 +281,10 @@ local function compute_end_range(prev_lines, curr_lines, start_range, firstline,
   if prev_end_byte_idx == 0 then
     prev_end_byte_idx = 1
   end
-  local prev_byte_idx, prev_char_idx = align_end_position(prev_line, prev_end_byte_idx, offset_encoding)
-  local prev_end_range = { line_idx = prev_line_idx, byte_idx = prev_byte_idx, char_idx = prev_char_idx }
+  local prev_byte_idx, prev_char_idx =
+    align_end_position(prev_line, prev_end_byte_idx, offset_encoding)
+  local prev_end_range =
+    { line_idx = prev_line_idx, byte_idx = prev_byte_idx, char_idx = prev_char_idx }
 
   local curr_end_range
   -- Deletion event, new_range cannot be before start
@@ -252,8 +296,10 @@ local function compute_end_range(prev_lines, curr_lines, start_range, firstline,
     if curr_end_byte_idx == 0 then
       curr_end_byte_idx = 1
     end
-    local curr_byte_idx, curr_char_idx = align_end_position(curr_line, curr_end_byte_idx, offset_encoding)
-    curr_end_range = { line_idx = curr_line_idx, byte_idx = curr_byte_idx, char_idx = curr_char_idx }
+    local curr_byte_idx, curr_char_idx =
+      align_end_position(curr_line, curr_end_byte_idx, offset_encoding)
+    curr_end_range =
+      { line_idx = curr_line_idx, byte_idx = curr_byte_idx, char_idx = curr_char_idx }
   end
 
   return prev_end_range, curr_end_range
@@ -266,14 +312,13 @@ end
 ---@param end_range table new_end_range returned by last_difference
 ---@returns string text extracted from defined region
 local function extract_text(lines, start_range, end_range, line_ending)
-    if not lines[start_range.line_idx] then
-      return ""
-    end
+  if not lines[start_range.line_idx] then
+    return ''
+  end
   -- Trivial case: start and end range are the same line, directly grab changed text
   if start_range.line_idx == end_range.line_idx then
     -- string.sub is inclusive, end_range is not
     return string.sub(lines[start_range.line_idx], start_range.byte_idx, end_range.byte_idx - 1)
-
   else
     -- Handle deletion case
     -- Collect the changed portion of the first changed line
@@ -288,7 +333,7 @@ local function extract_text(lines, start_range, end_range, line_ending)
       -- Collect the changed portion of the last changed line.
       table.insert(result, string.sub(lines[end_range.line_idx], 1, end_range.byte_idx - 1))
     else
-      table.insert(result, "")
+      table.insert(result, '')
     end
 
     -- Add line ending between all lines
@@ -313,7 +358,10 @@ local function compute_range_length(lines, start_range, end_range, offset_encodi
   local start_line = lines[start_range.line_idx]
   local range_length
   if start_line and #start_line > 0 then
-    range_length = compute_line_length(start_line, offset_encoding) - start_range.char_idx + 1 + line_ending_length
+    range_length = compute_line_length(start_line, offset_encoding)
+      - start_range.char_idx
+      + 1
+      + line_ending_length
   else
     -- Length of newline character
     range_length = line_ending_length
@@ -345,7 +393,15 @@ end
 ---@param new_lastline number line to begin search in new_lines for last difference
 ---@param offset_encoding string encoding requested by language server
 ---@returns table TextDocumentContentChangeEvent see https://microsoft.github.io/language-server-protocol/specifications/specification-3-17/#textDocumentContentChangeEvent
-function M.compute_diff(prev_lines, curr_lines, firstline, lastline, new_lastline, offset_encoding, line_ending)
+function M.compute_diff(
+  prev_lines,
+  curr_lines,
+  firstline,
+  lastline,
+  new_lastline,
+  offset_encoding,
+  line_ending
+)
   -- Find the start of changes between the previous and current buffer. Common between both.
   -- Sent to the server as the start of the changed range.
   -- Used to grab the changed text from the latest buffer.
@@ -375,7 +431,8 @@ function M.compute_diff(prev_lines, curr_lines, firstline, lastline, new_lastlin
   local text = extract_text(curr_lines, start_range, curr_end_range, line_ending)
 
   -- Compute the range of the replaced text. Deprecated but still required for certain language servers
-  local range_length = compute_range_length(prev_lines, start_range, prev_end_range, offset_encoding, line_ending)
+  local range_length =
+    compute_range_length(prev_lines, start_range, prev_end_range, offset_encoding, line_ending)
 
   -- convert to 0 based indexing
   local result = {

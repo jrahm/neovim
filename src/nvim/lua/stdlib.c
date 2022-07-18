@@ -25,12 +25,13 @@
 #include "nvim/func_attr.h"
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
+#include "nvim/globals.h"
 #include "nvim/lua/converter.h"
 #include "nvim/lua/executor.h"
+#include "nvim/lua/spell.h"
 #include "nvim/lua/stdlib.h"
 #include "nvim/lua/treesitter.h"
 #include "nvim/lua/xdiff.h"
-#include "nvim/lua/spell.h"
 #include "nvim/macros.h"
 #include "nvim/map.h"
 #include "nvim/memline.h"
@@ -54,12 +55,12 @@ static int regex_match(lua_State *lstate, regprog_T **prog, char_u *str)
   regmatch_T rm;
   rm.regprog = *prog;
   rm.rm_ic = false;
-  bool match = vim_regexec(&rm, str, 0);
+  bool match = vim_regexec(&rm, (char *)str, 0);
   *prog = rm.regprog;
 
   if (match) {
-    lua_pushinteger(lstate, (lua_Integer)(rm.startp[0]-str));
-    lua_pushinteger(lstate, (lua_Integer)(rm.endp[0]-str));
+    lua_pushinteger(lstate, (lua_Integer)(rm.startp[0] - str));
+    lua_pushinteger(lstate, (lua_Integer)(rm.endp[0] - str));
     return 2;
   }
   return 0;
@@ -88,7 +89,7 @@ static int regex_match_line(lua_State *lstate)
   }
 
   long bufnr = luaL_checkinteger(lstate, 2);
-  long rownr = luaL_checkinteger(lstate, 3);
+  linenr_T rownr = (linenr_T)luaL_checkinteger(lstate, 3);
   long start = 0, end = -1;
   if (narg >= 4) {
     start = luaL_checkinteger(lstate, 4);
@@ -109,7 +110,7 @@ static int regex_match_line(lua_State *lstate)
     return luaL_error(lstate, "invalid row");
   }
 
-  char_u *line = ml_get_buf(buf, rownr+1, false);
+  char_u *line = ml_get_buf(buf, rownr + 1, false);
   size_t len = STRLEN(line);
 
   if (start < 0 || (size_t)start > len) {
@@ -125,7 +126,7 @@ static int regex_match_line(lua_State *lstate)
     line[end] = NUL;
   }
 
-  int nret = regex_match(lstate, prog, line+start);
+  int nret = regex_match(lstate, prog, line + start);
 
   if (end >= 0) {
     line[end] = save;
@@ -207,7 +208,7 @@ static int nlua_str_utf_pos(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   size_t idx = 1;
   size_t clen;
   for (size_t i = 0; i < s1_len && s1[i] != NUL; i += clen) {
-    clen = (size_t)utf_ptr2len_len((const char_u *)(s1)+i, (int)(s1_len-i));
+    clen = (size_t)utf_ptr2len_len((const char_u *)(s1) + i, (int)(s1_len - i));
     lua_pushinteger(lstate, (long)i + 1);
     lua_rawseti(lstate, -2, (int)idx);
     idx++;
@@ -251,7 +252,7 @@ static int nlua_str_utf_end(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   if (offset < 0 || offset > (intptr_t)s1_len) {
     return luaL_error(lstate, "index out of range");
   }
-  int tail_offset = mb_tail_off((char_u *)s1, (char_u *)s1 + offset - 1);
+  int tail_offset = mb_tail_off(s1, s1 + offset - 1);
   lua_pushinteger(lstate, tail_offset);
   return 1;
 }
@@ -294,12 +295,14 @@ int nlua_regex(lua_State *lstate)
 
   TRY_WRAP({
     try_start();
-    prog = vim_regcomp((char_u *)text, RE_AUTO | RE_MAGIC | RE_STRICT);
+    prog = vim_regcomp((char *)text, RE_AUTO | RE_MAGIC | RE_STRICT);
     try_end(&err);
   });
 
   if (ERROR_SET(&err)) {
-    return luaL_error(lstate, "couldn't parse regex: %s", err.msg);
+    nlua_push_errstr(lstate, "couldn't parse regex: %s", err.msg);
+    api_clear_error(&err);
+    return lua_error(lstate);
   }
   assert(prog);
 
@@ -337,17 +340,18 @@ static dict_T *nlua_get_var_scope(lua_State *lstate)
       dict = tabpage->tp_vars;
     }
   } else {
-    luaL_error(lstate, "invalid scope", err.msg);
+    luaL_error(lstate, "invalid scope");
     return NULL;
   }
 
   if (ERROR_SET(&err)) {
-    luaL_error(lstate, "FAIL: %s", err.msg);
+    nlua_push_errstr(lstate, "scoped variable: %s", err.msg);
+    api_clear_error(&err);
+    lua_error(lstate);
     return NULL;
   }
   return dict;
 }
-
 
 int nlua_setvar(lua_State *lstate)
 {
@@ -408,6 +412,12 @@ int nlua_getvar(lua_State *lstate)
   const char *name = luaL_checklstring(lstate, 3, &len);
 
   dictitem_T *di = tv_dict_find(dict, name, (ptrdiff_t)len);
+  if (di == NULL && dict == &globvardict) {  // try to autoload script
+    if (!script_autoload(name, len, false) || aborting()) {
+      return 0;  // nil
+    }
+    di = tv_dict_find(dict, name, (ptrdiff_t)len);
+  }
   if (di == NULL) {
     return 0;  // nil
   }
@@ -463,44 +473,52 @@ static int nlua_stricmp(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   return 1;
 }
 
-
-void nlua_state_add_stdlib(lua_State *const lstate)
+void nlua_state_add_stdlib(lua_State *const lstate, bool is_thread)
 {
-  // stricmp
-  lua_pushcfunction(lstate, &nlua_stricmp);
-  lua_setfield(lstate, -2, "stricmp");
-  // str_utfindex
-  lua_pushcfunction(lstate, &nlua_str_utfindex);
-  lua_setfield(lstate, -2, "str_utfindex");
-  // str_byteindex
-  lua_pushcfunction(lstate, &nlua_str_byteindex);
-  lua_setfield(lstate, -2, "str_byteindex");
-  // str_utf_pos
-  lua_pushcfunction(lstate, &nlua_str_utf_pos);
-  lua_setfield(lstate, -2, "str_utf_pos");
-  // str_utf_start
-  lua_pushcfunction(lstate, &nlua_str_utf_start);
-  lua_setfield(lstate, -2, "str_utf_start");
-  // str_utf_end
-  lua_pushcfunction(lstate, &nlua_str_utf_end);
-  lua_setfield(lstate, -2, "str_utf_end");
-  // regex
-  lua_pushcfunction(lstate, &nlua_regex);
-  lua_setfield(lstate, -2, "regex");
-  luaL_newmetatable(lstate, "nvim_regex");
-  luaL_register(lstate, NULL, regex_meta);
+  if (!is_thread) {
+    // TODO(bfredl): some of basic string functions should already be
+    // (or be easy to make) threadsafe
 
-  lua_pushvalue(lstate, -1);  // [meta, meta]
-  lua_setfield(lstate, -2, "__index");  // [meta]
-  lua_pop(lstate, 1);  // don't use metatable now
+    // stricmp
+    lua_pushcfunction(lstate, &nlua_stricmp);
+    lua_setfield(lstate, -2, "stricmp");
+    // str_utfindex
+    lua_pushcfunction(lstate, &nlua_str_utfindex);
+    lua_setfield(lstate, -2, "str_utfindex");
+    // str_byteindex
+    lua_pushcfunction(lstate, &nlua_str_byteindex);
+    lua_setfield(lstate, -2, "str_byteindex");
+    // str_utf_pos
+    lua_pushcfunction(lstate, &nlua_str_utf_pos);
+    lua_setfield(lstate, -2, "str_utf_pos");
+    // str_utf_start
+    lua_pushcfunction(lstate, &nlua_str_utf_start);
+    lua_setfield(lstate, -2, "str_utf_start");
+    // str_utf_end
+    lua_pushcfunction(lstate, &nlua_str_utf_end);
+    lua_setfield(lstate, -2, "str_utf_end");
+    // regex
+    lua_pushcfunction(lstate, &nlua_regex);
+    lua_setfield(lstate, -2, "regex");
+    luaL_newmetatable(lstate, "nvim_regex");
+    luaL_register(lstate, NULL, regex_meta);
 
-  // _getvar
-  lua_pushcfunction(lstate, &nlua_getvar);
-  lua_setfield(lstate, -2, "_getvar");
+    lua_pushvalue(lstate, -1);  // [meta, meta]
+    lua_setfield(lstate, -2, "__index");  // [meta]
+    lua_pop(lstate, 1);  // don't use metatable now
 
-  // _setvar
-  lua_pushcfunction(lstate, &nlua_setvar);
-  lua_setfield(lstate, -2, "_setvar");
+    // _getvar
+    lua_pushcfunction(lstate, &nlua_getvar);
+    lua_setfield(lstate, -2, "_getvar");
+
+    // _setvar
+    lua_pushcfunction(lstate, &nlua_setvar);
+    lua_setfield(lstate, -2, "_setvar");
+
+    // vim.spell
+    luaopen_spell(lstate);
+    lua_setfield(lstate, -2, "spell");
+  }
 
   // vim.mpack
   luaopen_mpack(lstate);
@@ -519,10 +537,18 @@ void nlua_state_add_stdlib(lua_State *const lstate)
   lua_pushcfunction(lstate, &nlua_xdl_diff);
   lua_setfield(lstate, -2, "diff");
 
-  // vim.spell
-  luaopen_spell(lstate);
-  lua_setfield(lstate, -2, "spell");
-
+  // vim.json
   lua_cjson_new(lstate);
   lua_setfield(lstate, -2, "json");
+}
+
+/// like luaL_error, but allow cleanup
+void nlua_push_errstr(lua_State *L, const char *fmt, ...)
+{
+  va_list argp;
+  va_start(argp, fmt);
+  luaL_where(L, 1);
+  lua_pushvfstring(L, fmt, argp);
+  va_end(argp);
+  lua_concat(L, 2);
 }

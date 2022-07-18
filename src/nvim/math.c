@@ -1,7 +1,9 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
+// uncrustify:off
 #include <math.h>
+// uncrustify:on
 #include <stdint.h>
 #include <string.h>
 
@@ -29,10 +31,12 @@ int xfpclassify(double d)
     return m ? FP_NAN : FP_INFINITE;
   }
 }
+
 int xisinf(double d)
 {
   return FP_INFINITE == xfpclassify(d);
 }
+
 int xisnan(double d)
 {
   return FP_NAN == xfpclassify(d);

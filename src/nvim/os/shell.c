@@ -9,10 +9,10 @@
 
 #include "nvim/ascii.h"
 #include "nvim/charset.h"
+#include "nvim/eval.h"
 #include "nvim/event/libuv_process.h"
 #include "nvim/event/loop.h"
 #include "nvim/event/rstream.h"
-#include "nvim/eval.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/fileio.h"
 #include "nvim/lib/kvec.h"
@@ -27,8 +27,8 @@
 #include "nvim/path.h"
 #include "nvim/screen.h"
 #include "nvim/strings.h"
-#include "nvim/types.h"
 #include "nvim/tag.h"
+#include "nvim/types.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
 
@@ -36,7 +36,7 @@
 #define NS_1_SECOND         1000000000U     // 1 second, in nanoseconds
 #define OUT_DATA_THRESHOLD  1024 * 10U      // 10KB, "a few screenfuls" of data.
 
-#define SHELL_SPECIAL (char_u *)"\t \"&'$;<>()\\|"
+#define SHELL_SPECIAL "\t \"&'$;<>()\\|"
 
 typedef struct {
   char *data;
@@ -73,7 +73,7 @@ static bool have_wildcard(int num, char_u **file)
 static bool have_dollars(int num, char_u **file)
 {
   for (int i = 0; i < num; i++) {
-    if (vim_strchr(file[i], '$') != NULL) {
+    if (vim_strchr((char *)file[i], '$') != NULL) {
       return true;
     }
   }
@@ -151,7 +151,7 @@ int os_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***file
   // Don't allow the use of backticks in secure.
   if (secure) {
     for (i = 0; i < num_pat; i++) {
-      if (vim_strchr(pat[i], '`') != NULL
+      if (vim_strchr((char *)pat[i], '`') != NULL
           && (check_secure())) {
         return FAIL;
       }
@@ -188,7 +188,7 @@ int os_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***file
     }
   }
   if (shell_style == STYLE_ECHO
-      && strstr((char *)path_tail(p_sh), "sh") != NULL) {
+      && strstr(path_tail((char *)p_sh), "sh") != NULL) {
     shell_style = STYLE_VIMGLOB;
   }
 
@@ -405,7 +405,7 @@ int os_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***file
       while (*p != ' ' && *p != '\n') {
         p++;
       }
-      p = skipwhite(p);                 // skip to next entry
+      p = (char_u *)skipwhite((char *)p);                 // skip to next entry
     }
     // file names are separated with NL
   } else if (shell_style == STYLE_BT || shell_style == STYLE_VIMGLOB) {
@@ -418,7 +418,7 @@ int os_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***file
       if (*p != NUL) {
         p++;
       }
-      p = skipwhite(p);                 // skip leading white space
+      p = (char_u *)skipwhite((char *)p);                 // skip leading white space
     }
     // file names are separated with NUL
   } else {
@@ -483,7 +483,7 @@ int os_expand_wildcards(int num_pat, char_u **pat, int *num_file, char_u ***file
         *p = NUL;
       } else {
         *p++ = NUL;
-        p = skipwhite(p);                       // skip to next entry
+        p = (char_u *)skipwhite((char *)p);                       // skip to next entry
       }
     } else {          // NUL separates
       while (*p && p < buffer + len) {          // skip entry
@@ -644,7 +644,7 @@ int os_call_shell(char_u *cmd, ShellOpts opts, char_u *extra_args)
   if (opts & (kShellOptHideMess | kShellOptExpand)) {
     forward_output = false;
   } else {
-    State = EXTERNCMD;
+    State = MODE_EXTERNCMD;
 
     if (opts & kShellOptWrite) {
       read_input(&input);
@@ -746,7 +746,7 @@ char_u *get_cmd_output(char_u *cmd, char_u *infile, ShellOpts flags, size_t *ret
   }
 
   // Add the redirection stuff
-  char_u *command = make_filter_cmd(cmd, infile, tempname);
+  char_u *command = (char_u *)make_filter_cmd((char *)cmd, (char *)infile, (char *)tempname);
 
   // Call the shell to execute the command (errors are ignored).
   // Don't check timestamps here.
@@ -854,9 +854,9 @@ static int do_os_system(char **argv, const char *input, size_t len, char **outpu
     // Failed, probably 'shell' is not executable.
     if (!silent) {
       msg_puts(_("\nshell failed to start: "));
-      msg_outtrans((char_u *)os_strerror(status));
+      msg_outtrans((char *)os_strerror(status));
       msg_puts(": ");
-      msg_outtrans((char_u *)prog);
+      msg_outtrans(prog);
       msg_putchar('\n');
     }
     multiqueue_free(events);
@@ -1099,8 +1099,8 @@ static void out_data_append_to_screen(char *output, size_t *count, bool eof)
       //    incomplete UTF-8 sequence that could be composing with the last
       //    complete sequence.
       // This will be corrected when we switch to vterm based implementation
-      int i = *p ? utfc_ptr2len_len((char_u *)p, (int)(end-p)) : 1;
-      if (!eof && i == 1 && utf8len_tab_zero[*(uint8_t *)p] > (end-p)) {
+      int i = *p ? utfc_ptr2len_len((char_u *)p, (int)(end - p)) : 1;
+      if (!eof && i == 1 && utf8len_tab_zero[*(uint8_t *)p] > (end - p)) {
         *count = (size_t)(p - output);
         goto end;
       }
@@ -1158,7 +1158,7 @@ static size_t tokenize(const char_u *const str, char **const argv)
     }
 
     argc++;
-    p = (const char *)skipwhite((char_u *)(p + len));
+    p = (const char *)skipwhite((p + len));
   }
 
   return argc;
@@ -1213,7 +1213,7 @@ static void read_input(DynamicBuffer *buf)
       dynamic_buffer_ensure(buf, buf->len + len);
       buf->data[buf->len++] = NUL;
     } else {
-      char_u *s = vim_strchr(lp + written, NL);
+      char_u *s = (char_u *)vim_strchr((char *)lp + written, NL);
       len = s == NULL ? l : (size_t)(s - (lp + written));
       dynamic_buffer_ensure(buf, buf->len + len);
       memcpy(buf->data + buf->len, lp + written, len);
@@ -1229,7 +1229,7 @@ static void read_input(DynamicBuffer *buf)
         dynamic_buffer_ensure(buf, buf->len + 1);
         buf->data[buf->len++] = NL;
       }
-      ++lnum;
+      lnum++;
       if (lnum > curbuf->b_op_end.lnum) {
         break;
       }
@@ -1253,7 +1253,7 @@ static size_t write_output(char *output, size_t remaining, bool eof)
     if (output[off] == NL) {
       // Insert the line
       output[off] = NUL;
-      ml_append(curwin->w_cursor.lnum++, (char_u *)output, (int)off + 1,
+      ml_append(curwin->w_cursor.lnum++, output, (int)off + 1,
                 false);
       size_t skip = off + 1;
       output += skip;
@@ -1272,7 +1272,7 @@ static size_t write_output(char *output, size_t remaining, bool eof)
   if (eof) {
     if (remaining) {
       // append unfinished line
-      ml_append(curwin->w_cursor.lnum++, (char_u *)output, 0, false);
+      ml_append(curwin->w_cursor.lnum++, output, 0, false);
       // remember that the NL was missing
       curbuf->b_no_eol_lnum = curwin->w_cursor.lnum;
       output += remaining;
@@ -1331,4 +1331,3 @@ static char *shell_xescape_xquote(const char *cmd)
 
   return ncmd;
 }
-

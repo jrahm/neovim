@@ -1,28 +1,10 @@
 local vim = vim
+local api = vim.api
 local validate = vim.validate
-local vfn = vim.fn
-local util = require 'vim.lsp.util'
+local util = require('vim.lsp.util')
+local npcall = vim.F.npcall
 
 local M = {}
-
----@private
---- Returns nil if {status} is false or nil, otherwise returns the rest of the
---- arguments.
-local function ok_or_nil(status, ...)
-  if not status then return end
-  return ...
-end
-
----@private
---- Swallows errors.
----
----@param fn Function to run
----@param ... Function arguments
----@returns Result of `fn(...)` if there are no errors, otherwise nil.
---- Returns nil if errors occur during {fn}, otherwise returns
-local function npcall(fn, ...)
-  return ok_or_nil(pcall(fn, ...))
-end
 
 ---@private
 --- Sends an async request to all active clients attached to the current
@@ -39,10 +21,10 @@ end
 ---
 ---@see |vim.lsp.buf_request()|
 local function request(method, params, handler)
-  validate {
-    method = {method, 's'};
-    handler = {handler, 'f', true};
-  }
+  validate({
+    method = { method, 's' },
+    handler = { handler, 'f', true },
+  })
   return vim.lsp.buf_request(0, method, params, handler)
 end
 
@@ -51,7 +33,7 @@ end
 ---
 ---@returns `true` if server responds.
 function M.server_ready()
-  return not not vim.lsp.buf_notify(0, "window/progress", {})
+  return not not vim.lsp.buf_notify(0, 'window/progress', {})
 end
 
 --- Displays hover information about the symbol under the cursor in a floating
@@ -61,26 +43,45 @@ function M.hover()
   request('textDocument/hover', params)
 end
 
+---@private
+local function request_with_options(name, params, options)
+  local req_handler
+  if options then
+    req_handler = function(err, result, ctx, config)
+      local client = vim.lsp.get_client_by_id(ctx.client_id)
+      local handler = client.handlers[name] or vim.lsp.handlers[name]
+      handler(err, result, ctx, vim.tbl_extend('force', config or {}, options))
+    end
+  end
+  request(name, params, req_handler)
+end
+
 --- Jumps to the declaration of the symbol under the cursor.
 ---@note Many servers do not implement this method. Generally, see |vim.lsp.buf.definition()| instead.
 ---
-function M.declaration()
+---@param options table|nil additional options
+---     - reuse_win: (boolean) Jump to existing window if buffer is already open.
+function M.declaration(options)
   local params = util.make_position_params()
-  request('textDocument/declaration', params)
+  request_with_options('textDocument/declaration', params, options)
 end
 
 --- Jumps to the definition of the symbol under the cursor.
 ---
-function M.definition()
+---@param options table|nil additional options
+---     - reuse_win: (boolean) Jump to existing window if buffer is already open.
+function M.definition(options)
   local params = util.make_position_params()
-  request('textDocument/definition', params)
+  request_with_options('textDocument/definition', params, options)
 end
 
 --- Jumps to the definition of the type of the symbol under the cursor.
 ---
-function M.type_definition()
+---@param options table|nil additional options
+---     - reuse_win: (boolean) Jump to existing window if buffer is already open.
+function M.type_definition(options)
   local params = util.make_position_params()
-  request('textDocument/typeDefinition', params)
+  request_with_options('textDocument/typeDefinition', params, options)
 end
 
 --- Lists all the implementations for the symbol under the cursor in the
@@ -117,9 +118,9 @@ end
 --
 ---@returns The client that the user selected or nil
 local function select_client(method, on_choice)
-  validate {
+  validate({
     on_choice = { on_choice, 'function', false },
-  }
+  })
   local clients = vim.tbl_values(vim.lsp.buf_get_clients())
   clients = vim.tbl_filter(function(client)
     return client.supports_method(method)
@@ -143,16 +144,105 @@ local function select_client(method, on_choice)
   end
 end
 
+--- Formats a buffer using the attached (and optionally filtered) language
+--- server clients.
+---
+--- @param options table|nil Optional table which holds the following optional fields:
+---     - formatting_options (table|nil):
+---         Can be used to specify FormattingOptions. Some unspecified options will be
+---         automatically derived from the current Neovim options.
+---         @see https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting
+---     - timeout_ms (integer|nil, default 1000):
+---         Time in milliseconds to block for formatting requests. No effect if async=true
+---     - bufnr (number|nil):
+---         Restrict formatting to the clients attached to the given buffer, defaults to the current
+---         buffer (0).
+---
+---     - filter (function|nil):
+---         Predicate used to filter clients. Receives a client as argument and must return a
+---         boolean. Clients matching the predicate are included. Example:
+---
+---         <pre>
+---         -- Never request typescript-language-server for formatting
+---         vim.lsp.buf.format {
+---           filter = function(client) return client.name ~= "tsserver" end
+---         }
+---         </pre>
+---
+---     - async boolean|nil
+---         If true the method won't block. Defaults to false.
+---         Editing the buffer while formatting asynchronous can lead to unexpected
+---         changes.
+---
+---     - id (number|nil):
+---         Restrict formatting to the client with ID (client.id) matching this field.
+---     - name (string|nil):
+---         Restrict formatting to the client with name (client.name) matching this field.
+
+function M.format(options)
+  options = options or {}
+  local bufnr = options.bufnr or api.nvim_get_current_buf()
+  local clients = vim.lsp.get_active_clients({
+    id = options.id,
+    bufnr = bufnr,
+    name = options.name,
+  })
+
+  if options.filter then
+    clients = vim.tbl_filter(options.filter, clients)
+  end
+
+  clients = vim.tbl_filter(function(client)
+    return client.supports_method('textDocument/formatting')
+  end, clients)
+
+  if #clients == 0 then
+    vim.notify('[LSP] Format request failed, no matching language servers.')
+  end
+
+  if options.async then
+    local do_format
+    do_format = function(idx, client)
+      if not client then
+        return
+      end
+      local params = util.make_formatting_params(options.formatting_options)
+      client.request('textDocument/formatting', params, function(...)
+        local handler = client.handlers['textDocument/formatting']
+          or vim.lsp.handlers['textDocument/formatting']
+        handler(...)
+        do_format(next(clients, idx))
+      end, bufnr)
+    end
+    do_format(next(clients))
+  else
+    local timeout_ms = options.timeout_ms or 1000
+    for _, client in pairs(clients) do
+      local params = util.make_formatting_params(options.formatting_options)
+      local result, err = client.request_sync('textDocument/formatting', params, timeout_ms, bufnr)
+      if result and result.result then
+        util.apply_text_edits(result.result, bufnr, client.offset_encoding)
+      elseif err then
+        vim.notify(string.format('[LSP][%s] %s', client.name, err), vim.log.levels.WARN)
+      end
+    end
+  end
+end
+
 --- Formats the current buffer.
 ---
----@param options (optional, table) Can be used to specify FormattingOptions.
+---@param options (table|nil) Can be used to specify FormattingOptions.
 --- Some unspecified options will be automatically derived from the current
 --- Neovim options.
 --
 ---@see https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting
 function M.formatting(options)
+  vim.notify_once(
+    'vim.lsp.buf.formatting is deprecated. Use vim.lsp.buf.format { async = true } instead',
+    vim.log.levels.WARN
+  )
   local params = util.make_formatting_params(options)
-  local bufnr = vim.api.nvim_get_current_buf()
+  local bufnr = api.nvim_get_current_buf()
   select_client('textDocument/formatting', function(client)
     if client == nil then
       return
@@ -171,12 +261,16 @@ end
 --- autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
 --- </pre>
 ---
----@param options Table with valid `FormattingOptions` entries
+---@param options table|nil with valid `FormattingOptions` entries
 ---@param timeout_ms (number) Request timeout
 ---@see |vim.lsp.buf.formatting_seq_sync|
 function M.formatting_sync(options, timeout_ms)
+  vim.notify_once(
+    'vim.lsp.buf.formatting_sync is deprecated. Use vim.lsp.buf.format instead',
+    vim.log.levels.WARN
+  )
   local params = util.make_formatting_params(options)
-  local bufnr = vim.api.nvim_get_current_buf()
+  local bufnr = api.nvim_get_current_buf()
   select_client('textDocument/formatting', function(client)
     if client == nil then
       return
@@ -184,7 +278,7 @@ function M.formatting_sync(options, timeout_ms)
 
     local result, err = client.request_sync('textDocument/formatting', params, timeout_ms, bufnr)
     if result and result.result then
-      util.apply_text_edits(result.result, bufnr)
+      util.apply_text_edits(result.result, bufnr, client.offset_encoding)
     elseif err then
       vim.notify('vim.lsp.buf.formatting_sync: ' .. err, vim.log.levels.WARN)
     end
@@ -202,14 +296,18 @@ end
 --- vim.api.nvim_command[[autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_seq_sync()]]
 --- </pre>
 ---
----@param options (optional, table) `FormattingOptions` entries
----@param timeout_ms (optional, number) Request timeout
----@param order (optional, table) List of client names. Formatting is requested from clients
+---@param options (table|nil) `FormattingOptions` entries
+---@param timeout_ms (number|nil) Request timeout
+---@param order (table|nil) List of client names. Formatting is requested from clients
 ---in the following order: first all clients that are not in the `order` list, then
 ---the remaining clients in the order as they occur in the `order` list.
 function M.formatting_seq_sync(options, timeout_ms, order)
-  local clients = vim.tbl_values(vim.lsp.buf_get_clients());
-  local bufnr = vim.api.nvim_get_current_buf()
+  vim.notify_once(
+    'vim.lsp.buf.formatting_seq_sync is deprecated. Use vim.lsp.buf.format instead',
+    vim.log.levels.WARN
+  )
+  local clients = vim.tbl_values(vim.lsp.buf_get_clients())
+  local bufnr = api.nvim_get_current_buf()
 
   -- sort the clients according to `order`
   for _, client_name in pairs(order or {}) do
@@ -224,13 +322,21 @@ function M.formatting_seq_sync(options, timeout_ms, order)
 
   -- loop through the clients and make synchronous formatting requests
   for _, client in pairs(clients) do
-    if client.resolved_capabilities.document_formatting then
+    if vim.tbl_get(client.server_capabilities, 'documentFormattingProvider') then
       local params = util.make_formatting_params(options)
-      local result, err = client.request_sync("textDocument/formatting", params, timeout_ms, vim.api.nvim_get_current_buf())
+      local result, err = client.request_sync(
+        'textDocument/formatting',
+        params,
+        timeout_ms,
+        api.nvim_get_current_buf()
+      )
       if result and result.result then
-        util.apply_text_edits(result.result, bufnr)
+        util.apply_text_edits(result.result, bufnr, client.offset_encoding)
       elseif err then
-        vim.notify(string.format("vim.lsp.buf.formatting_seq_sync: (%s) %s", client.name, err), vim.log.levels.WARN)
+        vim.notify(
+          string.format('vim.lsp.buf.formatting_seq_sync: (%s) %s', client.name, err),
+          vim.log.levels.WARN
+        )
       end
     end
   end
@@ -257,50 +363,133 @@ end
 
 --- Renames all references to the symbol under the cursor.
 ---
----@param new_name (string) If not provided, the user will be prompted for a new
----name using |vim.ui.input()|.
-function M.rename(new_name)
-  local opts = {
-    prompt = "New Name: "
-  }
-
-  ---@private
-  local function on_confirm(input)
-    if not (input and #input > 0) then return end
-    local params = util.make_position_params()
-    params.newName = input
-    request('textDocument/rename', params)
+---@param new_name string|nil If not provided, the user will be prompted for a new
+---                name using |vim.ui.input()|.
+---@param options table|nil additional options
+---     - filter (function|nil):
+---         Predicate used to filter clients. Receives a client as argument and
+---         must return a boolean. Clients matching the predicate are included.
+---     - name (string|nil):
+---         Restrict clients used for rename to ones where client.name matches
+---         this field.
+function M.rename(new_name, options)
+  options = options or {}
+  local bufnr = options.bufnr or api.nvim_get_current_buf()
+  local clients = vim.lsp.get_active_clients({
+    bufnr = bufnr,
+    name = options.name,
+  })
+  if options.filter then
+    clients = vim.tbl_filter(options.filter, clients)
   end
 
+  -- Clients must at least support rename, prepareRename is optional
+  clients = vim.tbl_filter(function(client)
+    return client.supports_method('textDocument/rename')
+  end, clients)
+
+  if #clients == 0 then
+    vim.notify('[LSP] Rename, no matching language servers with rename capability.')
+  end
+
+  local win = api.nvim_get_current_win()
+
+  -- Compute early to account for cursor movements after going async
+  local cword = vim.fn.expand('<cword>')
+
   ---@private
-  local function prepare_rename(err, result)
-    if err == nil and result == nil then
-      vim.notify('nothing to rename', vim.log.levels.INFO)
+  local function get_text_at_range(range, offset_encoding)
+    return api.nvim_buf_get_text(
+      bufnr,
+      range.start.line,
+      util._get_line_byte_from_position(bufnr, range.start, offset_encoding),
+      range['end'].line,
+      util._get_line_byte_from_position(bufnr, range['end'], offset_encoding),
+      {}
+    )[1]
+  end
+
+  local try_use_client
+  try_use_client = function(idx, client)
+    if not client then
       return
     end
-    if result and result.placeholder then
-      opts.default = result.placeholder
-      if not new_name then npcall(vim.ui.input, opts, on_confirm) end
-    elseif result and result.start and result['end'] and
-      result.start.line == result['end'].line then
-      local line = vfn.getline(result.start.line+1)
-      local start_char = result.start.character+1
-      local end_char = result['end'].character
-      opts.default = string.sub(line, start_char, end_char)
-      if not new_name then npcall(vim.ui.input, opts, on_confirm) end
-    else
-      -- fallback to guessing symbol using <cword>
-      --
-      -- this can happen if the language server does not support prepareRename,
-      -- returns an unexpected response, or requests for "default behavior"
-      --
-      -- see https://microsoft.github.io/language-server-protocol/specification#textDocument_prepareRename
-      opts.default = vfn.expand('<cword>')
-      if not new_name then npcall(vim.ui.input, opts, on_confirm) end
+
+    ---@private
+    local function rename(name)
+      local params = util.make_position_params(win, client.offset_encoding)
+      params.newName = name
+      local handler = client.handlers['textDocument/rename']
+        or vim.lsp.handlers['textDocument/rename']
+      client.request('textDocument/rename', params, function(...)
+        handler(...)
+        try_use_client(next(clients, idx))
+      end, bufnr)
     end
-    if new_name then on_confirm(new_name) end
+
+    if client.supports_method('textDocument/prepareRename') then
+      local params = util.make_position_params(win, client.offset_encoding)
+      client.request('textDocument/prepareRename', params, function(err, result)
+        if err or result == nil then
+          if next(clients, idx) then
+            try_use_client(next(clients, idx))
+          else
+            local msg = err and ('Error on prepareRename: ' .. (err.message or ''))
+              or 'Nothing to rename'
+            vim.notify(msg, vim.log.levels.INFO)
+          end
+          return
+        end
+
+        if new_name then
+          rename(new_name)
+          return
+        end
+
+        local prompt_opts = {
+          prompt = 'New Name: ',
+        }
+        -- result: Range | { range: Range, placeholder: string }
+        if result.placeholder then
+          prompt_opts.default = result.placeholder
+        elseif result.start then
+          prompt_opts.default = get_text_at_range(result, client.offset_encoding)
+        elseif result.range then
+          prompt_opts.default = get_text_at_range(result.range, client.offset_encoding)
+        else
+          prompt_opts.default = cword
+        end
+        vim.ui.input(prompt_opts, function(input)
+          if not input or #input == 0 then
+            return
+          end
+          rename(input)
+        end)
+      end, bufnr)
+    else
+      assert(
+        client.supports_method('textDocument/rename'),
+        'Client must support textDocument/rename'
+      )
+      if new_name then
+        rename(new_name)
+        return
+      end
+
+      local prompt_opts = {
+        prompt = 'New Name: ',
+        default = cword,
+      }
+      vim.ui.input(prompt_opts, function(input)
+        if not input or #input == 0 then
+          return
+        end
+        rename(input)
+      end)
+    end
   end
-  request('textDocument/prepareRename', util.make_position_params(), prepare_rename)
+
+  try_use_client(next(clients))
 end
 
 --- Lists all the references to the symbol under the cursor in the quickfix window.
@@ -308,10 +497,10 @@ end
 ---@param context (table) Context for the request
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_references
 function M.references(context)
-  validate { context = { context, 't', true } }
+  validate({ context = { context, 't', true } })
   local params = util.make_position_params()
   params.context = context or {
-    includeDeclaration = true;
+    includeDeclaration = true,
   }
   request('textDocument/references', params)
 end
@@ -325,14 +514,16 @@ end
 
 ---@private
 local function pick_call_hierarchy_item(call_hierarchy_items)
-  if not call_hierarchy_items then return end
+  if not call_hierarchy_items then
+    return
+  end
   if #call_hierarchy_items == 1 then
     return call_hierarchy_items[1]
   end
   local items = {}
   for i, item in pairs(call_hierarchy_items) do
     local entry = item.detail or item.name
-    table.insert(items, string.format("%d. %s", i, entry))
+    table.insert(items, string.format('%d. %s', i, entry))
   end
   local choice = vim.fn.inputlist(items)
   if choice < 1 or choice > #items then
@@ -354,8 +545,8 @@ local function call_hierarchy(method)
     if client then
       client.request(method, { item = call_hierarchy_item }, nil, ctx.bufnr)
     else
-      vim.notify(string.format(
-        'Client with id=%d disappeared during call hierarchy request', ctx.client_id),
+      vim.notify(
+        string.format('Client with id=%d disappeared during call hierarchy request', ctx.client_id),
         vim.log.levels.WARN
       )
     end
@@ -391,20 +582,26 @@ end
 --- Add the folder at path to the workspace folders. If {path} is
 --- not provided, the user will be prompted for a path using |input()|.
 function M.add_workspace_folder(workspace_folder)
-  workspace_folder = workspace_folder or npcall(vfn.input, "Workspace Folder: ", vfn.expand('%:p:h'), 'dir')
-  vim.api.nvim_command("redraw")
-  if not (workspace_folder and #workspace_folder > 0) then return end
-  if vim.fn.isdirectory(workspace_folder) == 0 then
-    print(workspace_folder, " is not a valid directory")
+  workspace_folder = workspace_folder
+    or npcall(vim.fn.input, 'Workspace Folder: ', vim.fn.expand('%:p:h'), 'dir')
+  api.nvim_command('redraw')
+  if not (workspace_folder and #workspace_folder > 0) then
     return
   end
-  local params = util.make_workspace_params({{uri = vim.uri_from_fname(workspace_folder); name = workspace_folder}}, {{}})
+  if vim.fn.isdirectory(workspace_folder) == 0 then
+    print(workspace_folder, ' is not a valid directory')
+    return
+  end
+  local params = util.make_workspace_params(
+    { { uri = vim.uri_from_fname(workspace_folder), name = workspace_folder } },
+    { {} }
+  )
   for _, client in pairs(vim.lsp.buf_get_clients()) do
     local found = false
     for _, folder in pairs(client.workspace_folders or {}) do
       if folder.name == workspace_folder then
         found = true
-        print(workspace_folder, "is already part of this workspace")
+        print(workspace_folder, 'is already part of this workspace')
         break
       end
     end
@@ -422,10 +619,16 @@ end
 --- {path} is not provided, the user will be prompted for
 --- a path using |input()|.
 function M.remove_workspace_folder(workspace_folder)
-  workspace_folder = workspace_folder or npcall(vfn.input, "Workspace Folder: ", vfn.expand('%:p:h'))
-  vim.api.nvim_command("redraw")
-  if not (workspace_folder and #workspace_folder > 0) then return end
-  local params = util.make_workspace_params({{}}, {{uri = vim.uri_from_fname(workspace_folder); name = workspace_folder}})
+  workspace_folder = workspace_folder
+    or npcall(vim.fn.input, 'Workspace Folder: ', vim.fn.expand('%:p:h'))
+  api.nvim_command('redraw')
+  if not (workspace_folder and #workspace_folder > 0) then
+    return
+  end
+  local params = util.make_workspace_params(
+    { {} },
+    { { uri = vim.uri_from_fname(workspace_folder), name = workspace_folder } }
+  )
   for _, client in pairs(vim.lsp.buf_get_clients()) do
     for idx, folder in pairs(client.workspace_folders) do
       if folder.name == workspace_folder then
@@ -435,7 +638,7 @@ function M.remove_workspace_folder(workspace_folder)
       end
     end
   end
-  print(workspace_folder,  "is not currently part of the workspace")
+  print(workspace_folder, 'is not currently part of the workspace')
 end
 
 --- Lists all symbols in the current workspace in the quickfix window.
@@ -446,8 +649,11 @@ end
 ---
 ---@param query (string, optional)
 function M.workspace_symbol(query)
-  query = query or npcall(vfn.input, "Query: ")
-  local params = {query = query}
+  query = query or npcall(vim.fn.input, 'Query: ')
+  if query == nil then
+    return
+  end
+  local params = { query = query }
   request('workspace/symbol', params)
 end
 
@@ -477,7 +683,6 @@ function M.clear_references()
   util.buf_clear_references()
 end
 
-
 ---@private
 --
 --- This is not public because the main extension point is
@@ -488,11 +693,42 @@ end
 --- from multiple clients to have 1 single UI prompt for the user, yet we still
 --- need to be able to link a `CodeAction|Command` to the right client for
 --- `codeAction/resolve`
-local function on_code_action_results(results, ctx)
+local function on_code_action_results(results, ctx, options)
   local action_tuples = {}
+
+  ---@private
+  local function action_filter(a)
+    -- filter by specified action kind
+    if options and options.context and options.context.only then
+      if not a.kind then
+        return false
+      end
+      local found = false
+      for _, o in ipairs(options.context.only) do
+        -- action kinds are hierarchical with . as a separator: when requesting only
+        -- 'quickfix' this filter allows both 'quickfix' and 'quickfix.foo', for example
+        if a.kind:find('^' .. o .. '$') or a.kind:find('^' .. o .. '%.') then
+          found = true
+          break
+        end
+      end
+      if not found then
+        return false
+      end
+    end
+    -- filter by user function
+    if options and options.filter and not options.filter(a) then
+      return false
+    end
+    -- no filter removed this action
+    return true
+  end
+
   for client_id, result in pairs(results) do
     for _, action in pairs(result.result or {}) do
-      table.insert(action_tuples, { client_id, action })
+      if action_filter(action) then
+        table.insert(action_tuples, { client_id, action })
+      end
     end
   end
   if #action_tuples == 0 then
@@ -503,7 +739,7 @@ local function on_code_action_results(results, ctx)
   ---@private
   local function apply_action(action, client)
     if action.edit then
-      util.apply_workspace_edit(action.edit)
+      util.apply_workspace_edit(action.edit, client.offset_encoding)
     end
     if action.command then
       local command = type(action.command) == 'table' and action.command or action
@@ -513,7 +749,14 @@ local function on_code_action_results(results, ctx)
         enriched_ctx.client_id = client.id
         fn(command, enriched_ctx)
       else
-        M.execute_command(command)
+        -- Not using command directly to exclude extra properties,
+        -- see https://github.com/python-lsp/python-lsp-server/issues/146
+        local params = {
+          command = command.command,
+          arguments = command.arguments,
+          workDoneToken = command.workDoneToken,
+        }
+        client.request('workspace/executeCommand', params, nil, ctx.bufnr)
       end
     end
   end
@@ -537,11 +780,11 @@ local function on_code_action_results(results, ctx)
     --
     local client = vim.lsp.get_client_by_id(action_tuple[1])
     local action = action_tuple[2]
-    if not action.edit
-        and client
-        and type(client.resolved_capabilities.code_action) == 'table'
-        and client.resolved_capabilities.code_action.resolveProvider then
-
+    if
+      not action.edit
+      and client
+      and vim.tbl_get(client.server_capabilities, 'codeActionProvider', 'resolveProvider')
+    then
       client.request('codeAction/resolve', action, function(err, resolved_action)
         if err then
           vim.notify(err.code .. ': ' .. err.message, vim.log.levels.ERROR)
@@ -554,6 +797,13 @@ local function on_code_action_results(results, ctx)
     end
   end
 
+  -- If options.apply is given, and there are just one remaining code action,
+  -- apply it directly without querying the user.
+  if options and options.apply and #action_tuples == 1 then
+    on_user_choice(action_tuples[1])
+    return
+  end
+
   vim.ui.select(action_tuples, {
     prompt = 'Code actions:',
     kind = 'codeaction',
@@ -564,39 +814,53 @@ local function on_code_action_results(results, ctx)
   }, on_user_choice)
 end
 
-
 --- Requests code actions from all clients and calls the handler exactly once
 --- with all aggregated results
 ---@private
-local function code_action_request(params)
-  local bufnr = vim.api.nvim_get_current_buf()
+local function code_action_request(params, options)
+  local bufnr = api.nvim_get_current_buf()
   local method = 'textDocument/codeAction'
   vim.lsp.buf_request_all(bufnr, method, params, function(results)
-    on_code_action_results(results, { bufnr = bufnr, method = method, params = params })
+    local ctx = { bufnr = bufnr, method = method, params = params }
+    on_code_action_results(results, ctx, options)
   end)
 end
 
 --- Selects a code action available at the current
 --- cursor position.
 ---
----@param context table|nil `CodeActionContext` of the LSP specification:
----               - diagnostics: (table|nil)
----                             LSP `Diagnostic[]`. Inferred from the current
----                             position if not provided.
----               - only: (string|nil)
----                      LSP `CodeActionKind` used to filter the code actions.
----                      Most language servers support values like `refactor`
----                      or `quickfix`.
+---@param options table|nil Optional table which holds the following optional fields:
+---    - context (table|nil):
+---        Corresponds to `CodeActionContext` of the LSP specification:
+---          - diagnostics (table|nil):
+---                        LSP `Diagnostic[]`. Inferred from the current
+---                        position if not provided.
+---          - only (table|nil):
+---                 List of LSP `CodeActionKind`s used to filter the code actions.
+---                 Most language servers support values like `refactor`
+---                 or `quickfix`.
+---    - filter (function|nil):
+---             Predicate function taking an `CodeAction` and returning a boolean.
+---    - apply (boolean|nil):
+---             When set to `true`, and there is just one remaining action
+---            (after filtering), the action is applied without user query.
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_codeAction
-function M.code_action(context)
-  validate { context = { context, 't', true } }
-  context = context or {}
+function M.code_action(options)
+  validate({ options = { options, 't', true } })
+  options = options or {}
+  -- Detect old API call code_action(context) which should now be
+  -- code_action({ context = context} )
+  if options.diagnostics or options.only then
+    options = { options = options }
+  end
+  local context = options.context or {}
   if not context.diagnostics then
-    context.diagnostics = vim.lsp.diagnostic.get_line_diagnostics()
+    local bufnr = api.nvim_get_current_buf()
+    context.diagnostics = vim.lsp.diagnostic.get_line_diagnostics(bufnr)
   end
   local params = util.make_range_params()
   params.context = context
-  code_action_request(params)
+  code_action_request(params, options)
 end
 
 --- Performs |vim.lsp.buf.code_action()| for a given range.
@@ -606,8 +870,8 @@ end
 ---               - diagnostics: (table|nil)
 ---                             LSP `Diagnostic[]`. Inferred from the current
 ---                             position if not provided.
----               - only: (string|nil)
----                      LSP `CodeActionKind` used to filter the code actions.
+---               - only: (table|nil)
+---                      List of LSP `CodeActionKind`s used to filter the code actions.
 ---                      Most language servers support values like `refactor`
 ---                      or `quickfix`.
 ---@param start_pos ({number, number}, optional) mark-indexed position.
@@ -615,10 +879,11 @@ end
 ---@param end_pos ({number, number}, optional) mark-indexed position.
 ---Defaults to the end of the last visual selection.
 function M.range_code_action(context, start_pos, end_pos)
-  validate { context = { context, 't', true } }
+  validate({ context = { context, 't', true } })
   context = context or {}
   if not context.diagnostics then
-    context.diagnostics = vim.lsp.diagnostic.get_line_diagnostics()
+    local bufnr = api.nvim_get_current_buf()
+    context.diagnostics = vim.lsp.diagnostic.get_line_diagnostics(bufnr)
   end
   local params = util.make_given_range_params(start_pos, end_pos)
   params.context = context
@@ -630,16 +895,16 @@ end
 ---@param command_params table A valid `ExecuteCommandParams` object
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#workspace_executeCommand
 function M.execute_command(command_params)
-  validate {
+  validate({
     command = { command_params.command, 's' },
-    arguments = { command_params.arguments, 't', true }
-  }
+    arguments = { command_params.arguments, 't', true },
+  })
   command_params = {
-    command=command_params.command,
-    arguments=command_params.arguments,
-    workDoneToken=command_params.workDoneToken,
+    command = command_params.command,
+    arguments = command_params.arguments,
+    workDoneToken = command_params.workDoneToken,
   }
-  request('workspace/executeCommand', command_params )
+  request('workspace/executeCommand', command_params)
 end
 
 return M

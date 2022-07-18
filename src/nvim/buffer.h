@@ -2,14 +2,11 @@
 #define NVIM_BUFFER_H
 
 #include "nvim/eval.h"
-#include "nvim/ex_cmds_defs.h"  // for exarg_T
 #include "nvim/func_attr.h"
 #include "nvim/macros.h"
 #include "nvim/memline.h"
 #include "nvim/pos.h"  // for linenr_T
 #include "nvim/screen.h"  // for StlClickRecord
-#include "nvim/vim.h"
-#include "nvim/window.h"
 
 // Values for buflist_getfile()
 enum getf_values {
@@ -23,7 +20,7 @@ enum getf_retvalues {
   GETFILE_ERROR       = 1,    // normal error
   GETFILE_NOT_WRITTEN = 2,    // "not written" error
   GETFILE_SAME_FILE   = 0,    // success, same file
-  GETFILE_OPEN_OTHER  = -1,   // success, opened another file
+  GETFILE_OPEN_OTHER  = (-1),  // success, opened another file
   GETFILE_UNUSED      = 8,
 };
 
@@ -58,9 +55,10 @@ enum dobuf_start_values {
 
 // flags for buf_freeall()
 enum bfa_values {
-  BFA_DEL       = 1,  // buffer is going to be deleted
-  BFA_WIPE      = 2,  // buffer is going to be wiped out
-  BFA_KEEP_UNDO = 4,  // do not free undo information
+  BFA_DEL          = 1,  // buffer is going to be deleted
+  BFA_WIPE         = 2,  // buffer is going to be wiped out
+  BFA_KEEP_UNDO    = 4,  // do not free undo information
+  BFA_IGNORE_ABORT = 8,  // do not abort for aborting()
 };
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS

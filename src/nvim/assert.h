@@ -1,5 +1,3 @@
-// uncrustify:off
-
 #ifndef NVIM_ASSERT_H
 #define NVIM_ASSERT_H
 

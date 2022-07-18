@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "nvim/api/private/dispatch.h"
 #include "nvim/lib/khash.h"
 #include "nvim/map.h"
 #include "nvim/map_defs.h"
@@ -31,14 +30,15 @@
 #define int_eq kh_int_hash_equal
 #define handle_T_hash kh_int_hash_func
 #define handle_T_eq kh_int_hash_equal
-
+#define KittyKey_hash kh_int_hash_func
+#define KittyKey_eq kh_int_hash_equal
 
 #if defined(ARCH_64)
-# define ptr_t_hash(key) uint64_t_hash((uint64_t)key)
-# define ptr_t_eq(a, b) uint64_t_eq((uint64_t)a, (uint64_t)b)
+# define ptr_t_hash(key) uint64_t_hash((uint64_t)(key))
+# define ptr_t_eq(a, b) uint64_t_eq((uint64_t)(a), (uint64_t)(b))
 #elif defined(ARCH_32)
-# define ptr_t_hash(key) uint32_t_hash((uint32_t)key)
-# define ptr_t_eq(a, b) uint32_t_eq((uint32_t)a, (uint32_t)b)
+# define ptr_t_hash(key) uint32_t_hash((uint32_t)(key))
+# define ptr_t_eq(a, b) uint32_t_eq((uint32_t)(a), (uint32_t)(b))
 #endif
 
 #define INITIALIZER(T, U) T##_##U##_initializer
@@ -163,27 +163,26 @@ static inline bool ColorKey_eq(ColorKey ae1, ColorKey ae2)
   return memcmp(&ae1, &ae2, sizeof(ae1)) == 0;
 }
 
-
 MAP_IMPL(ptr_t, int, DEFAULT_INITIALIZER)
 MAP_IMPL(int, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(int, int, DEFAULT_INITIALIZER)
+MAP_IMPL(int, cstr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(cstr_t, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(cstr_t, int, DEFAULT_INITIALIZER)
 MAP_IMPL(ptr_t, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(uint64_t, ptr_t, DEFAULT_INITIALIZER)
 MAP_IMPL(uint64_t, ssize_t, SSIZE_INITIALIZER)
 MAP_IMPL(uint64_t, uint64_t, DEFAULT_INITIALIZER)
-#define EXTMARK_NS_INITIALIZER { { MAP_INIT }, 1 }
-MAP_IMPL(uint64_t, ExtmarkNs, EXTMARK_NS_INITIALIZER)
-#define EXTMARK_ITEM_INITIALIZER { 0, 0, NULL }
-MAP_IMPL(uint64_t, ExtmarkItem, EXTMARK_ITEM_INITIALIZER)
+MAP_IMPL(uint32_t, uint32_t, DEFAULT_INITIALIZER)
 MAP_IMPL(handle_T, ptr_t, DEFAULT_INITIALIZER)
-#define MSGPACK_HANDLER_INITIALIZER { .fn = NULL, .fast = false }
-MAP_IMPL(String, MsgpackRpcRequestHandler, MSGPACK_HANDLER_INITIALIZER)
 MAP_IMPL(HlEntry, int, DEFAULT_INITIALIZER)
 MAP_IMPL(String, handle_T, 0)
+MAP_IMPL(String, int, DEFAULT_INITIALIZER)
+MAP_IMPL(int, String, DEFAULT_INITIALIZER)
 
 MAP_IMPL(ColorKey, ColorItem, COLOR_ITEM_INITIALIZER)
+
+MAP_IMPL(KittyKey, cstr_t, DEFAULT_INITIALIZER)
 
 /// Deletes a key:value pair from a string:pointer map, and frees the
 /// storage of both key and value.

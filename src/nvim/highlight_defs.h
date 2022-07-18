@@ -17,13 +17,17 @@ typedef enum {
   HL_ITALIC          = 0x04,
   HL_UNDERLINE       = 0x08,
   HL_UNDERCURL       = 0x10,
-  HL_STANDOUT        = 0x20,
-  HL_STRIKETHROUGH   = 0x40,
-  HL_NOCOMBINE       = 0x80,
-  HL_BG_INDEXED    = 0x0100,
-  HL_FG_INDEXED    = 0x0200,
-  HL_DEFAULT       = 0x0400,
-  HL_GLOBAL        = 0x0800,
+  HL_UNDERDOUBLE     = 0x20,
+  HL_UNDERDOTTED     = 0x40,
+  HL_UNDERDASHED     = 0x80,
+  HL_STANDOUT      = 0x0100,
+  HL_NOCOMBINE     = 0x0200,
+  HL_STRIKETHROUGH = 0x0400,
+  HL_BG_INDEXED    = 0x0800,
+  HL_FG_INDEXED    = 0x1000,
+  HL_DEFAULT       = 0x2000,
+  HL_GLOBAL        = 0x4000,
+  HL_ANY_UNDERLINE = HL_UNDERLINE | HL_UNDERDOUBLE | HL_UNDERCURL | HL_UNDERDOTTED | HL_UNDERDASHED,
 } HlAttrFlags;
 
 /// Stores a complete highlighting entry, including colors and attributes
@@ -59,6 +63,7 @@ typedef enum {
   HLF_E,          // error messages
   HLF_I,          // incremental search
   HLF_L,          // last search string
+  HLF_LC,         // current search match
   HLF_M,          // "--More--" message
   HLF_CM,         // Mode (e.g., "-- INSERT --")
   HLF_N,          // line number for ":number" and ":#" commands
@@ -70,7 +75,8 @@ typedef enum {
   HLF_R,          // return to continue message and yes/no questions
   HLF_S,          // status lines
   HLF_SNC,        // status lines of not-current windows
-  HLF_C,          // column to separate vertically split windows
+  HLF_C,          // window split separators
+  HLF_VSP,        // VertSplit
   HLF_T,          // Titles for output from ":set all", ":autocmd" etc.
   HLF_V,          // Visual mode
   HLF_VNC,        // Visual mode, autoselecting and not clipboard owner
@@ -105,7 +111,10 @@ typedef enum {
   HLF_NFLOAT,     // Floating window
   HLF_MSG,        // Message area
   HLF_BORDER,     // Floating window border
-  HLF_COUNT,  // MUST be the last one
+  HLF_WBR,        // Window bars
+  HLF_WBRNC,      // Window bars of not-current windows
+  HLF_CU,         // Cursor
+  HLF_COUNT,      // MUST be the last one
 } hlf_T;
 
 EXTERN const char *hlf_names[] INIT(= {
@@ -118,6 +127,7 @@ EXTERN const char *hlf_names[] INIT(= {
   [HLF_E] = "ErrorMsg",
   [HLF_I] = "IncSearch",
   [HLF_L] = "Search",
+  [HLF_LC] = "CurSearch",
   [HLF_M] = "MoreMsg",
   [HLF_CM] = "ModeMsg",
   [HLF_N] = "LineNr",
@@ -129,10 +139,11 @@ EXTERN const char *hlf_names[] INIT(= {
   [HLF_R] = "Question",
   [HLF_S] = "StatusLine",
   [HLF_SNC] = "StatusLineNC",
-  [HLF_C] = "VertSplit",
+  [HLF_C] = "WinSeparator",
   [HLF_T] = "Title",
   [HLF_V] = "Visual",
   [HLF_VNC] = "VisualNC",
+  [HLF_VSP] = "VertSplit",
   [HLF_W] = "WarningMsg",
   [HLF_WM] = "WildMenu",
   [HLF_FL] = "Folded",
@@ -164,8 +175,10 @@ EXTERN const char *hlf_names[] INIT(= {
   [HLF_NFLOAT] = "NormalFloat",
   [HLF_MSG] = "MsgArea",
   [HLF_BORDER] = "FloatBorder",
+  [HLF_WBR] = "WinBar",
+  [HLF_WBRNC] = "WinBarNC",
+  [HLF_CU] = "Cursor",
 });
-
 
 EXTERN int highlight_attr[HLF_COUNT];       // Highl. attr for each context.
 EXTERN int highlight_attr_last[HLF_COUNT];  // copy for detecting changed groups
@@ -209,6 +222,5 @@ typedef struct {
 } ColorItem;
 #define COLOR_ITEM_INITIALIZER { .attr_id = -1, .link_id = -1, \
                                  .version = -1, .is_default = false }
-
 
 #endif  // NVIM_HIGHLIGHT_DEFS_H

@@ -2,10 +2,11 @@ local Screen = require('test.functional.ui.screen')
 local helpers = require('test.functional.helpers')(after_each)
 local thelpers = require('test.functional.terminal.helpers')
 local clear, eq, curbuf = helpers.clear, helpers.eq, helpers.curbuf
-local feed, nvim_dir, feed_command = helpers.feed, helpers.nvim_dir, helpers.feed_command
+local feed, testprg, feed_command = helpers.feed, helpers.testprg, helpers.feed_command
 local iswin = helpers.iswin
 local eval = helpers.eval
 local command = helpers.command
+local matches = helpers.matches
 local poke_eventloop = helpers.poke_eventloop
 local retry = helpers.retry
 local curbufmeths = helpers.curbufmeths
@@ -345,10 +346,11 @@ end)
 
 describe(':terminal prints more lines than the screen height and exits', function()
   it('will push extra lines to scrollback', function()
+    if helpers.pending_win32(pending) then return end
     clear()
     local screen = Screen.new(30, 7)
     screen:attach({rgb=false})
-    feed_command('call termopen(["'..nvim_dir..'/tty-test", "10"]) | startinsert')
+    feed_command(("call termopen(['%s', '10']) | startinsert"):format(testprg('tty-test')))
     poke_eventloop()
     screen:expect([[
       line6                         |
@@ -380,7 +382,7 @@ describe("'scrollback' option", function()
 
   local function set_fake_shell()
     -- shell-test.c is a fake shell that prints its arguments and exits.
-    nvim('set_option', 'shell', nvim_dir..'/shell-test')
+    nvim('set_option', 'shell', testprg('shell-test'))
     nvim('set_option', 'shellcmdflag', 'EXE')
   end
 
@@ -401,7 +403,7 @@ describe("'scrollback' option", function()
     end
 
     curbufmeths.set_option('scrollback', 0)
-    feed_data(nvim_dir..'/shell-test REP 31 line'..(iswin() and '\r' or '\n'))
+    feed_data(('%s REP 31 line%s'):format(testprg('shell-test'), iswin() and '\r' or '\n'))
     screen:expect{any='30: line                      '}
     retry(nil, nil, function() expect_lines(7) end)
   end)
@@ -421,7 +423,7 @@ describe("'scrollback' option", function()
     -- Wait for prompt.
     screen:expect{any='%$'}
 
-    feed_data(nvim_dir.."/shell-test REP 31 line"..(iswin() and '\r' or '\n'))
+    feed_data(('%s REP 31 line%s'):format(testprg('shell-test'), iswin() and '\r' or '\n'))
     screen:expect{any='30: line                      '}
 
     retry(nil, nil, function() expect_lines(33, 2) end)
@@ -434,7 +436,7 @@ describe("'scrollback' option", function()
     -- 'scrollback' option is synchronized with the internal sb_buffer.
     command('sleep 100m')
 
-    feed_data(nvim_dir.."/shell-test REP 41 line"..(iswin() and '\r' or '\n'))
+    feed_data(('%s REP 41 line%s'):format(testprg('shell-test'), iswin() and '\r' or '\n'))
     if iswin() then
       screen:expect{grid=[[
         37: line                      |
@@ -459,8 +461,36 @@ describe("'scrollback' option", function()
     expect_lines(58)
 
     -- Verify off-screen state
-    eq((iswin() and '36: line' or '35: line'), eval("getline(line('w0') - 1)"))
-    eq((iswin() and '27: line' or '26: line'), eval("getline(line('w0') - 10)"))
+    matches((iswin() and '^36: line[ ]*$' or '^35: line[ ]*$'), eval("getline(line('w0') - 1)"))
+    matches((iswin() and '^27: line[ ]*$' or '^26: line[ ]*$'), eval("getline(line('w0') - 10)"))
+  end)
+
+  it('deletes extra lines immediately', function()
+    -- Scrollback is 10 on screen_setup
+    local screen = thelpers.screen_setup(nil, nil, 30)
+    local lines = {}
+    for i = 1, 30 do
+      table.insert(lines, 'line'..tostring(i))
+    end
+    table.insert(lines, '')
+    feed_data(lines)
+      screen:expect([[
+        line26                        |
+        line27                        |
+        line28                        |
+        line29                        |
+        line30                        |
+        {1: }                             |
+        {3:-- TERMINAL --}                |
+      ]])
+    local term_height = 6  -- Actual terminal screen height, not the scrollback
+    -- Initial
+    local scrollback = curbufmeths.get_option('scrollback')
+    eq(scrollback + term_height, eval('line("$")'))
+    -- Reduction
+    scrollback = scrollback - 2
+    curbufmeths.set_option('scrollback', scrollback)
+    eq(scrollback + term_height, eval('line("$")'))
   end)
 
   it('defaults to 10000 in :terminal buffers', function()
@@ -576,6 +606,7 @@ describe("pending scrollback line handling", function()
   end)
 
   it("does not crash after nvim_buf_call #14891", function()
+    if helpers.pending_win32(pending) then return end
     exec_lua [[
       local a = vim.api
       local bufnr = a.nvim_create_buf(false, true)

@@ -30,6 +30,7 @@ describe('decorations providers', function()
       [11] = {foreground = Screen.colors.Red, background = tonumber('0x005028')};
       [12] = {foreground = tonumber('0x990000')};
       [13] = {background = Screen.colors.LightBlue};
+      [14] = {background = Screen.colors.WebGray, foreground = Screen.colors.DarkBlue};
     }
   end)
 
@@ -404,6 +405,50 @@ describe('decorations providers', function()
                                               |
     ]]}
   end)
+
+  it('can create and remove signs when CursorMoved autocommand validates botline #18661', function()
+    exec_lua([[
+      local lines = {}
+      for i = 1, 200 do
+        lines[i] = 'hello' .. tostring(i)
+      end
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+    ]])
+    setup_provider([[
+      local function on_do(kind, winid, bufnr, topline, botline_guess)
+        if kind == 'win' then
+          if topline < 100 and botline_guess > 100 then
+            vim.api.nvim_buf_set_extmark(bufnr, ns1, 99, -1, { sign_text = 'X' })
+          else
+            vim.api.nvim_buf_clear_namespace(bufnr, ns1, 0, -1)
+          end
+        end
+      end
+    ]])
+    command([[autocmd CursorMoved * call line('w$')]])
+    meths.win_set_cursor(0, {100, 0})
+    screen:expect([[
+      {14:  }hello97                               |
+      {14:  }hello98                               |
+      {14:  }hello99                               |
+      X ^hello100                              |
+      {14:  }hello101                              |
+      {14:  }hello102                              |
+      {14:  }hello103                              |
+                                              |
+    ]])
+    meths.win_set_cursor(0, {1, 0})
+    screen:expect([[
+      ^hello1                                  |
+      hello2                                  |
+      hello3                                  |
+      hello4                                  |
+      hello5                                  |
+      hello6                                  |
+      hello7                                  |
+                                              |
+    ]])
+  end)
 end)
 
 describe('extmark decorations', function()
@@ -437,6 +482,8 @@ describe('extmark decorations', function()
       [22] = {foreground = tonumber('0xb20000'), background = tonumber('0xf13f3f')};
       [23] = {foreground = Screen.colors.Magenta1, background = Screen.colors.LightGrey};
       [24] = {bold = true};
+      [25] = {background = Screen.colors.LightRed};
+      [26] = {background=Screen.colors.DarkGrey, foreground=Screen.colors.LightGrey};
     }
 
     ns = meths.create_namespace 'test'
@@ -456,6 +503,31 @@ for _,item in ipairs(items) do
     end
 end]]
 
+  it('empty virtual text at eol should not break colorcolumn #17860', function()
+    insert(example_text)
+    feed('gg')
+    command('set colorcolumn=40')
+    screen:expect([[
+      ^for _,item in ipairs(items) do         {25: }          |
+          local text, hl_id_cell, count = unp{25:a}ck(item)  |
+          if hl_id_cell ~= nil then          {25: }          |
+              hl_id = hl_id_cell             {25: }          |
+          end                                {25: }          |
+          for _ = 1, (count or 1) do         {25: }          |
+              local cell = line[colpos]      {25: }          |
+              cell.text = text               {25: }          |
+              cell.hl_id = hl_id             {25: }          |
+              colpos = colpos+1              {25: }          |
+          end                                {25: }          |
+      end                                    {25: }          |
+      {1:~                                                 }|
+      {1:~                                                 }|
+                                                        |
+    ]])
+    meths.buf_set_extmark(0, ns, 4, 0, { virt_text={{''}}, virt_text_pos='eol'})
+    screen:expect_unchanged()
+  end)
+
   it('can have virtual text of overlay position', function()
     insert(example_text)
     feed 'gg'
@@ -471,7 +543,9 @@ end]]
     -- can "float" beyond end of line
     meths.buf_set_extmark(0, ns, 5, 28, { virt_text={{'loopy', 'ErrorMsg'}}, virt_text_pos='overlay'})
     -- bound check: right edge of window
-    meths.buf_set_extmark(0, ns, 2, 26, { virt_text={{'bork bork bork ' }, {'bork bork bork', 'ErrorMsg'}}, virt_text_pos='overlay'})
+    meths.buf_set_extmark(0, ns, 2, 26, { virt_text={{'bork bork bork '}, {'bork bork bork', 'ErrorMsg'}}, virt_text_pos='overlay'})
+    -- empty virt_text should not change anything
+    meths.buf_set_extmark(0, ns, 6, 16, { virt_text={{''}}, virt_text_pos='overlay'})
 
     screen:expect{grid=[[
       ^for _,item in ipairs(items) do                    |
@@ -621,6 +695,8 @@ end]]
     meths.buf_set_extmark(0, ns, 2, 10, { virt_text={{'Much', 'ErrorMsg'}},   virt_text_win_col=31, hl_mode='blend'})
     meths.buf_set_extmark(0, ns, 3, 15, { virt_text={{'Error', 'ErrorMsg'}}, virt_text_win_col=31, hl_mode='blend'})
     meths.buf_set_extmark(0, ns, 7, 21, { virt_text={{'-', 'NonText'}}, virt_text_win_col=4, hl_mode='blend'})
+    -- empty virt_text should not change anything
+    meths.buf_set_extmark(0, ns, 8, 0, { virt_text={{''}}, virt_text_win_col=14, hl_mode='blend'})
 
     screen:expect{grid=[[
       ^for _,item in ipairs(items) do                    |
@@ -698,7 +774,7 @@ end]]
     ]]}
   end)
 
-  it('can have virtual text which combines foreground and backround groups', function()
+  it('can have virtual text which combines foreground and background groups', function()
     screen:set_default_attr_ids {
       [1] = {bold=true, foreground=Screen.colors.Blue};
       [2] = {background = tonumber('0x123456'), foreground = tonumber('0xbbbbbb')};
@@ -788,6 +864,20 @@ end]]
                                                         |
     ]]}
     helpers.assert_alive()
+  end)
+
+  it('conceal #19007', function()
+    screen:try_resize(50, 5)
+    insert('foo\n')
+    command('let &conceallevel=2')
+    meths.buf_set_extmark(0, ns, 0, 0, {end_col=0, end_row=2, conceal='X'})
+    screen:expect([[
+        {26:X}                                                 |
+        ^                                                  |
+        {1:~                                                 }|
+        {1:~                                                 }|
+                                                          |
+      ]])
   end)
 end)
 
@@ -1111,6 +1201,27 @@ if (h->n_buckets < new_n_buckets) { // expand
     ]]}
   end)
 
+  it('does not cause syntax ml_get error at the end of a buffer #17816', function()
+    command([[syntax region foo keepend start='^foo' end='^$']])
+    command('syntax sync minlines=100')
+    insert('foo')
+    meths.buf_set_extmark(0, ns, 0, 0, {virt_lines = {{{'bar', 'Comment'}}}})
+    screen:expect([[
+      fo^o                                               |
+      {6:bar}                                               |
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+                                                        |
+    ]])
+  end)
+
   it('works with a block scrolling up', function()
     screen:try_resize(30, 7)
     insert("aa\nbb\ncc\ndd\nee\nff\ngg\nhh")
@@ -1357,6 +1468,375 @@ if (h->n_buckets < new_n_buckets) { // expand
           h->vals_buf = new_vals;                       |
         }                                               |
       }                                                 |
+                                                        |
+    ]]}
+  end)
+
+end)
+
+describe('decorations: signs', function()
+  local screen, ns
+  before_each(function()
+    clear()
+    screen = Screen.new(50, 10)
+    screen:attach()
+    screen:set_default_attr_ids {
+      [1] = {foreground = Screen.colors.Blue4, background = Screen.colors.Grey};
+      [2] = {foreground = Screen.colors.Blue1, bold = true};
+      [3] = {background = Screen.colors.Yellow1, foreground = Screen.colors.Blue1};
+    }
+
+    ns = meths.create_namespace 'test'
+    meths.win_set_option(0, 'signcolumn', 'auto:9')
+  end)
+
+  local example_text = [[
+l1
+l2
+l3
+l4
+l5
+]]
+
+  it('can add a single sign (no end row)', function()
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S'})
+
+    screen:expect{grid=[[
+      {1:  }^l1                                              |
+      S l2                                              |
+      {1:  }l3                                              |
+      {1:  }l4                                              |
+      {1:  }l5                                              |
+      {1:  }                                                |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+  end)
+
+  it('can add a single sign (with end row)', function()
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S', end_row=1})
+
+    screen:expect{grid=[[
+      {1:  }^l1                                              |
+      S l2                                              |
+      {1:  }l3                                              |
+      {1:  }l4                                              |
+      {1:  }l5                                              |
+      {1:  }                                                |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+  end)
+
+  it('can add multiple signs (single extmark)', function()
+    pending('TODO(lewis6991): Support ranged signs')
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S', end_row = 2})
+
+    screen:expect{grid=[[
+      {1:  }^l1                                              |
+      S l2                                              |
+      S l3                                              |
+      {1:  }l4                                              |
+      {1:  }l5                                              |
+      {1:  }                                                |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+  end)
+
+  it('can add multiple signs (multiple extmarks)', function()
+    pending('TODO(lewis6991): Support ranged signs')
+    insert(example_text)
+    feed'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S1'})
+    meths.buf_set_extmark(0, ns, 3, -1, {sign_text='S2', end_row = 4})
+
+    screen:expect{grid=[[
+      {1:  }^l1                                              |
+      S1l2                                              |
+      {1:  }l3                                              |
+      S2l4                                              |
+      S2l5                                              |
+      {1:  }                                                |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+  end)
+
+  it('can add multiple signs (multiple extmarks) 2', function()
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S1'})
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S2'})
+
+    screen:expect{grid=[[
+      {1:    }^l1                                            |
+      S2S1l2                                            |
+      {1:    }l3                                            |
+      {1:    }l4                                            |
+      {1:    }l5                                            |
+      {1:    }                                              |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+    -- TODO(lewis6991): Support ranged signs
+    -- meths.buf_set_extmark(1, ns, 1, -1, {sign_text='S3', end_row = 2})
+
+    -- screen:expect{grid=[[
+    --   {1:      }^l1                                          |
+    --   S3S2S1l2                                          |
+    --   S3{1:    }l3                                          |
+    --   {1:      }l4                                          |
+    --   {1:      }l5                                          |
+    --   {1:      }                                            |
+    --   {2:~                                                 }|
+    --   {2:~                                                 }|
+    --   {2:~                                                 }|
+    --                                                     |
+    -- ]]}
+
+  end)
+
+  it('can add multiple signs (multiple extmarks) 3', function()
+    pending('TODO(lewis6991): Support ranged signs')
+
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S1', end_row=2})
+    meths.buf_set_extmark(0, ns, 2, -1, {sign_text='S2', end_row=3})
+
+    screen:expect{grid=[[
+      {1:    }^l1                                            |
+      S1{1:  }l2                                            |
+      S2S1l3                                            |
+      S2{1:  }l4                                            |
+      {1:    }l5                                            |
+      {1:    }                                              |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+  end)
+
+  it('can add multiple signs (multiple extmarks) 4', function()
+    insert(example_text)
+    feed 'gg'
+
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S1', end_row=0})
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S2', end_row=1})
+
+    screen:expect{grid=[[
+      S1^l1                                              |
+      S2l2                                              |
+      {1:  }l3                                              |
+      {1:  }l4                                              |
+      {1:  }l5                                              |
+      {1:  }                                                |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+  end)
+
+  it('works with old signs', function()
+    insert(example_text)
+    feed 'gg'
+
+    helpers.command('sign define Oldsign text=x')
+    helpers.command([[exe 'sign place 42 line=2 name=Oldsign buffer=' . bufnr('')]])
+
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S1'})
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S2'})
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S4'})
+    meths.buf_set_extmark(0, ns, 2, -1, {sign_text='S5'})
+
+    screen:expect{grid=[[
+      S4S1^l1                                            |
+      S2x l2                                            |
+      S5{1:  }l3                                            |
+      {1:    }l4                                            |
+      {1:    }l5                                            |
+      {1:    }                                              |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+  end)
+
+  it('works with old signs (with range)', function()
+    pending('TODO(lewis6991): Support ranged signs')
+    insert(example_text)
+    feed 'gg'
+
+    helpers.command('sign define Oldsign text=x')
+    helpers.command([[exe 'sign place 42 line=2 name=Oldsign buffer=' . bufnr('')]])
+
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S1'})
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='S2'})
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S3', end_row = 4})
+    meths.buf_set_extmark(0, ns, 0, -1, {sign_text='S4'})
+    meths.buf_set_extmark(0, ns, 2, -1, {sign_text='S5'})
+
+    screen:expect{grid=[[
+      S3S4S1^l1                                          |
+      S2S3x l2                                          |
+      S5S3{1:  }l3                                          |
+      S3{1:    }l4                                          |
+      S3{1:    }l5                                          |
+      {1:      }                                            |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+  end)
+
+  it('can add a ranged sign (with start out of view)', function()
+    pending('TODO(lewis6991): Support ranged signs')
+
+    insert(example_text)
+    command 'set signcolumn=yes:2'
+    feed 'gg'
+    feed '2<C-e>'
+
+    meths.buf_set_extmark(0, ns, 1, -1, {sign_text='X', end_row=3})
+
+    screen:expect{grid=[[
+      X {1:  }^l3                                            |
+      X {1:  }l4                                            |
+      {1:    }l5                                            |
+      {1:    }                                              |
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+      {2:~                                                 }|
+                                                        |
+    ]]}
+
+  end)
+
+  it('can add lots of signs', function()
+    screen:try_resize(40, 10)
+    command 'normal 10oa b c d e f g h'
+
+    for i = 1, 10 do
+      meths.buf_set_extmark(0, ns, i,  0, { end_col =  1, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i,  2, { end_col =  3, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i,  4, { end_col =  5, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i,  6, { end_col =  7, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i,  8, { end_col =  9, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i, 10, { end_col = 11, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i, 12, { end_col = 13, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i, 14, { end_col = 15, hl_group='Todo' })
+      meths.buf_set_extmark(0, ns, i, -1, { sign_text='W' })
+      meths.buf_set_extmark(0, ns, i, -1, { sign_text='X' })
+      meths.buf_set_extmark(0, ns, i, -1, { sign_text='Y' })
+      meths.buf_set_extmark(0, ns, i, -1, { sign_text='Z' })
+    end
+
+    screen:expect{grid=[[
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:h}                 |
+      X Y Z W {3:a} {3:b} {3:c} {3:d} {3:e} {3:f} {3:g} {3:^h}                 |
+                                              |
+    ]]}
+  end)
+
+end)
+
+describe('decorations: virt_text', function()
+  local screen
+
+  before_each(function()
+    clear()
+    screen = Screen.new(50, 10)
+    screen:attach()
+    screen:set_default_attr_ids {
+      [1] = {foreground = Screen.colors.Brown};
+      [2] = {foreground = Screen.colors.Fuchsia};
+      [3] = {bold = true, foreground = Screen.colors.Blue1};
+    }
+  end)
+
+  it('avoids regression in #17638', function()
+    exec_lua[[
+      vim.wo.number = true
+      vim.wo.relativenumber = true
+    ]]
+
+    command 'normal 4ohello'
+    command 'normal aVIRTUAL'
+
+    local ns = meths.create_namespace('test')
+
+    meths.buf_set_extmark(0, ns, 2, 0, {
+      virt_text = {{"hello", "String"}},
+      virt_text_win_col = 20,
+    })
+
+    screen:expect{grid=[[
+      {1:  4 }                                              |
+      {1:  3 }hello                                         |
+      {1:  2 }hello               {2:hello}                     |
+      {1:  1 }hello                                         |
+      {1:5   }helloVIRTUA^L                                  |
+      {3:~                                                 }|
+      {3:~                                                 }|
+      {3:~                                                 }|
+      {3:~                                                 }|
+                                                        |
+    ]]}
+
+    -- Trigger a screen update
+    feed('k')
+
+    screen:expect{grid=[[
+      {1:  3 }                                              |
+      {1:  2 }hello                                         |
+      {1:  1 }hello               {2:hello}                     |
+      {1:4   }hell^o                                         |
+      {1:  1 }helloVIRTUAL                                  |
+      {3:~                                                 }|
+      {3:~                                                 }|
+      {3:~                                                 }|
+      {3:~                                                 }|
                                                         |
     ]]}
   end)

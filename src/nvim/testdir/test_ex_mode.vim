@@ -29,12 +29,11 @@ endfunc
 
 " Test editing line in Ex mode (both Q and gQ)
 func Test_ex_mode()
-  throw 'skipped: TODO: '
+  throw 'Skipped: Nvim only supports Vim Ex mode'
   let encoding_save = &encoding
   set sw=2
 
-  " for e in ['utf8', 'latin1']
-  for e in ['utf8']
+  for e in ['utf8', 'latin1']
     exe 'set encoding=' . e
 
     call assert_equal(['bar', 'bar'],             Ex("foo bar\<C-u>bar"), e)
@@ -52,22 +51,131 @@ func Test_ex_mode()
     call assert_equal(['  foo', '    foo'],       Ex("    foo\<C-d>"), e)
     call assert_equal(['foo', '    foo0'],        Ex("    foo0\<C-d>"), e)
     call assert_equal(['foo', '    foo^'],        Ex("    foo^\<C-d>"), e)
+    call assert_equal(['foo', 'foo'],
+          \ Ex("\<BS>\<C-H>\<Del>\<kDel>foo"), e)
+    " default wildchar <Tab> interferes with this test
+    set wildchar=<c-e>
+    call assert_equal(["a\tb", "a\tb"],           Ex("a\t\t\<C-H>b"), e)
+    call assert_equal(["\t  mn", "\tm\<C-T>n"],        Ex("\tm\<C-T>n"), e)
+    set wildchar&
   endfor
 
   set sw&
   let &encoding = encoding_save
 endfunc
 
+" Test substitute confirmation prompt :%s/pat/str/c in Ex mode
+func Test_Ex_substitute()
+  CheckRunVimInTerminal
+  let buf = RunVimInTerminal('', {'rows': 6})
+
+  call term_sendkeys(buf, ":call setline(1, ['foo foo', 'foo foo', 'foo foo'])\<CR>")
+  call term_sendkeys(buf, ":set number\<CR>")
+  call term_sendkeys(buf, "gQ")
+  call WaitForAssert({-> assert_match(':', term_getline(buf, 6))}, 1000)
+
+  call term_sendkeys(buf, "%s/foo/bar/gc\<CR>")
+  call WaitForAssert({-> assert_match('  1 foo foo', term_getline(buf, 5))},
+        \ 1000)
+  call WaitForAssert({-> assert_match('    ^^^', term_getline(buf, 6))}, 1000)
+  call term_sendkeys(buf, "N\<CR>")
+  call term_wait(buf)
+  call WaitForAssert({-> assert_match('    ^^^', term_getline(buf, 6))}, 1000)
+  call term_sendkeys(buf, "n\<CR>")
+  call WaitForAssert({-> assert_match('        ^^^', term_getline(buf, 6))},
+        \ 1000)
+  call term_sendkeys(buf, "y\<CR>")
+
+  call term_sendkeys(buf, "q\<CR>")
+  call WaitForAssert({-> assert_match(':', term_getline(buf, 6))}, 1000)
+
+  " Pressing enter in ex mode should print the current line
+  call term_sendkeys(buf, "\<CR>")
+  call WaitForAssert({-> assert_match('  3 foo foo',
+        \ term_getline(buf, 5))}, 1000)
+
+  call term_sendkeys(buf, ":vi\<CR>")
+  call WaitForAssert({-> assert_match('foo bar', term_getline(buf, 1))}, 1000)
+
+  call term_sendkeys(buf, ":q!\n")
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test for displaying lines from an empty buffer in Ex mode
+func Test_Ex_emptybuf()
+  new
+  call assert_fails('call feedkeys("Q\<CR>", "xt")', 'E749:')
+  call setline(1, "abc")
+  call assert_fails('call feedkeys("Q\<CR>", "xt")', 'E501:')
+  call assert_fails('call feedkeys("Q%d\<CR>", "xt")', 'E749:')
+  close!
+endfunc
+
+" Test for the :open command
+func Test_open_command()
+  throw 'Skipped: Nvim does not have :open'
+  new
+  call setline(1, ['foo foo', 'foo bar', 'foo baz'])
+  call feedkeys("Qopen\<CR>j", 'xt')
+  call assert_equal('foo bar', getline('.'))
+  call feedkeys("Qopen /bar/\<CR>", 'xt')
+  call assert_equal(5, col('.'))
+  call assert_fails('call feedkeys("Qopen /baz/\<CR>", "xt")', 'E479:')
+  close!
+endfunc
+
+" Test for :g/pat/visual to run vi commands in Ex mode
+" This used to hang Vim before 8.2.0274.
+func Test_Ex_global()
+  new
+  call setline(1, ['', 'foo', 'bar', 'foo', 'bar', 'foo'])
+  call feedkeys("Q\<bs>g/bar/visual\<CR>$rxQ$ryQvisual\<CR>j", "xt")
+  call assert_equal('bax', getline(3))
+  call assert_equal('bay', getline(5))
+  bwipe!
+endfunc
+
+" In Ex-mode, a backslash escapes a newline
+func Test_Ex_escape_enter()
+  call feedkeys("gQlet l = \"a\\\<kEnter>b\"\<cr>vi\<cr>", 'xt')
+  call assert_equal("a\rb", l)
+endfunc
+
+" Test for :append! command in Ex mode
+func Test_Ex_append()
+  throw 'Skipped: Nvim only supports Vim Ex mode'
+  new
+  call setline(1, "\t   abc")
+  call feedkeys("Qappend!\npqr\nxyz\n.\nvisual\n", 'xt')
+  call assert_equal(["\t   abc", "\t   pqr", "\t   xyz"], getline(1, '$'))
+  close!
+endfunc
+
+" In Ex-mode, backslashes at the end of a command should be halved.
+func Test_Ex_echo_backslash()
+  throw 'Skipped: Nvim only supports Vim Ex mode'
+  " This test works only when the language is English
+  if v:lang != "C" && v:lang !~ '^[Ee]n'
+    return
+  endif
+  let bsl = '\\\\'
+  let bsl2 = '\\\'
+  call assert_fails('call feedkeys("Qecho " .. bsl .. "\nvisual\n", "xt")',
+        \ "E15: Invalid expression: \\\\")
+  call assert_fails('call feedkeys("Qecho " .. bsl2 .. "\nm\nvisual\n", "xt")',
+        \ "E15: Invalid expression: \\\nm")
+endfunc
+
 func Test_ex_mode_errors()
   " Not allowed to enter ex mode when text is locked
   au InsertCharPre <buffer> normal! gQ<CR>
-  let caught_e523 = 0
+  let caught_e565 = 0
   try
     call feedkeys("ix\<esc>", 'xt')
-  catch /^Vim\%((\a\+)\)\=:E523/ " catch E523
-    let caught_e523 = 1
+  catch /^Vim\%((\a\+)\)\=:E565/ " catch E565
+    let caught_e565 = 1
   endtry
-  call assert_equal(1, caught_e523)
+  call assert_equal(1, caught_e565)
   au! InsertCharPre
 
   new
@@ -83,6 +191,9 @@ func Test_ex_mode_errors()
 endfunc
 
 func Test_ex_mode_count_overflow()
+  " The multiplication causes an integer overflow
+  CheckNotAsan
+
   " this used to cause a crash
   let lines =<< trim END
     call feedkeys("\<Esc>gQ\<CR>")
@@ -97,5 +208,15 @@ func Test_ex_mode_count_overflow()
   call delete('Xdidexmode')
   call delete('Xexmodescript')
 endfunc
+
+func Test_ex_mode_large_indent()
+  new
+  set ts=500 ai
+  call setline(1, "\t")
+  exe "normal gQi\<CR>."
+  set ts=8 noai
+  bwipe!
+endfunc
+
 
 " vim: shiftwidth=2 sts=2 expandtab

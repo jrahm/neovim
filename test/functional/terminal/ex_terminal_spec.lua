@@ -2,7 +2,7 @@ local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
 local assert_alive = helpers.assert_alive
 local clear, poke_eventloop, nvim = helpers.clear, helpers.poke_eventloop, helpers.nvim
-local nvim_dir, source, eq = helpers.nvim_dir, helpers.source, helpers.eq
+local testprg, source, eq = helpers.testprg, helpers.source, helpers.eq
 local feed = helpers.feed
 local feed_command, eval = helpers.feed_command, helpers.eval
 local funcs = helpers.funcs
@@ -28,7 +28,7 @@ describe(':terminal', function()
       echomsg "msg3"
     ]])
     -- Invoke a command that emits frequent terminal activity.
-    feed([[:terminal "]]..nvim_dir..[[/shell-test" REP 9999 !terminal_output!<cr>]])
+    feed([[:terminal "]]..testprg('shell-test')..[[" REP 9999 !terminal_output!<cr>]])
     feed([[<C-\><C-N>]])
     poke_eventloop()
     -- Wait for some terminal activity.
@@ -131,7 +131,7 @@ describe(':terminal (with fake shell)', function()
     screen = Screen.new(50, 4)
     screen:attach({rgb=false})
     -- shell-test.c is a fake shell that prints its arguments and exits.
-    nvim('set_option', 'shell', nvim_dir..'/shell-test')
+    nvim('set_option', 'shell', testprg('shell-test'))
     nvim('set_option', 'shellcmdflag', 'EXE')
   end)
 
@@ -142,6 +142,7 @@ describe(':terminal (with fake shell)', function()
   end
 
   it('with no argument, acts like termopen()', function()
+    if helpers.pending_win32(pending) then return end
     terminal_with_fake_shell()
     retry(nil, 4 * screen.timeout, function()
     screen:expect([[
@@ -165,7 +166,8 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it("with no argument, but 'shell' has arguments, acts like termopen()", function()
-    nvim('set_option', 'shell', nvim_dir..'/shell-test -t jeff')
+    if helpers.pending_win32(pending) then return end
+    nvim('set_option', 'shell', testprg('shell-test')..' -t jeff')
     terminal_with_fake_shell()
     screen:expect([[
       ^jeff $                                            |
@@ -176,6 +178,7 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it('executes a given command through the shell', function()
+    if helpers.pending_win32(pending) then return end
     command('set shellxquote=')   -- win: avoid extra quotes
     terminal_with_fake_shell('echo hi')
     screen:expect([[
@@ -187,7 +190,8 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it("executes a given command through the shell, when 'shell' has arguments", function()
-    nvim('set_option', 'shell', nvim_dir..'/shell-test -t jeff')
+    if helpers.pending_win32(pending) then return end
+    nvim('set_option', 'shell', testprg('shell-test')..' -t jeff')
     command('set shellxquote=')   -- win: avoid extra quotes
     terminal_with_fake_shell('echo hi')
     screen:expect([[
@@ -199,6 +203,7 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it('allows quotes and slashes', function()
+    if helpers.pending_win32(pending) then return end
     command('set shellxquote=')   -- win: avoid extra quotes
     terminal_with_fake_shell([[echo 'hello' \ "world"]])
     screen:expect([[
@@ -235,6 +240,7 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it('works with :find', function()
+    if helpers.pending_win32(pending) then return end
     terminal_with_fake_shell()
     screen:expect([[
       ^ready $                                           |
@@ -253,6 +259,7 @@ describe(':terminal (with fake shell)', function()
   end)
 
   it('works with gf', function()
+    if helpers.pending_win32(pending) then return end
     command('set shellxquote=')   -- win: avoid extra quotes
     terminal_with_fake_shell([[echo "scripts/shadacat.py"]])
     retry(nil, 4 * screen.timeout, function()

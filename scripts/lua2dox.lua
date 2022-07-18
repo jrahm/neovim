@@ -295,7 +295,7 @@ function TStream_Write.writelnTail(this,Line)
   table.insert(this.tailLine,Line)
 end
 
---! \brief outout tail lines
+--! \brief output tail lines
 function TStream_Write.write_tailLines(this)
   for _,line in ipairs(this.tailLine) do
     TCore_IO_writeln(line)
@@ -403,6 +403,29 @@ function TLua2DoX_filter.readfile(this,AppStamp,Filename)
         if string.sub(line, 3, 3) == '@' or string.sub(line, 1, 4) == '---@' then -- it's a magic comment
           state = 'in_magic_comment'
           local magic = string.sub(line, 4 + offset)
+
+          local magic_split = string_split(magic, ' ')
+
+          local type_index = 2
+          if magic_split[1] == 'param' then
+            type_index = type_index + 1
+          end
+
+          if magic_split[type_index] == 'number' or
+              magic_split[type_index] == 'number|nil' or
+              magic_split[type_index] == 'string' or
+              magic_split[type_index] == 'string|nil' or
+              magic_split[type_index] == 'table' or
+              magic_split[type_index] == 'table|nil' or
+              magic_split[type_index] == 'boolean' or
+              magic_split[type_index] == 'boolean|nil' or
+              magic_split[type_index] == 'function' or
+              magic_split[type_index] == 'function|nil'
+              then
+            magic_split[type_index] = '(' .. magic_split[type_index] .. ')'
+          end
+          magic = table.concat(magic_split, ' ')
+
           outStream:writeln('/// @' .. magic)
           fn_magic = checkComment4fn(fn_magic,magic)
         elseif string.sub(line,3,3)=='-' then -- it's a nonmagic doc comment

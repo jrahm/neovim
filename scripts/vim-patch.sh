@@ -4,6 +4,8 @@ set -e
 set -u
 # Use privileged mode, which e.g. skips using CDPATH.
 set -p
+# https://www.shellcheck.net/wiki/SC2031
+shopt -s lastpipe
 
 # Ensure that the user has a bash that supports -A
 if [[ "${BASH_VERSINFO[0]}" -lt 4  ]]; then
@@ -36,7 +38,7 @@ usage() {
   echo "                       can be a Vim version (8.0.xxx) or a Git hash."
   echo "    -P {vim-revision}  Download, generate and apply a Vim patch."
   echo "    -g {vim-revision}  Download a Vim patch."
-  echo "    -s                 Create a vim-patch pull request."
+  echo "    -s [pr args]       Create a vim-patch pull request."
   echo "    -r {pr-number}     Review a vim-patch pull request."
   echo "    -V                 Clone the Vim source code to \$VIM_SOURCE_DIR."
   echo
@@ -190,8 +192,8 @@ preprocess_patch() {
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/\<\%('"${na_files}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove *.proto, Make*, INSTALL*, gui_*, beval.*, some if_*, gvim, libvterm, tee, VisVim, xpm, xxd
-  local na_src='auto\|configure.*\|GvimExt\|libvterm\|proto\|tee\|VisVim\|xpm\|xxd\|Make*\|INSTALL*\|beval.*\|gui_*\|if_lua\|if_mzsch\|if_olepp\|if_ole\|if_perl\|if_py\|if_ruby\|if_tcl\|if_xcmdsrv'
-  2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/\S*\<\%(testdir/\)\@<!\%('"${na_src}"'\)@norm! d/\v(^diff)|%$' +w +q "$file"
+  local na_src='auto\|configure.*\|GvimExt\|libvterm\|proto\|tee\|VisVim\|xpm\|xxd\|Make.*\|INSTALL.*\|beval.*\|gui.*\|if_lua\|if_mzsch\|if_olepp\|if_ole\|if_perl\|if_py\|if_ruby\|if_tcl\|if_xcmdsrv'
+  2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/\S*\<\%(testdir/\)\@<!\%('"${na_src}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove unwanted Vim doc files.
   local na_doc='channel\.txt\|netbeans\.txt\|os_\w\+\.txt\|term\.txt\|todo\.txt\|version\d\.txt\|vim9\.txt\|sponsor\.txt\|intro\.txt\|tags'
@@ -201,19 +203,18 @@ preprocess_patch() {
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'%s/^@@.*\n.*For Vim version.*Last change.*\n.*For Vim version.*Last change.*//' +w +q "$file"
 
   # Remove gui, option, setup, screen dumps, testdir/Make_*.mak files
-  local na_src_testdir='gen_opt_test.vim\|gui_.*\|Make_amiga.mak\|Make_dos.mak\|Make_ming.mak\|Make_vms.mms\|dumps/.*.dump\|setup_gui.vim'
+  local na_src_testdir='gen_opt_test\.vim\|gui_.*\|Make_amiga\.mak\|Make_dos\.mak\|Make_ming\.mak\|Make_vms\.mms\|dumps/.*\.dump\|setup_gui\.vim'
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/testdir/\<\%('"${na_src_testdir}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove testdir/test_*.vim files
-  local na_src_testdir='balloon.*\|channel.*\|crypt.vim\|gui.*\|job_fails.vim\|json.vim\|mzscheme.vim\|netbeans.*\|paste.vim\|popupwin.*\|restricted.vim\|shortpathname.vim\|tcl.vim\|terminal.*\|xxd.vim'
+  local na_src_testdir='balloon.*\|channel.*\|crypt\.vim\|gui.*\|job_fails\.vim\|json\.vim\|mzscheme\.vim\|netbeans.*\|paste\.vim\|popupwin.*\|restricted\.vim\|shortpathname\.vim\|tcl\.vim\|terminal.*\|xxd\.vim'
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/testdir/\<test_\%('"${na_src_testdir}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove version.c #7555
-  local na_po='version.c'
-  2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/\<\%('${na_po}'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
+  2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/\<\%(version\.c\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove some *.po files. #5622
-  local na_po='sjiscorr.c\|ja.sjis.po\|ko.po\|pl.cp1250.po\|pl.po\|ru.cp1251.po\|uk.cp1251.po\|zh_CN.cp936.po\|zh_CN.po\|zh_TW.po'
+  local na_po='sjiscorr\.c\|ja\.sjis\.po\|ko\.po\|pl\.cp1250\.po\|pl\.po\|ru\.cp1251\.po\|uk\.cp1251\.po\|zh_CN\.cp936\.po\|zh_CN\.po\|zh_TW\.po'
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/po/\<\%('${na_po}'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove vimrc_example.vim
@@ -232,16 +233,32 @@ preprocess_patch() {
   LC_ALL=C sed -e 's/\( [ab]\/src\/nvim\)\/userfunc\.c/\1\/eval\/userfunc\.c/g' \
     "$file" > "$file".tmp && mv "$file".tmp "$file"
 
+  # Rename map.c to mapping.c
+  LC_ALL=C sed -e 's/\( [ab]\/src\/nvim\)\/map\(\.[ch]\)/\1\/mapping\2/g' \
+    "$file" > "$file".tmp && mv "$file".tmp "$file"
+
   # Rename session.c to ex_session.c
   LC_ALL=C sed -e 's/\( [ab]\/src\/nvim\)\/session\(\.[ch]\)/\1\/ex_session\2/g' \
     "$file" > "$file".tmp && mv "$file".tmp "$file"
 
+  # Rename highlight.c to highlight_group.c
+  LC_ALL=C sed -e 's/\( [ab]\/src\/nvim\)\/highlight\(\.[ch]\)/\1\/highlight_group\2/g' \
+    "$file" > "$file".tmp && mv "$file".tmp "$file"
+
+  # Rename keymap.h to keycodes.h
+  LC_ALL=C sed -e 's/\( [ab]\/src\/nvim\)\/keymap\.h/\1\/keycodes.h/g' \
+    "$file" > "$file".tmp && mv "$file".tmp "$file"
+
+  # Rename terminal.txt to nvim_terminal_emulator.txt
+  LC_ALL=C sed -e 's/\( [ab]\/runtime\/doc\)\/terminal\.txt/\1\/nvim_terminal_emulator.txt/g' \
+    "$file" > "$file".tmp && mv "$file".tmp "$file"
+
   # Rename test_urls.vim to check_urls.vim
-  LC_ALL=C sed -e 's@\( [ab]\)/runtime/doc/test\(_urls.vim\)@\1/scripts/check\2@g' \
+  LC_ALL=C sed -e 's@\( [ab]\)/runtime/doc/test\(_urls\.vim\)@\1/scripts/check\2@g' \
     "$file" > "$file".tmp && mv "$file".tmp "$file"
 
   # Rename path to check_colors.vim
-  LC_ALL=C sed -e 's@\( [ab]/runtime\)/colors/\(tools/check_colors.vim\)@\1/\2@g' \
+  LC_ALL=C sed -e 's@\( [ab]/runtime\)/colors/\(tools/check_colors\.vim\)@\1/\2@g' \
     "$file" > "$file".tmp && mv "$file".tmp "$file"
 }
 
@@ -329,22 +346,29 @@ stage_patch() {
     * Do this only for _related_ patches (otherwise it increases the
       size of the pull request, making it harder to review)
 
-  When you are done, try "%s -s" to create the pull request.
+  When you are done, try "%s -s" to create the pull request,
+  or "%s -s --draft" to create a draft pull request.
 
   See the wiki for more information:
     * https://github.com/neovim/neovim/wiki/Merging-patches-from-upstream-vim
-' "${vim_version}" "${BASENAME}" "${BASENAME}"
+' "${vim_version}" "${BASENAME}" "${BASENAME}" "${BASENAME}"
   return $ret
 }
 
 gh_pr() {
-  gh pr create --title "$1" --body "$2"
+  local pr_title
+  local pr_body
+  pr_title="$1"
+  pr_body="$2"
+  shift 2
+  gh pr create --title "${pr_title}" --body "${pr_body}" "$@"
 }
 
 git_hub_pr() {
   local pr_message
   pr_message="$(printf '%s\n\n%s\n' "$1" "$2")"
-  git hub pull new -m "${pr_message}"
+  shift 2
+  git hub pull new -m "${pr_message}" "$@"
 }
 
 submit_pr() {
@@ -408,7 +432,7 @@ submit_pr() {
   fi
 
   echo "Creating pull request."
-  if output="$($submit_fn "$pr_title" "$pr_body" 2>&1)"; then
+  if output="$($submit_fn "$pr_title" "$pr_body" "$@" 2>&1)"; then
     msg_ok "$output"
   else
     msg_err "$output"
@@ -576,13 +600,13 @@ show_vimpatches() {
     runtime_commits[$commit]=1
   done
 
-  while read -r vim_commit; do
+  list_missing_vimpatches 1 "$@" | while read -r vim_commit; do
     if [[ "${runtime_commits[$vim_commit]-}" ]]; then
       printf '  • %s (+runtime)\n' "${vim_commit}"
     else
       printf '  • %s\n' "${vim_commit}"
     fi
-  done <<< "$(list_missing_vimpatches 1 "$@")"
+  done
 
   cat << EOF
 
@@ -799,7 +823,8 @@ while getopts "hlLmMVp:P:g:r:s" opt; do
       exit 0
       ;;
     s)
-      submit_pr
+      shift  # remove opt
+      submit_pr "$@"
       exit 0
       ;;
     V)

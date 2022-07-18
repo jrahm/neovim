@@ -1,9 +1,8 @@
 " Test for python 3 commands.
 " TODO: move tests from test87.in here.
 
-if !has('python3')
-  finish
-endif
+source check.vim
+CheckFeature python3
 
 func Test_py3do()
   " Check deleting lines does not trigger an ml_get error.
@@ -69,6 +68,7 @@ func Test_vim_function()
 endfunc
 
 func Test_skipped_python3_command_does_not_affect_pyxversion()
+  throw 'skipped: Nvim hardcodes pyxversion=3'
   set pyxversion=0
   if 0
     python3 import vim

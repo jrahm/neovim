@@ -6,6 +6,8 @@
 // for FILE
 #include <stdio.h>
 
+#include "grid_defs.h"
+
 typedef struct file_buffer buf_T;  // Forward declaration
 
 // Reference to a buffer that stores the value of buf_free_count.
@@ -90,7 +92,6 @@ typedef struct {
 #define BF_NEW_W        0x20    // Warned for BF_NEW and file created
 #define BF_READERR      0x40    // got errors while reading the file
 #define BF_DUMMY        0x80    // dummy buffer, only used internally
-#define BF_PRESERVED    0x100   // ":preserve" was used
 #define BF_SYN_SET      0x200   // 'syntax' option was set
 
 // Mask to check for flags that prevent normal writing
@@ -103,8 +104,6 @@ typedef uint64_t disptick_T;  // display tick type
 
 // for struct memline (it needs memfile_T)
 #include "nvim/memline_defs.h"
-// for struct memfile, bhdr_T, blocknr_T... (it needs buf_T)
-#include "nvim/memfile_defs.h"
 
 // for regprog_T. Needs win_T and buf_T.
 #include "nvim/regexp_defs.h"
@@ -179,7 +178,7 @@ typedef struct {
 #define w_p_fdi w_onebuf_opt.wo_fdi    // 'foldignore'
   long wo_fdl;
 #define w_p_fdl w_onebuf_opt.wo_fdl    // 'foldlevel'
-  int wo_fdl_save;
+  long wo_fdl_save;
   // 'foldlevel' state saved for diff mode
 #define w_p_fdl_save w_onebuf_opt.wo_fdl_save
   char_u *wo_fdm;
@@ -204,6 +203,10 @@ typedef struct {
 #define w_p_nu w_onebuf_opt.wo_nu       // 'number'
   int wo_rnu;
 #define w_p_rnu w_onebuf_opt.wo_rnu     // 'relativenumber'
+  char_u *wo_ve;
+#define w_p_ve w_onebuf_opt.wo_ve       // 'virtualedit'
+  unsigned wo_ve_flags;
+#define w_ve_flags w_onebuf_opt.wo_ve_flags  // flags for 'virtualedit'
   long wo_nuw;
 #define w_p_nuw w_onebuf_opt.wo_nuw    // 'numberwidth'
   int wo_wfh;
@@ -232,6 +235,8 @@ typedef struct {
 #define w_p_sbr w_onebuf_opt.wo_sbr    // 'showbreak'
   char_u *wo_stl;
 #define w_p_stl w_onebuf_opt.wo_stl     // 'statusline'
+  char *wo_wbr;
+#define w_p_wbr w_onebuf_opt.wo_wbr   // 'winbar'
   int wo_scb;
 #define w_p_scb w_onebuf_opt.wo_scb    // 'scrollbind'
   int wo_diff_saved;           // options were saved for starting diff mode
@@ -278,8 +283,8 @@ typedef struct {
 struct wininfo_S {
   wininfo_T *wi_next;         // next entry or NULL for last entry
   wininfo_T *wi_prev;         // previous entry or NULL for first entry
-  win_T *wi_win;          // pointer to window that did set wi_fpos
-  pos_T wi_fpos;                // last cursor position in the file
+  win_T *wi_win;          // pointer to window that did set wi_mark
+  fmark_T wi_mark;                // last cursor mark in the file
   bool wi_optset;               // true when wi_opt has useful values
   winopt_T wi_opt;              // local window options
   bool wi_fold_manual;          // copy of w_fold_manual
@@ -355,6 +360,8 @@ struct mapblock {
   LuaRef m_luaref;         // lua function reference as rhs
   int m_keylen;                 // strlen(m_keys)
   int m_mode;                   // valid mode
+  int m_simplified;             // m_keys was simplified, do no use this map
+                                // if keys are typed
   int m_noremap;                // if non-zero no re-mapping for m_str
   char m_silent;                // <silent> used, don't echo commands
   char m_nowait;                // <nowait> used
@@ -366,7 +373,7 @@ struct mapblock {
 /// Used for highlighting in the status line.
 typedef struct stl_hlrec stl_hlrec_t;
 struct stl_hlrec {
-  char_u *start;
+  char *start;
   int userhl;                   // 0: no HL, 1-9: User HL, < 0 for syn ID
 };
 
@@ -374,7 +381,7 @@ struct stl_hlrec {
 typedef struct stl_item stl_item_t;
 struct stl_item {
   // Where the item starts in the status line output buffer
-  char_u *start;
+  char *start;
   // Function to run for ClickFunc items.
   char *cmd;
   // The minimum width of the item
@@ -529,19 +536,19 @@ struct file_buffer {
   int b_flags;                  // various BF_ flags
   int b_locked;                 // Buffer is being closed or referenced, don't
                                 // let autocommands wipe it out.
+  int b_locked_split;           // Buffer is being closed, don't allow opening
+                                // a new window with it.
   int b_ro_locked;              // Non-zero when the buffer can't be changed.
                                 // Used for FileChangedRO
 
-  //
   // b_ffname   has the full path of the file (NULL for no name).
   // b_sfname   is the name as the user typed it (or NULL).
   // b_fname    is the same as b_sfname, unless ":cd" has been done,
   //            then it is the same as b_ffname (NULL for no name).
-  //
-  char_u *b_ffname;        // full path file name, allocated
-  char_u *b_sfname;        // short file name, allocated, may be equal to
+  char *b_ffname;          // full path file name, allocated
+  char *b_sfname;          // short file name, allocated, may be equal to
                            // b_ffname
-  char_u *b_fname;         // current file name, points to b_ffname or
+  char *b_fname;           // current file name, points to b_ffname or
                            // b_sfname
 
   bool file_id_valid;
@@ -583,7 +590,9 @@ struct file_buffer {
                                 // where invoked
 
   long b_mtime;                 // last change time of original file
+  long b_mtime_ns;              // nanoseconds of last change time
   long b_mtime_read;            // last change time when reading
+  long b_mtime_read_ns;         // nanoseconds of last read time
   uint64_t b_orig_size;         // size of original file in bytes
   int b_orig_mode;              // mode of original file
   time_t b_last_used;           // time when the buffer was last used; used
@@ -656,7 +665,7 @@ struct file_buffer {
   // flags for use of ":lmap" and IM control
   long b_p_iminsert;            // input mode for insert
   long b_p_imsearch;            // input mode for search
-#define B_IMODE_USE_INSERT -1   //  Use b_p_iminsert value for search
+#define B_IMODE_USE_INSERT (-1)  //  Use b_p_iminsert value for search
 #define B_IMODE_NONE 0          //  Input via none
 #define B_IMODE_LMAP 1          //  Input via langmap
 #define B_IMODE_LAST 1
@@ -691,6 +700,7 @@ struct file_buffer {
   char_u *b_p_cino;             ///< 'cinoptions'
   char_u *b_p_cink;             ///< 'cinkeys'
   char_u *b_p_cinw;             ///< 'cinwords'
+  char_u *b_p_cinsd;            ///< 'cinscopedecls'
   char_u *b_p_com;              ///< 'comments'
   char_u *b_p_cms;              ///< 'commentstring'
   char_u *b_p_cpt;              ///< 'complete'
@@ -820,7 +830,7 @@ struct file_buffer {
 
   int b_start_eol;              // last line had eol when it was read
   int b_start_ffc;              // first char of 'ff' when edit started
-  char_u *b_start_fenc;    // 'fileencoding' when edit started or NULL
+  char *b_start_fenc;           // 'fileencoding' when edit started or NULL
   int b_bad_char;               // "++bad=" argument when edit started or 0
   int b_start_bomb;             // 'bomb' when it was read
 
@@ -846,7 +856,7 @@ struct file_buffer {
                                 // are not used!  Use the B_SPELL macro to
                                 // access b_spell without #ifdef.
 
-  char_u *b_prompt_text;        // set by prompt_setprompt()
+  char *b_prompt_text;          // set by prompt_setprompt()
   Callback b_prompt_callback;   // set by prompt_setcallback()
   Callback b_prompt_interrupt;  // set by prompt_setinterrupt()
   int b_prompt_insert;          // value for restart_edit when entering
@@ -857,8 +867,12 @@ struct file_buffer {
                                 // may use a different synblock_T.
 
   sign_entry_T *b_signlist;     // list of placed signs
-  int b_signcols;               // last calculated number of sign columns
-  bool b_signcols_valid;        // calculated sign columns is valid
+  struct {
+    int size;                   // last calculated number of sign columns
+    bool valid;                 // calculated sign columns is valid
+    linenr_T sentinel;          // a line number which is holding up the signcolumn
+    int max;                    // Maximum value size is valid for.
+  } b_signcols;
 
   Terminal *terminal;           // Terminal instance associated with the buffer
 
@@ -867,9 +881,9 @@ struct file_buffer {
   int b_mapped_ctrl_c;          // modes where CTRL-C is mapped
 
   MarkTree b_marktree[1];
-  Map(uint64_t, ExtmarkItem) b_extmark_index[1];
-  Map(uint64_t, ExtmarkNs) b_extmark_ns[1];         // extmark namespaces
+  Map(uint32_t, uint32_t) b_extmark_ns[1];         // extmark namespaces
   size_t b_virt_line_blocks;    // number of virt_line blocks
+  size_t b_signs;               // number of sign extmarks
 
   // array of channel_id:s which have asked to receive updates for this
   // buffer.
@@ -950,8 +964,8 @@ struct tabpage_S {
   frame_T *(tp_snapshot[SNAP_COUNT]);    ///< window layout snapshots
   ScopeDictDictItem tp_winvar;      ///< Variable for "t:" Dictionary.
   dict_T *tp_vars;         ///< Internal variables, local to tab page.
-  char_u *tp_localdir;     ///< Absolute path of local cwd or NULL.
-  char_u *tp_prevdir;      ///< Previous directory.
+  char *tp_localdir;       ///< Absolute path of local cwd or NULL.
+  char *tp_prevdir;        ///< Previous directory.
 };
 
 /*
@@ -1015,6 +1029,7 @@ typedef struct {
   colnr_T startcol;     // in win_line() points to char where HL starts
   colnr_T endcol;       // in win_line() points to char where HL ends
   bool is_addpos;       // position specified directly by matchaddpos()
+  bool has_cursor;      // true if the cursor is inside the match, used for CurSearch
   proftime_T tm;        // for a time limit
 } match_T;
 
@@ -1047,7 +1062,7 @@ struct matchitem {
   matchitem_T *next;
   int id;                   ///< match ID
   int priority;             ///< match priority
-  char_u *pattern;          ///< pattern to highlight
+  char *pattern;            ///< pattern to highlight
   regmmatch_T match;        ///< regexp program for pattern
   posmatch_T pos;           ///< position matches
   match_T hl;               ///< struct for doing the actual highlighting
@@ -1107,7 +1122,7 @@ typedef struct {
   bool noautocmd;
 
   stl_hlrec_t* title_hl;
-  char_u* title;
+  char* title;
   size_t n_title;
   TitlePosition title_pos;
 } FloatConfig;
@@ -1145,8 +1160,9 @@ enum {
   MENU_INDEX_OP_PENDING   = 3,
   MENU_INDEX_INSERT       = 4,
   MENU_INDEX_CMDLINE      = 5,
-  MENU_INDEX_TIP          = 6,
-  MENU_MODES              = 7,
+  MENU_INDEX_TERMINAL     = 6,
+  MENU_INDEX_TIP          = 7,
+  MENU_MODES              = 8,
 };
 
 typedef struct VimMenu vimmenu_T;
@@ -1154,15 +1170,15 @@ typedef struct VimMenu vimmenu_T;
 struct VimMenu {
   int modes;                         ///< Which modes is this menu visible for
   int enabled;                       ///< for which modes the menu is enabled
-  char_u *name;                 ///< Name of menu, possibly translated
-  char_u *dname;                ///< Displayed Name ("name" without '&')
-  char_u *en_name;              ///< "name" untranslated, NULL when
-                                ///< was not translated
-  char_u *en_dname;             ///< NULL when "dname" untranslated
+  char *name;                 ///< Name of menu, possibly translated
+  char *dname;                ///< Displayed Name ("name" without '&')
+  char *en_name;              ///< "name" untranslated, NULL when
+                              ///< was not translated
+  char *en_dname;             ///< NULL when "dname" untranslated
   int mnemonic;                      ///< mnemonic key (after '&')
-  char_u *actext;               ///< accelerator text (after TAB)
+  char *actext;               ///< accelerator text (after TAB)
   long priority;                     ///< Menu order priority
-  char_u *strings[MENU_MODES];  ///< Mapped string for each mode
+  char *strings[MENU_MODES];  ///< Mapped string for each mode
   int noremap[MENU_MODES];           ///< A \ref REMAP_VALUES flag for each mode
   bool silent[MENU_MODES];           ///< A silent flag for each mode
   vimmenu_T *children;             ///< Children of sub-menu
@@ -1218,6 +1234,8 @@ struct window_S {
   colnr_T w_old_visual_col;         ///< last known start of visual part
   colnr_T w_old_curswant;           ///< last known value of Curswant
 
+  linenr_T w_last_cursor_lnum_rnu;  ///< cursor lnum when 'rnu' was last redrawn
+
   // 'listchars' characters. Defaults set in set_chars_option().
   struct {
     int eol;
@@ -1231,6 +1249,7 @@ struct window_S {
     int lead;
     int trail;
     int *multispace;
+    int *leadmultispace;
     int conceal;
   } w_p_lcs_chars;
 
@@ -1238,7 +1257,14 @@ struct window_S {
   struct {
     int stl;
     int stlnc;
+    int wbr;
+    int horiz;
+    int horizup;
+    int horizdown;
     int vert;
+    int vertleft;
+    int vertright;
+    int verthoriz;
     int fold;
     int foldopen;                    ///< when fold is open
     int foldclosed;                  ///< when fold is closed
@@ -1268,12 +1294,11 @@ struct window_S {
   colnr_T w_skipcol;                // starting column when a single line
                                     // doesn't fit in the window
 
-  // "w_last_topline" and "w_last_leftcol" are used to determine if
-  // a Scroll autocommand should be emitted.
-  linenr_T w_last_topline;          ///< last known value for topline
-  colnr_T w_last_leftcol;          ///< last known value for leftcol
-  int w_last_width;                 ///< last known value for width
-  int w_last_height;                ///< last known value for height
+  // four fields that are only used when there is a WinScrolled autocommand
+  linenr_T w_last_topline;          ///< last known value for w_topline
+  colnr_T w_last_leftcol;           ///< last known value for w_leftcol
+  int w_last_width;                 ///< last known value for w_width
+  int w_last_height;                ///< last known value for w_height
 
   //
   // Layout of the window in the screen.
@@ -1281,12 +1306,19 @@ struct window_S {
   //
   int w_winrow;                     // first row of window in screen
   int w_height;                     // number of rows in window, excluding
-                                    // status/command/winbar line(s)
+                                    // status/command line(s)
   int w_status_height;              // number of status lines (0 or 1)
+  int w_winbar_height;              // number of window bars (0 or 1)
   int w_wincol;                     // Leftmost column of window in screen.
   int w_width;                      // Width of window, excluding separation.
-  int w_vsep_width;                 // Number of separator columns (0 or 1).
+  int w_hsep_height;                // Number of horizontal separator rows (0 or 1)
+  int w_vsep_width;                 // Number of vertical separator columns (0 or 1).
   pos_save_T w_save_cursor;         // backup of cursor pos and topline
+
+  int w_winrow_off;  ///< offset from winrow to the inner window area
+  int w_wincol_off;  ///< offset from wincol to the inner window area
+                     ///< this includes float border but excludes special columns
+                     ///< implemented in win_line() (i.e. signs, folds, numbers)
 
   // inner size of window, which can be overridden by external UI
   int w_height_inner;
@@ -1365,6 +1397,7 @@ struct window_S {
                                     // recomputed
   int w_nrwidth;                    // width of 'number' and 'relativenumber'
                                     // column being used
+  int w_scwidth;                    // width of 'signcolumn'
 
   /*
    * === end of cached values ===
@@ -1375,7 +1408,7 @@ struct window_S {
                                     // w_redr_type is REDRAW_TOP
   linenr_T w_redraw_top;            // when != 0: first line needing redraw
   linenr_T w_redraw_bot;            // when != 0: last line needing redraw
-  bool w_redr_status;               // if true status line must be redrawn
+  bool w_redr_status;               // if true statusline/winbar must be redrawn
   bool w_redr_border;               // if true border must be redrawn
 
   // remember what is shown in the ruler for this window (if 'ruler' set)
@@ -1393,8 +1426,8 @@ struct window_S {
                                     // out of range!)
   int w_arg_idx_invalid;            // editing another file than w_arg_idx
 
-  char_u *w_localdir;          // absolute path of local directory or NULL
-  char_u *w_prevdir;           // previous directory
+  char *w_localdir;            // absolute path of local directory or NULL
+  char *w_prevdir;             // previous directory
   // Options local to a window.
   // They are local because they influence the layout of the window or
   // depend on the window layout.
@@ -1405,12 +1438,13 @@ struct window_S {
 
   // A few options have local flags for P_INSECURE.
   uint32_t w_p_stl_flags;           // flags for 'statusline'
+  uint32_t w_p_wbr_flags;           // flags for 'winbar'
   uint32_t w_p_fde_flags;           // flags for 'foldexpr'
   uint32_t w_p_fdt_flags;           // flags for 'foldtext'
-  int *w_p_cc_cols;         // array of columns to highlight or NULL
-  char_u w_p_culopt_flags;     // flags for cursorline highlighting
-  long w_p_siso;             // 'sidescrolloff' local value
-  long w_p_so;               // 'scrolloff' local value
+  int *w_p_cc_cols;                 // array of columns to highlight or NULL
+  uint8_t w_p_culopt_flags;         // flags for cursorline highlighting
+  long w_p_siso;                    // 'sidescrolloff' local value
+  long w_p_so;                      // 'scrolloff' local value
 
   int w_briopt_min;                 // minimum width for breakindent
   int w_briopt_shift;               // additional shift for breakindent
@@ -1418,7 +1452,7 @@ struct window_S {
   int w_briopt_list;                // additional indent for lists
 
   // transform a pointer to a "onebuf" option into a "allbuf" option
-#define GLOBAL_WO(p)    ((char *)p + sizeof(winopt_T))
+#define GLOBAL_WO(p)    ((char *)(p) + sizeof(winopt_T))
 
   long w_scbind_pos;
 
@@ -1478,6 +1512,16 @@ struct window_S {
   // Location list reference used in the location list window.
   // In a non-location list window, w_llist_ref is NULL.
   qf_info_T *w_llist_ref;
+
+  // Status line click definitions
+  StlClickDefinition *w_status_click_defs;
+  // Size of the w_status_click_defs array
+  size_t w_status_click_defs_size;
+
+  // Window bar click definitions
+  StlClickDefinition *w_winbar_click_defs;
+  // Size of the w_winbar_click_defs array
+  size_t w_winbar_click_defs_size;
 };
 
 static inline int win_hl_attr(win_T *wp, int hlf)

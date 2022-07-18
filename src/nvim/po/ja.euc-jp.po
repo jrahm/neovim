@@ -1644,15 +1644,6 @@ msgstr " [w]"
 msgid " written"
 msgstr " 書込み"
 
-msgid "E205: Patchmode: can't save original file"
-msgstr "E205: patchmode: 原本ファイルを保存できません"
-
-msgid "E206: patchmode: can't touch empty original file"
-msgstr "E206: patchmode: 空の原本ファイルをtouchできません"
-
-msgid "E207: Can't delete backup file"
-msgstr "E207: バックアップファイルを消せません"
-
 msgid ""
 "\n"
 "WARNING: Original file may be lost or damaged\n"
@@ -1845,6 +1836,11 @@ msgstr "E351: 現在の 'foldmethod' では折畳みを削除できません"
 msgid "+--%3ld line folded "
 msgid_plural "+--%3ld lines folded "
 msgstr[0] "+--%3ld 行が折畳まれました"
+
+#, c-format
+msgid "+-%s%3ld line: "
+msgid_plural "+-%s%3ld lines: "
+msgstr[0] "+-%s%3ld 行: "
 
 msgid "E222: Add to read buffer"
 msgstr "E222: 読込バッファへ追加"

@@ -154,7 +154,7 @@ describe('env.c', function()
     local value = 'TESTVALUE'
     os_setenv(name, value, 1)
     eq(OK, os_unsetenv(name))
-    neq(os_getenv(name), value)
+    neq(value, os_getenv(name))
     -- Depending on the platform the var might be unset or set as ''
     assert.True(os_getenv(name) == nil or os_getenv(name) == '')
     if os_getenv(name) == nil then
@@ -266,7 +266,7 @@ describe('env.c', function()
 
     itp('does not crash #3725', function()
       local name_out = ffi.new('char[100]')
-      cimp.os_get_user_name(name_out, 100)
+      cimp.os_get_username(name_out, 100)
       local curuser = ffi.string(name_out)
 
       local src = to_cstr("~"..curuser.."/Vcs/django-rest-framework/rest_framework/renderers.py")

@@ -38,7 +38,7 @@ int socket_watcher_init(Loop *loop, SocketWatcher *watcher, const char *endpoint
     char *port = host_end + 1;
     intmax_t iport;
 
-    int ok = try_getdigits(&(char_u *){ (char_u *)port }, &iport);
+    int ok = try_getdigits(&(char *){ port }, &iport);
     if (!ok || iport < 0 || iport > UINT16_MAX) {
       ELOG("Invalid port: %s", port);
       return UV_EINVAL;
@@ -53,10 +53,8 @@ int socket_watcher_init(Loop *loop, SocketWatcher *watcher, const char *endpoint
     uv_getaddrinfo_t request;
 
     int retval = uv_getaddrinfo(&loop->uv, &request, NULL, addr, port,
-                                &(struct addrinfo){
-      .ai_family = AF_UNSPEC,
-      .ai_socktype = SOCK_STREAM,
-    });
+                                &(struct addrinfo){ .ai_family = AF_UNSPEC,
+                                                    .ai_socktype = SOCK_STREAM, });
     if (retval != 0) {
       ELOG("Host lookup failed: %s", endpoint);
       return retval;
@@ -103,13 +101,12 @@ int socket_watcher_start(SocketWatcher *watcher, int backlog, socket_cb cb)
         // contain 0 in this case, unless uv_tcp_getsockname() is used first.
         uv_tcp_getsockname(&watcher->uv.tcp.handle, (struct sockaddr *)&sas,
                            &(int){ sizeof(sas) });
-        uint16_t port = (uint16_t)(
-                                   (sas.ss_family == AF_INET)
-            ? (STRUCT_CAST(struct sockaddr_in, &sas))->sin_port
-            : (STRUCT_CAST(struct sockaddr_in6, &sas))->sin6_port);
+        uint16_t port = (uint16_t)((sas.ss_family == AF_INET)
+                                   ? (STRUCT_CAST(struct sockaddr_in, &sas))->sin_port
+                                   : (STRUCT_CAST(struct sockaddr_in6, &sas))->sin6_port);
         // v:servername uses the string from watcher->addr
         size_t len = strlen(watcher->addr);
-        snprintf(watcher->addr+len, sizeof(watcher->addr)-len, ":%" PRIu16,
+        snprintf(watcher->addr + len, sizeof(watcher->addr) - len, ":%" PRIu16,
                  ntohs(port));
         break;
       }
@@ -127,7 +124,7 @@ int socket_watcher_start(SocketWatcher *watcher, int backlog, socket_cb cb)
     if (result == UV_EACCES) {
       // Libuv converts ENOENT to EACCES for Windows compatibility, but if
       // the parent directory does not exist, ENOENT would be more accurate.
-      *path_tail((char_u *)watcher->addr) = NUL;
+      *path_tail(watcher->addr) = NUL;
       if (!os_path_exists((char_u *)watcher->addr)) {
         result = UV_ENOENT;
       }
@@ -228,7 +225,7 @@ bool socket_connect(Loop *loop, Stream *stream, bool is_tcp, const char *address
                                     .ai_socktype = SOCK_STREAM,
                                     .ai_flags  = AI_NUMERICSERV };
     int retval = uv_getaddrinfo(&loop->uv, &addr_req, NULL,
-                                addr, host_end+1, &hints);
+                                addr, host_end + 1, &hints);
     if (retval != 0) {
       *error = _("failed to lookup host or port");
       goto cleanup;

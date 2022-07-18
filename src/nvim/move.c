@@ -31,6 +31,7 @@
 #include "nvim/plines.h"
 #include "nvim/popupmnu.h"
 #include "nvim/screen.h"
+#include "nvim/search.h"
 #include "nvim/strings.h"
 #include "nvim/window.h"
 
@@ -43,7 +44,6 @@ typedef struct {
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "move.c.generated.h"
 #endif
-
 
 /*
  * Compute wp->w_botline for the current wp->w_topline.  Can be called after
@@ -95,33 +95,39 @@ static void comp_botline(win_T *wp)
   win_check_anchored_floats(wp);
 }
 
-void reset_cursorline(void)
-{
-  curwin->w_last_cursorline = 0;
-}
-
-// Redraw when w_cline_row changes and 'relativenumber' or 'cursorline' is set.
+/// Redraw when w_cline_row changes and 'relativenumber' or 'cursorline' is set.
+/// Also when concealing is on and 'concealcursor' is not active.
 void redraw_for_cursorline(win_T *wp)
   FUNC_ATTR_NONNULL_ALL
 {
-  if ((wp->w_p_rnu || win_cursorline_standout(wp))
-      && (wp->w_valid & VALID_CROW) == 0
-      && !pum_visible()) {
-    if (wp->w_p_rnu) {
-      // win_line() will redraw the number column only.
+  if ((wp->w_valid & VALID_CROW) == 0 && !pum_visible()
+      && (wp->w_p_rnu || win_cursorline_standout(wp))) {
+    // win_line() will redraw the number column and cursorline only.
+    redraw_later(wp, VALID);
+  }
+}
+
+/// Redraw when w_virtcol changes and 'cursorcolumn' is set or 'cursorlineopt'
+/// contains "screenline" or when the "CurSearch" highlight is in use.
+/// Also when concealing is on and 'concealcursor' is active.
+static void redraw_for_cursorcolumn(win_T *wp)
+  FUNC_ATTR_NONNULL_ALL
+{
+  if ((wp->w_valid & VALID_VIRTCOL) == 0 && !pum_visible()) {
+    if (wp->w_p_cuc || ((HL_ATTR(HLF_LC) || wp->w_hl_ids[HLF_LC]) && using_hlsearch())) {
+      // When 'cursorcolumn' is set or "CurSearch" is in use
+      // need to redraw with SOME_VALID.
+      redraw_later(wp, SOME_VALID);
+    } else if (wp->w_p_cul && (wp->w_p_culopt_flags & CULOPT_SCRLINE)) {
+      // When 'cursorlineopt' contains "screenline" need to redraw with VALID.
       redraw_later(wp, VALID);
     }
-    if (win_cursorline_standout(wp)) {
-      if (wp->w_redr_type <= VALID && wp->w_last_cursorline != 0) {
-        // "w_last_cursorline" may be outdated, worst case we redraw
-        // too much.  This is optimized for moving the cursor around in
-        // the current window.
-        redrawWinline(wp, wp->w_last_cursorline);
-        redrawWinline(wp, wp->w_cursor.lnum);
-      } else {
-        redraw_later(wp, SOME_VALID);
-      }
-    }
+  }
+  // If the cursor moves horizontally when 'concealcursor' is active, then the
+  // current line needs to be redrawn in order to calculate the correct
+  // cursor position.
+  if ((wp->w_valid & VALID_VIRTCOL) == 0 && wp->w_p_cole > 0 && conceal_cursor_line(wp)) {
+    redrawWinline(wp, wp->w_cursor.lnum);
   }
 }
 
@@ -346,10 +352,10 @@ void update_topline(win_T *wp)
  */
 void update_topline_win(win_T *win)
 {
-  win_T *save_curwin;
-  switch_win(&save_curwin, NULL, win, NULL, true);
+  switchwin_T switchwin;
+  switch_win(&switchwin, win, NULL, true);
   update_topline(curwin);
-  restore_win(save_curwin, NULL, true);
+  restore_win(&switchwin, true);
 }
 
 /*
@@ -641,11 +647,8 @@ void validate_virtcol_win(win_T *wp)
   check_cursor_moved(wp);
   if (!(wp->w_valid & VALID_VIRTCOL)) {
     getvvcol(wp, &wp->w_cursor, NULL, &(wp->w_virtcol), NULL);
+    redraw_for_cursorcolumn(wp);
     wp->w_valid |= VALID_VIRTCOL;
-    if (wp->w_p_cuc
-        && !pum_visible()) {
-      redraw_later(wp, SOME_VALID);
-    }
   }
 }
 
@@ -776,10 +779,14 @@ void curs_columns(win_T *wp, int may_scroll)
   int textwidth = wp->w_width_inner - extra;
   if (textwidth <= 0) {
     // No room for text, put cursor in last char of window.
+    // If not wrapping, the last non-empty line.
     wp->w_wcol = wp->w_width_inner - 1;
-    wp->w_wrow = wp->w_height_inner - 1;
-  } else if (wp->w_p_wrap
-             && wp->w_width_inner != 0) {
+    if (wp->w_p_wrap) {
+      wp->w_wrow = wp->w_height_inner - 1;
+    } else {
+      wp->w_wrow = wp->w_height_inner - 1 - wp->w_empty_rows;
+    }
+  } else if (wp->w_p_wrap && wp->w_width_inner != 0) {
     width = textwidth + win_col_off2(wp);
 
     // long line wrapping, adjust wp->w_wrow
@@ -792,7 +799,7 @@ void curs_columns(win_T *wp, int may_scroll)
       // When cursor wraps to first char of next line in Insert
       // mode, the 'showbreak' string isn't shown, backup to first
       // column
-      char_u *const sbr = get_showbreak_value(wp);
+      char *const sbr = (char *)get_showbreak_value(wp);
       if (*sbr && *get_cursor_pos_ptr() == NUL
           && wp->w_wcol == vim_strsize(sbr)) {
         wp->w_wcol = 0;
@@ -948,11 +955,7 @@ void curs_columns(win_T *wp, int may_scroll)
     redraw_later(wp, NOT_VALID);
   }
 
-  // Redraw when w_virtcol changes and 'cursorcolumn' is set
-  if (wp->w_p_cuc && (wp->w_valid & VALID_VIRTCOL) == 0
-      && !pum_visible()) {
-    redraw_later(wp, SOME_VALID);
-  }
+  redraw_for_cursorcolumn(curwin);
 
   // now w_leftcol is valid, avoid check_cursor_moved() thinking otherwise
   wp->w_valid_leftcol = wp->w_leftcol;
@@ -1011,7 +1014,7 @@ void textpos2screenpos(win_T *wp, pos_T *pos, int *rowp, int *scolp, int *ccolp,
     col -= wp->w_leftcol;
 
     if (col >= 0 && col < wp->w_width) {
-      coloff = col - scol + (local ? 0 : wp->w_wincol + wp->w_border_adj[3]) + 1;
+      coloff = col - scol + (local ? 0 : wp->w_wincol + wp->w_wincol_off) + 1;
     } else {
       scol = ccol = ecol = 0;
       // character is left or right of the window
@@ -1022,7 +1025,7 @@ void textpos2screenpos(win_T *wp, pos_T *pos, int *rowp, int *scolp, int *ccolp,
       }
     }
   }
-  *rowp = (local ? 0 : wp->w_winrow + wp->w_border_adj[0]) + row + rowoff;
+  *rowp = (local ? 0 : wp->w_winrow + wp->w_winrow_off) + row + rowoff;
   *scolp = scol + coloff;
   *ccolp = ccol + coloff;
   *ecolp = ecol + coloff;
@@ -1079,8 +1082,7 @@ bool scrolldown(long line_count, int byfold)
    * and move the cursor onto the displayed part of the window.
    */
   int wrow = curwin->w_wrow;
-  if (curwin->w_p_wrap
-      && curwin->w_width_inner != 0) {
+  if (curwin->w_p_wrap && curwin->w_width_inner != 0) {
     validate_virtcol();
     validate_cheight();
     wrow += curwin->w_cline_height - 1 -
@@ -1142,8 +1144,8 @@ bool scrollup(long line_count, int byfold)
     curwin->w_botline += lnum - curwin->w_topline;
     curwin->w_topline = lnum;
   } else {
-    curwin->w_topline += line_count;
-    curwin->w_botline += line_count;            // approximate w_botline
+    curwin->w_topline += (linenr_T)line_count;
+    curwin->w_botline += (linenr_T)line_count;            // approximate w_botline
   }
 
   if (curwin->w_topline > curbuf->b_ml.ml_line_count) {
@@ -1514,12 +1516,10 @@ void set_empty_rows(win_T *wp, int used)
   }
 }
 
-/*
- * Recompute topline to put the cursor at the bottom of the window.
- * Scroll at least "min_scroll" lines.
- * If "set_topbot" is true, set topline and botline first (for "zb").
- * This is messy stuff!!!
- */
+/// Recompute topline to put the cursor at the bottom of the window.
+/// When scrolling scroll at least "min_scroll" lines.
+/// If "set_topbot" is true, set topline and botline first (for "zb").
+/// This is messy stuff!!!
 void scroll_cursor_bot(int min_scroll, int set_topbot)
 {
   int used;
@@ -1858,7 +1858,6 @@ void cursor_correct(void)
   curwin->w_viewport_invalid = true;
 }
 
-
 /*
  * move screen 'count' pages up or down and update screen
  *
@@ -1900,7 +1899,7 @@ int onepage(Direction dir, long count)
         if (p_window <= 2) {
           ++curwin->w_topline;
         } else {
-          curwin->w_topline += p_window - 2;
+          curwin->w_topline += (linenr_T)p_window - 2;
         }
         if (curwin->w_topline > curbuf->b_ml.ml_line_count) {
           curwin->w_topline = curbuf->b_ml.ml_line_count;
@@ -1936,12 +1935,12 @@ int onepage(Direction dir, long count)
         if (p_window <= 2) {
           --curwin->w_topline;
         } else {
-          curwin->w_topline -= p_window - 2;
+          curwin->w_topline -= (linenr_T)p_window - 2;
         }
         if (curwin->w_topline < 1) {
           curwin->w_topline = 1;
         }
-        curwin->w_cursor.lnum = curwin->w_topline + p_window - 1;
+        curwin->w_cursor.lnum = curwin->w_topline + (linenr_T)p_window - 1;
         if (curwin->w_cursor.lnum > curbuf->b_ml.ml_line_count) {
           curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
         }
@@ -2272,9 +2271,7 @@ void do_check_cursorbind(void)
         int restart_edit_save = restart_edit;
         restart_edit = true;
         check_cursor();
-        if (win_cursorline_standout(curwin) || curwin->w_p_cuc) {
-          validate_cursor();
-        }
+        validate_cursor();
         restart_edit = restart_edit_save;
       }
       // Correct cursor for multi-byte character.
@@ -2297,4 +2294,3 @@ void do_check_cursorbind(void)
   curwin = old_curwin;
   curbuf = old_curbuf;
 }
-

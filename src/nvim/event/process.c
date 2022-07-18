@@ -120,7 +120,7 @@ int process_spawn(Process *proc, bool in, bool out, bool err)
   proc->internal_close_cb = decref;
   proc->refcount++;
   kl_push(WatcherPtr, proc->loop->children, proc);
-  DLOG("new: pid=%d argv=[%s]", proc->pid, *proc->argv);
+  DLOG("new: pid=%d argv=[%s]", proc->pid, proc->argv[0]);
   return 0;
 }
 
@@ -237,7 +237,7 @@ void process_stop(Process *proc) FUNC_ATTR_NONNULL_ALL
                  KILL_TIMEOUT_MS, 0);
 }
 
-// Frees process-owned resources.
+/// Frees process-owned resources.
 void process_free(Process *proc) FUNC_ATTR_NONNULL_ALL
 {
   if (proc->argv != NULL) {
@@ -386,11 +386,13 @@ static void process_close_handles(void **argv)
 {
   Process *proc = argv[0];
 
+  exit_need_delay++;
   flush_stream(proc, &proc->out);
   flush_stream(proc, &proc->err);
 
   process_close_streams(proc);
   process_close(proc);
+  exit_need_delay--;
 }
 
 static void on_process_exit(Process *proc)

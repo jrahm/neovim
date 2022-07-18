@@ -21,12 +21,14 @@ local content1 = [[
 describe("folded lines", function()
   before_each(function()
     clear()
+    command('hi VertSplit gui=reverse')
   end)
 
   local function with_ext_multigrid(multigrid)
     local screen
     before_each(function()
       clear()
+      command('hi VertSplit gui=reverse')
       screen = Screen.new(45, 8)
       screen:attach({rgb=true, ext_multigrid=multigrid})
       screen:set_default_attr_ids({
@@ -1672,7 +1674,7 @@ describe("folded lines", function()
       end
 
       -- relax the maximum fdc thus fdc should expand to
-      -- accomodate the current number of folds
+      -- accommodate the current number of folds
       command("set foldcolumn=auto:4")
       if multigrid then
         screen:expect([[
@@ -1754,6 +1756,67 @@ describe("folded lines", function()
         ]])
       end
       assert_alive()
+    end)
+
+    it('work correctly with :move #18668', function()
+      screen:try_resize(45, 12)
+      source([[
+        set foldmethod=expr foldexpr=indent(v:lnum)
+        let content = ['', '', 'Line1', '  Line2', '  Line3',
+              \ 'Line4', '  Line5', '  Line6',
+              \ 'Line7', '  Line8', '  Line9']
+        call append(0, content)
+        normal! zM
+        call cursor(4, 1)
+        move 2
+        move 1
+      ]])
+      if multigrid then
+        screen:expect([[
+        ## grid 1
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [3:---------------------------------------------]|
+        ## grid 2
+                                                       |
+          {5:^+--  2 lines: Line2··························}|
+                                                       |
+          Line1                                        |
+          Line4                                        |
+          {5:+--  2 lines: Line5··························}|
+          Line7                                        |
+          {5:+--  2 lines: Line8··························}|
+                                                       |
+          {1:~                                            }|
+          {1:~                                            }|
+        ## grid 3
+                                                       |
+        ]])
+      else
+        screen:expect([[
+                                                       |
+          {5:^+--  2 lines: Line2··························}|
+                                                       |
+          Line1                                        |
+          Line4                                        |
+          {5:+--  2 lines: Line5··························}|
+          Line7                                        |
+          {5:+--  2 lines: Line8··························}|
+                                                       |
+          {1:~                                            }|
+          {1:~                                            }|
+                                                       |
+        ]])
+      end
     end)
   end
 

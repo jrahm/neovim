@@ -110,6 +110,22 @@ describe('API/extmarks', function()
        pcall_err(set_extmark, ns, marks[2], 0, 0, { end_col = 1, end_row = 1 }))
   end)
 
+  it("can end extranges past final newline when strict mode is false", function()
+    set_extmark(ns, marks[1], 0, 0, {
+      end_col = 1,
+      end_row = 1,
+      strict = false,
+    })
+  end)
+
+  it("can end extranges past final column when strict mode is false", function()
+    set_extmark(ns, marks[1], 0, 0, {
+      end_col = 6,
+      end_row = 0,
+      strict = false,
+    })
+  end)
+
   it('adds, updates  and deletes marks', function()
     local rv = set_extmark(ns, marks[1], positions[1][1], positions[1][2])
     eq(marks[1], rv)
@@ -908,7 +924,7 @@ describe('API/extmarks', function()
     eq(3, set_extmark(ns, 3, positions[2][1], positions[2][2]))
     eq(4, set_extmark(ns, 0, positions[1][1], positions[1][2]))
 
-    -- mixing manual and allocated id:s are not recommened, but it should
+    -- mixing manual and allocated id:s are not recommended, but it should
     -- do something reasonable
     eq(6, set_extmark(ns, 6, positions[2][1], positions[2][2]))
     eq(7, set_extmark(ns, 0, positions[1][1], positions[1][2]))
@@ -1430,7 +1446,60 @@ describe('API/extmarks', function()
       end_col = 0,
       end_line = 1
     })
-    eq({ {1, 0, 0, { end_col = 0, end_row = 1 }} }, get_extmarks(ns, 0, -1, {details=true}))
+    eq({ {1, 0, 0, {
+      end_col = 0,
+      end_row = 1,
+      right_gravity = true,
+      end_right_gravity = false,
+    }} }, get_extmarks(ns, 0, -1, {details=true}))
+  end)
+
+  it('can get details', function()
+    set_extmark(ns, marks[1], 0, 0, {
+      end_col = 0,
+      end_row = 1,
+      right_gravity = false,
+      end_right_gravity = true,
+      priority = 0,
+      hl_eol = true,
+      hl_mode = "blend",
+      hl_group = "String",
+      virt_text = { { "text", "Statement" } },
+      virt_text_pos = "right_align",
+      virt_text_hide = true,
+      virt_lines = { { { "lines", "Statement" } }},
+      virt_lines_above = true,
+      virt_lines_leftcol = true,
+    })
+    set_extmark(ns, marks[2], 0, 0, {
+      priority = 0,
+      virt_text = { { "text", "Statement" } },
+      virt_text_win_col = 1,
+    })
+    eq({0, 0, {
+      end_col = 0,
+      end_row = 1,
+      right_gravity = false,
+      end_right_gravity = true,
+      priority = 0,
+      hl_eol = true,
+      hl_mode = "blend",
+      hl_group = "String",
+      virt_text = { { "text", "Statement" } },
+      virt_text_pos = "right_align",
+      virt_text_hide = true,
+      virt_lines = { { { "lines", "Statement" } }},
+      virt_lines_above = true,
+      virt_lines_leftcol = true,
+    } }, get_extmark_by_id(ns, marks[1], { details = true }))
+    eq({0, 0, {
+      right_gravity = true,
+      priority = 0,
+      virt_text = { { "text", "Statement" } },
+      virt_text_hide = false,
+      virt_text_pos = "win_col",
+      virt_text_win_col = 1,
+    } }, get_extmark_by_id(ns, marks[2], { details = true }))
   end)
 end)
 
@@ -1535,5 +1604,211 @@ describe('Extmarks buffer api with many marks', function()
     command('bwipe!')
     eq({}, get_marks(ns1))
     eq({}, get_marks(ns2))
+  end)
+end)
+
+describe('API/win_extmark', function()
+  local screen
+  local marks, line1, line2
+  local ns
+
+  before_each(function()
+    -- Initialize some namespaces and insert text into a buffer
+    marks = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+
+    line1 = "non ui-watched line"
+    line2 = "ui-watched line"
+
+    clear()
+
+    insert(line1)
+    feed("o<esc>")
+    insert(line2)
+    ns = request('nvim_create_namespace', "extmark-ui")
+  end)
+
+  it('sends and only sends ui-watched marks to ui', function()
+    screen = Screen.new(20, 4)
+    screen:attach()
+    -- should send this
+    set_extmark(ns, marks[1], 1, 0, { ui_watched = true })
+    -- should not send this
+    set_extmark(ns, marks[2], 0, 0, { ui_watched = false })
+    screen:expect({
+      grid = [[
+      non ui-watched line |
+      ui-watched lin^e     |
+      ~                   |
+                          |
+    ]],
+      extmarks = {
+        [2] = {
+          -- positioned at the end of the 2nd line
+          { {id = 1000}, 1, 1, 1, 16 },
+        }
+      },
+    })
+  end)
+
+  it('sends multiple ui-watched marks to ui', function()
+    screen = Screen.new(20, 4)
+    screen:attach()
+    -- should send all of these
+    set_extmark(ns, marks[1], 1, 0, { ui_watched = true, virt_text_pos = "overlay" })
+    set_extmark(ns, marks[2], 1, 2, { ui_watched = true, virt_text_pos = "overlay" })
+    set_extmark(ns, marks[3], 1, 4, { ui_watched = true, virt_text_pos = "overlay" })
+    set_extmark(ns, marks[4], 1, 6, { ui_watched = true, virt_text_pos = "overlay" })
+    set_extmark(ns, marks[5], 1, 8, { ui_watched = true })
+    screen:expect({
+      grid = [[
+      non ui-watched line |
+      ui-watched lin^e     |
+      ~                   |
+                          |
+    ]],
+      extmarks = {
+        [2] = {
+          -- earlier notifications
+          { {id = 1000}, 1, 1, 1, 0 },
+          { {id = 1000}, 1, 1, 1, 0 }, { {id = 1000}, 1, 2, 1, 2 },
+          { {id = 1000}, 1, 1, 1, 0 }, { {id = 1000}, 1, 2, 1, 2 }, { {id = 1000}, 1, 3, 1, 4 },
+          { {id = 1000}, 1, 1, 1, 0 }, { {id = 1000}, 1, 2, 1, 2 }, { {id = 1000}, 1, 3, 1, 4 }, { {id = 1000}, 1, 4, 1, 6 },
+          -- final
+          --   overlay
+          { {id = 1000}, 1, 1, 1, 0 },
+          { {id = 1000}, 1, 2, 1, 2 },
+          { {id = 1000}, 1, 3, 1, 4 },
+          { {id = 1000}, 1, 4, 1, 6 },
+          --   eol
+          { {id = 1000}, 1, 5, 1, 16 },
+        }
+      },
+    })
+  end)
+
+  it('updates ui-watched marks', function()
+    screen = Screen.new(20, 4)
+    screen:attach()
+    -- should send this
+    set_extmark(ns, marks[1], 1, 0, { ui_watched = true })
+    -- should not send this
+    set_extmark(ns, marks[2], 0, 0, { ui_watched = false })
+    -- make some changes
+    insert(" update")
+    screen:expect({
+      grid = [[
+      non ui-watched line |
+      ui-watched linupdat^e|
+      e                   |
+                          |
+    ]],
+      extmarks = {
+        [2] = {
+          -- positioned at the end of the 2nd line
+          { {id = 1000}, 1, 1, 1, 16 },
+          -- updated and wrapped to 3rd line
+          { {id = 1000}, 1, 1, 2, 2 },
+        }
+      }
+    })
+    feed("<c-e>")
+    screen:expect({
+      grid = [[
+      ui-watched linupdat^e|
+      e                   |
+      ~                   |
+                          |
+    ]],
+      extmarks = {
+        [2] = {
+          -- positioned at the end of the 2nd line
+          { {id = 1000}, 1, 1, 1, 16 },
+          -- updated and wrapped to 3rd line
+          { {id = 1000}, 1, 1, 2, 2 },
+          -- scrolled up one line, should be handled by grid scroll
+        }
+      }
+    })
+  end)
+
+  it('sends ui-watched to splits', function()
+    screen = Screen.new(20, 8)
+    screen:attach({ext_multigrid=true})
+    -- should send this
+    set_extmark(ns, marks[1], 1, 0, { ui_watched = true })
+    -- should not send this
+    set_extmark(ns, marks[2], 0, 0, { ui_watched = false })
+    command('split')
+    screen:expect({
+      grid = [[
+        ## grid 1
+          [4:--------------------]|
+          [4:--------------------]|
+          [4:--------------------]|
+          [No Name] [+]       |
+          [2:--------------------]|
+          [2:--------------------]|
+          [No Name] [+]       |
+          [3:--------------------]|
+        ## grid 2
+          non ui-watched line |
+          ui-watched line     |
+        ## grid 3
+                              |
+        ## grid 4
+          non ui-watched line |
+          ui-watched lin^e     |
+          ~                   |
+    ]],
+      extmarks = {
+        [2] = {
+          -- positioned at the end of the 2nd line
+          { {id = 1000}, 1, 1, 1, 16 },
+          -- updated after split
+          { {id = 1000}, 1, 1, 1, 16 },
+        },
+        [4] = {
+          -- only after split
+          { {id = 1001}, 1, 1, 1, 16 },
+        }
+      }
+    })
+    -- make some changes
+    insert(" update")
+    screen:expect({
+      grid = [[
+        ## grid 1
+          [4:--------------------]|
+          [4:--------------------]|
+          [4:--------------------]|
+          [No Name] [+]       |
+          [2:--------------------]|
+          [2:--------------------]|
+          [No Name] [+]       |
+          [3:--------------------]|
+        ## grid 2
+          non ui-watched line |
+          ui-watched linupd@@@|
+        ## grid 3
+                              |
+        ## grid 4
+          non ui-watched line |
+          ui-watched linupdat^e|
+          e                   |
+    ]],
+      extmarks = {
+        [2] = {
+          -- positioned at the end of the 2nd line
+          { {id = 1000}, 1, 1, 1, 16 },
+          -- updated after split
+          { {id = 1000}, 1, 1, 1, 16 },
+        },
+        [4] = {
+          { {id = 1001}, 1, 1, 1, 16 },
+          -- updated
+          { {id = 1001}, 1, 1, 2, 2 },
+        }
+      }
+    })
   end)
 end)

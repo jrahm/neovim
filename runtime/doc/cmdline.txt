@@ -67,11 +67,18 @@ CTRL-V		Insert next non-digit literally.  Up to three digits form the
 		decimal value of a single byte.  The non-digit and the three
 		digits are not considered for mapping.  This works the same
 		way as in Insert mode (see above, |i_CTRL-V|).
+		For special keys, the CTRL modifier may be included into the
+		key to produce a control character.  If there is no control
+		character for the key then its |key-notation| is inserted.
 		Note: Under Windows CTRL-V is often mapped to paste text.
 		Use CTRL-Q instead then.
 							*c_CTRL-Q*
 CTRL-Q		Same as CTRL-V.  But with some terminals it is used for
 		control flow, it doesn't work then.
+
+CTRL-SHIFT-V				*c_CTRL-SHIFT-V* *c_CTRL-SHIFT-Q*
+CTRL-SHIFT-Q	Works just like CTRL-V, but do not try to include the CTRL
+		modifier into the key.
 
 							*c_<Left>* *c_Left*
 <Left>		cursor left
@@ -207,7 +214,7 @@ CTRL-\ e {expr}						*c_CTRL-\_e*
 		Example: >
 			:cmap <F7> <C-\>eAppendSome()<CR>
 			:func AppendSome()
-			   :let cmd = getcmdline() . " Some()"
+			   :let cmd = getcmdline() .. " Some()"
 			   :" place the cursor on the )
 			   :call setcmdpos(strlen(cmd))
 			   :return cmd
@@ -679,7 +686,7 @@ If more line specifiers are given than required for the command, the first
 one(s) will be ignored.
 
 Line numbers may be specified with:		*:range* *{address}*
-	{number}	an absolute line number
+	{number}	an absolute line number  *E1247*
 	.		the current line			  *:.*
 	$		the last line in the file		  *:$*
 	%		equal to 1,$ (the entire file)		  *:%*
@@ -870,7 +877,7 @@ Note: these are typed literally, they are not special keys!
 		   When the match is with a file name, it is expanded to the
  		   full path.
 							*:<sfile>* *<sfile>*
-	<sfile>    When executing a ":source" command, is replaced with the
+	<sfile>    When executing a `:source` command, is replaced with the
 		   file name of the sourced file.  *E498*
 		   When executing a function, is replaced with:
 		   "function {function-name}[{lnum}]"
@@ -879,7 +886,7 @@ Note: these are typed literally, they are not special keys!
 		   Note that filename-modifiers are useless when <sfile> is
 		   used inside a function.
 							*:<slnum>* *<slnum>*
-	<slnum>	   When executing a ":source" command, is replaced with the
+	<slnum>	   When executing a `:source` command, is replaced with the
 		   line number.  *E842*
 		   When executing a function it's the line number relative to
 		   the start of the function.
@@ -908,8 +915,7 @@ These modifiers can be given, in this order:
 		directory.
 	:.	Reduce file name to be relative to current directory, if
 		possible.  File name is unmodified if it is not below the
-		current directory, but on MS-Windows the drive is removed if
-		it is the current drive.
+		current directory.
 		For maximum shortness, use ":~:.".
 	:h	Head of the file name (the last component and any separators
 		removed).  Cannot be used with :e, :r or :t.
@@ -1059,8 +1065,7 @@ line contains the command as typed so far.  The left column will show a
 character that indicates the type of command-line being edited, see
 |cmdwin-char|.
 
-Vim will be in Normal mode when the editor is opened, except when 'insertmode'
-is set.
+Vim will be in Normal mode when the editor is opened.
 
 The height of the window is specified with 'cmdwinheight' (or smaller if there
 is no room).  The window is always full width and is positioned just above the
@@ -1131,8 +1136,8 @@ save the command-line history and read it back later.
 If the 'wildchar' option is set to <Tab>, and the command-line window is used
 for an Ex command, then two mappings will be added to use <Tab> for completion
 in the command-line window, like this: >
-	:imap <buffer> <Tab> <C-X><C-V>
-	:nmap <buffer> <Tab> a<C-X><C-V>
+	:inoremap <buffer> <Tab> <C-X><C-V>
+	:nnoremap <buffer> <Tab> a<C-X><C-V>
 Note that hitting <Tab> in Normal mode will do completion on the next
 character.  That way it works at the end of the line.
 If you don't want these mappings, disable them with: >

@@ -164,6 +164,9 @@ if exists(':tlmenu')
 endif
 nnoremenu 20.360 &Edit.&Paste<Tab>"+gP		"+gP
 cnoremenu	 &Edit.&Paste<Tab>"+gP		<C-R>+
+if exists(':tlmenu')
+  tlnoremenu	 &Edit.&Paste<Tab>"+gP		<C-W>"+
+endif
 exe 'vnoremenu <script> &Edit.&Paste<Tab>"+gP	' . paste#paste_cmd['v']
 exe 'inoremenu <script> &Edit.&Paste<Tab>"+gP	' . paste#paste_cmd['i']
 nnoremenu 20.370 &Edit.Put\ &Before<Tab>[p	[p
@@ -569,9 +572,9 @@ func! s:XxdConv()
     %!mc vim:xxd
   else
     call s:XxdFind()
-    exe '%!' . g:xxdprogram
+    exe ':%!' . g:xxdprogram
   endif
-  if getline(1) =~ "^0000000:"		" only if it worked
+  if getline(1) =~ "^00000000:"		" only if it worked
     set ft=xxd
   endif
   let &mod = mod
@@ -583,7 +586,7 @@ func! s:XxdBack()
     %!mc vim:xxd -r
   else
     call s:XxdFind()
-    exe '%!' . g:xxdprogram . ' -r'
+    exe ':%!' . g:xxdprogram . ' -r'
   endif
   set ft=
   doautocmd filetypedetect BufReadPost

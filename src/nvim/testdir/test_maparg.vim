@@ -42,14 +42,53 @@ function Test_maparg()
   map abc y<S-char-114>y
   call assert_equal("yRy", maparg('abc'))
 
+  " character with K_SPECIAL byte
+  nmap abc …
+  call assert_equal('…', maparg('abc'))
+
+  " modified character with K_SPECIAL byte
+  nmap abc <M-…>
+  call assert_equal('<M-…>', maparg('abc'))
+
+  " illegal bytes
+  let str = ":\x7f:\x80:\x90:\xd0:"
+  exe 'nmap abc ' .. str
+  call assert_equal(str, maparg('abc'))
+  unlet str
+
   omap { w
   let d = maparg('{', 'o', 0, 1)
   call assert_equal(['{', 'w', 'o'], [d.lhs, d.rhs, d.mode])
   ounmap {
 
+  lmap { w
+  let d = maparg('{', 'l', 0, 1)
+  call assert_equal(['{', 'w', 'l'], [d.lhs, d.rhs, d.mode])
+  lunmap {
+
+  nmap { w
+  let d = maparg('{', 'n', 0, 1)
+  call assert_equal(['{', 'w', 'n'], [d.lhs, d.rhs, d.mode])
+  nunmap {
+
+  xmap { w
+  let d = maparg('{', 'x', 0, 1)
+  call assert_equal(['{', 'w', 'x'], [d.lhs, d.rhs, d.mode])
+  xunmap {
+
+  smap { w
+  let d = maparg('{', 's', 0, 1)
+  call assert_equal(['{', 'w', 's'], [d.lhs, d.rhs, d.mode])
+  sunmap {
+
   map abc <Nop>
   call assert_equal("<Nop>", maparg('abc'))
   unmap abc
+
+  call feedkeys(":abbr esc \<C-V>\<C-V>\<C-V>\<C-V>\<C-V>\<Esc>\<CR>", "xt")
+  let d = maparg('esc', 'i', 1, 1)
+  call assert_equal(['esc', "\<C-V>\<C-V>\<Esc>", '!'], [d.lhs, d.rhs, d.mode])
+  abclear
 endfunction
 
 func Test_mapcheck()

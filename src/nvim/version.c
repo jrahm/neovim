@@ -35,7 +35,6 @@
 #endif
 #define NVIM_VERSION_LONG "NVIM " NVIM_VERSION_MEDIUM
 
-
 char *Version = VIM_VERSION_SHORT;
 char *longVersion = NVIM_VERSION_LONG;
 char *version_buildtype = "Build type: " NVIM_VERSION_BUILD_TYPE;
@@ -215,7 +214,7 @@ static const int included_patches[] = {
   1709,
   1708,
   1707,
-  // 1706,
+  1706,
   1705,
   1704,
   1703,
@@ -305,14 +304,14 @@ static const int included_patches[] = {
   1619,
   1618,
   1617,
-  // 1616,
+  1616,
   1615,
   1614,
   1613,
   1612,
   1611,
   1610,
-  // 1609,
+  1609,
   1608,
   1607,
   1606,
@@ -333,7 +332,7 @@ static const int included_patches[] = {
   1591,
   1590,
   1589,
-  // 1588,
+  1588,
   1587,
   1586,
   1585,
@@ -347,11 +346,11 @@ static const int included_patches[] = {
   1577,
   1576,
   1575,
-  // 1574,
+  1574,
   1573,
   1572,
   1571,
-  // 1570,
+  1570,
   1569,
   1568,
   1567,
@@ -359,11 +358,11 @@ static const int included_patches[] = {
   1565,
   1564,
   1563,
-  // 1562,
+  1562,
   1561,
   1560,
   1559,
-  // 1558,
+  1558,
   1557,
   1556,
   1555,
@@ -554,7 +553,7 @@ static const int included_patches[] = {
   1370,
   1369,
   1368,
-  // 1367,
+  1367,
   1366,
   1365,
   1364,
@@ -582,11 +581,11 @@ static const int included_patches[] = {
   1342,
   1341,
   1340,
-  // 1339,
+  1339,
   1338,
   1337,
   1336,
-  // 1335,
+  1335,
   1334,
   1333,
   1332,
@@ -614,7 +613,7 @@ static const int included_patches[] = {
   1310,
   1309,
   1308,
-  // 1307,
+  1307,
   1306,
   1305,
   1304,
@@ -802,7 +801,7 @@ static const int included_patches[] = {
   1122,
   1121,
   1120,
-  // 1119,
+  1119,
   1118,
   1117,
   1116,
@@ -1998,6 +1997,7 @@ Dictionary version_dict(void)
   PUT(d, "major", INTEGER_OBJ(NVIM_VERSION_MAJOR));
   PUT(d, "minor", INTEGER_OBJ(NVIM_VERSION_MINOR));
   PUT(d, "patch", INTEGER_OBJ(NVIM_VERSION_PATCH));
+  PUT(d, "prerelease", BOOLEAN_OBJ(NVIM_VERSION_PRERELEASE[0] != '\0'));
   PUT(d, "api_level", INTEGER_OBJ(NVIM_API_LEVEL));
   PUT(d, "api_compatible", INTEGER_OBJ(NVIM_API_LEVEL_COMPAT));
   PUT(d, "api_prerelease", BOOLEAN_OBJ(NVIM_API_PRERELEASE));
@@ -2020,7 +2020,7 @@ void ex_version(exarg_T *eap)
 /// @param wrap
 static void version_msg_wrap(char *s, int wrap)
 {
-  int len = vim_strsize((char_u *)s) + (wrap ? 2 : 0);
+  int len = vim_strsize(s) + (wrap ? 2 : 0);
 
   if (!got_int
       && (len < Columns)
@@ -2053,7 +2053,7 @@ static void list_features(void)
   version_msg(_("\n\nFeatures: "));
   for (int i = 0; features[i] != NULL; i++) {
     version_msg(features[i]);
-    if (features[i+1] != NULL) {
+    if (features[i + 1] != NULL) {
       version_msg(" ");
     }
   }
@@ -2071,7 +2071,7 @@ void list_in_columns(char_u **items, int size, int current)
   // Find the length of the longest item, use that + 1 as the column width.
   int i;
   for (i = 0; size < 0 ? items[i] != NULL : i < size; i++) {
-    int l = vim_strsize(items[i]) + (i == current ? 2 : 0);
+    int l = vim_strsize((char *)items[i]) + (i == current ? 2 : 0);
 
     if (l > width) {
       width = l;
@@ -2093,7 +2093,7 @@ void list_in_columns(char_u **items, int size, int current)
 
   // The rightmost column doesn't need a separator.
   // Sacrifice it to fit in one more column if possible.
-  int ncol = (int)(Columns + 1) / width;
+  int ncol = (Columns + 1) / width;
   int nrow = item_count / ncol + (item_count % ncol ? 1 : 0);
   int cur_row = 1;
 
@@ -2193,15 +2193,14 @@ void list_version(void)
   version_msg("\nRun :checkhealth for more info");
 }
 
-
 /// Show the intro message when not editing a file.
 void maybe_intro_message(void)
 {
   if (buf_is_empty(curbuf)
       && (curbuf->b_fname == NULL)
       && (firstwin->w_next == NULL)
-      && (vim_strchr(p_shm, SHM_INTRO) == NULL)) {
-    intro_message(FALSE);
+      && (vim_strchr((char *)p_shm, SHM_INTRO) == NULL)) {
+    intro_message(false);
   }
 }
 
@@ -2295,7 +2294,7 @@ static void do_intro_line(long row, char_u *mesg, int attr)
   int clen;
 
   // Center the message horizontally.
-  col = vim_strsize(mesg);
+  col = vim_strsize((char *)mesg);
 
   col = (Columns - col) / 2;
 
@@ -2310,8 +2309,8 @@ static void do_intro_line(long row, char_u *mesg, int attr)
     for (l = 0;
          p[l] != NUL && (l == 0 || (p[l] != '<' && p[l - 1] != '>'));
          l++) {
-      clen += ptr2cells(p + l);
-      l += utfc_ptr2len(p + l) - 1;
+      clen += ptr2cells((char *)p + l);
+      l += utfc_ptr2len((char *)p + l) - 1;
     }
     assert(row <= INT_MAX && col <= INT_MAX);
     grid_puts_len(&default_grid, p, l, (int)row, (int)col,
@@ -2329,4 +2328,3 @@ void ex_intro(exarg_T *eap)
   intro_message(TRUE);
   wait_return(TRUE);
 }
-

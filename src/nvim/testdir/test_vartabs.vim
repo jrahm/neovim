@@ -1,8 +1,7 @@
 " Test for variable tabstops
 
-if !has("vartabs")
-  finish
-endif
+source check.vim
+CheckFeature vartabs
 
 source view_util.vim
 
@@ -92,6 +91,18 @@ func Test_vartabs()
   let expect = "l\<tab>  l\<tab>l     l\<tab>    l\<tab>  l"
   call assert_equal(expect, getline(1))
 
+  " Test for 'retab' with vts
+  set ts=8 sts=0 vts=5,3,6,2 vsts=
+  exe "norm! S                l"
+  .retab!
+  call assert_equal("\t\t\t\tl", getline(1))
+
+  " Test for 'retab' with same vlaues as vts
+  set ts=8 sts=0 vts=5,3,6,2 vsts=
+  exe "norm! S                l"
+  .retab! 5,3,6,2
+  call assert_equal("\t\t\t\tl", getline(1))
+
   " Check that global and local values are set.
   set ts=4 vts=6 sts=8 vsts=10
   call assert_equal(&ts, 4)
@@ -135,7 +146,17 @@ func Test_vartabs()
   bwipeout!
 endfunc
 
-func! Test_vartabs_breakindent()
+func Test_retab_invalid_arg()
+  new
+  call setline(1, "\ttext")
+  retab 0
+  call assert_fails("retab -8", 'E487: Argument must be positive')
+  call assert_fails("retab 10000", 'E475:')
+  call assert_fails("retab 720575940379279360", 'E475:')
+  bwipe!
+endfunc
+
+func Test_vartabs_breakindent()
   if !exists("+breakindent")
     return
   endif
@@ -379,3 +400,33 @@ func Test_vartabs_reset()
   set all&
   call assert_equal('', &vts)
 endfunc
+
+func s:SaveCol(l)
+  call add(a:l, [col('.'), virtcol('.')])
+  return ''
+endfunc
+
+" Test for 'varsofttabstop'
+func Test_varsofttabstop()
+  new
+  inoremap <expr> <F2>  s:SaveCol(g:cols)
+
+  set backspace=indent,eol,start
+  set varsofttabstop=6,2,5,3
+  let g:cols = []
+  call feedkeys("a\t\<F2>\t\<F2>\t\<F2>\t\<F2> ", 'xt')
+  call assert_equal("\t\t ", getline(1))
+  call assert_equal([[7, 7], [2, 9], [7, 14], [3, 17]], g:cols)
+
+  let g:cols = []
+  call feedkeys("a\<bs>\<F2>\<bs>\<F2>\<bs>\<F2>\<bs>\<F2>\<bs>\<F2>", 'xt')
+  call assert_equal('', getline(1))
+  call assert_equal([[3, 17], [7, 14], [2, 9], [7, 7], [1, 1]], g:cols)
+
+  set varsofttabstop&
+  set backspace&
+  iunmap <F2>
+  close!
+endfunc
+
+" vim: shiftwidth=2 sts=2 expandtab

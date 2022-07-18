@@ -2,12 +2,14 @@
 "
 " Not tested yet:
 "   %N
-"   %T
-"   %X
 
 source view_util.vim
 source check.vim
 source term_util.vim
+
+func SetUp()
+  set laststatus=2
+endfunc
 
 func s:get_statusline()
   return ScreenLines(&lines - 1, &columns)[0]
@@ -104,6 +106,18 @@ func Test_statusline()
   set statusline=%F
   call assert_match('/testdir/Xstatusline\s*$', s:get_statusline())
 
+  " Test for min and max width with %(. For some reason, if this test is moved
+  " after the below test for the help buffer flag, then the code to truncate
+  " the string is not executed.
+  set statusline=%015(%f%)
+  call assert_match('^    Xstatusline\s*$', s:get_statusline())
+  set statusline=%.6(%f%)
+  call assert_match('^<sline\s*$', s:get_statusline())
+  set statusline=%14f
+  call assert_match('^   Xstatusline\s*$', s:get_statusline())
+  set statusline=%.4L
+  call assert_match('^10>3\s*$', s:get_statusline())
+
   " %h: Help buffer flag, text is "[help]".
   " %H: Help buffer flag, text is ",HLP".
   set statusline=%h,%H
@@ -186,7 +200,16 @@ func Test_statusline()
   set virtualedit=all
   norm 10|
   call assert_match('^10,-10\s*$', s:get_statusline())
+  set list
+  call assert_match('^10,-10\s*$', s:get_statusline())
   set virtualedit&
+  exe "norm A\<Tab>\<Tab>a\<Esc>"
+  " In list mode a <Tab> is shown as "^I", which is 2-wide.
+  call assert_match('^9,-9\s*$', s:get_statusline())
+  set list&
+  " Now the second <Tab> ends at the 16th screen column.
+  call assert_match('^17,-17\s*$', s:get_statusline())
+  undo
 
   " %w: Preview window flag, text is "[Preview]".
   " %W: Preview window flag, text is ",PRV".
@@ -452,7 +475,6 @@ func Test_statusline_removed_group()
   call writefile(lines, 'XTest_statusline')
 
   let buf = RunVimInTerminal('-S XTest_statusline', {'rows': 10, 'cols': 50})
-  call term_wait(buf, 100)
   call VerifyScreenDump(buf, 'Test_statusline_1', {})
 
   " clean up
@@ -498,5 +520,50 @@ func Test_statusline_after_split_vsplit()
   set ls& stl&
 endfunc
 
+" Test using a multibyte character for 'stl' and 'stlnc' items in 'fillchars'
+" with a custom 'statusline'
+func Test_statusline_mbyte_fillchar()
+  only
+  set laststatus=2
+  set fillchars=vert:\|,fold:-,stl:━,stlnc:═
+  set statusline=a%=b
+  call assert_match('^a\+━\+b$', s:get_statusline())
+  vnew
+  call assert_match('^a\+━\+b━a\+═\+b$', s:get_statusline())
+  wincmd w
+  call assert_match('^a\+═\+b═a\+━\+b$', s:get_statusline())
+  set statusline& fillchars& laststatus&
+  %bw!
+endfunc
+
+" Used to write beyond allocated memory.  This assumes MAXPATHL is 4096 bytes.
+func Test_statusline_verylong_filename()
+  let fname = repeat('x', 4090)
+  " Nvim's swap file creation fails on Windows (E303) due to fname's length
+  " exe "new " .. fname
+  exe "noswapfile new " .. fname
+  set buftype=help
+  set previewwindow
+  redraw
+  bwipe!
+endfunc
+
+func Test_statusline_highlight_truncate()
+  CheckScreendump
+
+  let lines =<< trim END
+    set laststatus=2
+    hi! link User1 Directory
+    hi! link User2 ErrorMsg
+    set statusline=%.5(%1*ABC%2*DEF%1*GHI%)
+  END
+  call writefile(lines, 'XTest_statusline')
+
+  let buf = RunVimInTerminal('-S XTest_statusline', {'rows': 6})
+  call VerifyScreenDump(buf, 'Test_statusline_hl', {})
+
+  call StopVimInTerminal(buf)
+  call delete('XTest_statusline')
+endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

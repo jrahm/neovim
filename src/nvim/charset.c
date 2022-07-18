@@ -34,7 +34,6 @@
 # include "charset.c.generated.h"
 #endif
 
-
 static bool chartab_initialized = false;
 
 // b_chartab[] is an array with 256 bits, each bit representing one of the
@@ -159,21 +158,21 @@ int buf_init_chartab(buf_T *buf, int global)
 
       if ((*p == '^') && (p[1] != NUL)) {
         tilde = true;
-        ++p;
+        p++;
       }
 
       if (ascii_isdigit(*p)) {
-        c = getdigits_int((char_u **)&p, true, 0);
+        c = getdigits_int((char **)&p, true, 0);
       } else {
         c = mb_ptr2char_adv(&p);
       }
       c2 = -1;
 
       if ((*p == '-') && (p[1] != NUL)) {
-        ++p;
+        p++;
 
         if (ascii_isdigit(*p)) {
-          c2 = getdigits_int((char_u **)&p, true, 0);
+          c2 = getdigits_int((char **)&p, true, 0);
         } else {
           c2 = mb_ptr2char_adv(&p);
         }
@@ -217,9 +216,7 @@ int buf_init_chartab(buf_T *buf, int global)
             }
           } else if (i == 1) {
             // (re)set printable
-            // For double-byte we keep the cell width, so
-            // that we can detect it from the first byte.
-            if (((c < ' ') || (c > '~'))) {
+            if (c < ' ' || c > '~') {
               if (tilde) {
                 g_chartab[c] = (uint8_t)((g_chartab[c] & ~CT_CELL_MASK)
                                          + ((dy_flags & DY_UHEX) ? 4 : 2));
@@ -245,7 +242,7 @@ int buf_init_chartab(buf_T *buf, int global)
             }
           }
         }
-        ++c;
+        c++;
       }
 
       c = *p;
@@ -268,22 +265,19 @@ int buf_init_chartab(buf_T *buf, int global)
 ///
 /// @param buf
 /// @param bufsize
-void trans_characters(char_u *buf, int bufsize)
+void trans_characters(char *buf, int bufsize)
 {
-  int len;          // length of string needing translation
-  int room;         // room in buffer after string
-  char_u *trs;      // translated character
-  int trs_len;      // length of trs[]
-
-  len = (int)STRLEN(buf);
-  room = bufsize - len;
+  char_u *trs;                 // translated character
+  int len = (int)STRLEN(buf);  // length of string needing translation
+  int room = bufsize - len;    // room in buffer after string
 
   while (*buf != 0) {
+    int trs_len;      // length of trs[]
     // Assume a multi-byte character doesn't need translation.
     if ((trs_len = utfc_ptr2len(buf)) > 1) {
       len -= trs_len;
     } else {
-      trs = transchar_byte(*buf);
+      trs = transchar_byte((uint8_t)(*buf));
       trs_len = (int)STRLEN(trs);
 
       if (trs_len > 1) {
@@ -294,7 +288,7 @@ void trans_characters(char_u *buf, int bufsize)
         memmove(buf + trs_len, buf + 1, (size_t)len);
       }
       memmove(buf, trs, (size_t)trs_len);
-      --len;
+      len--;
     }
     buf += trs_len;
   }
@@ -316,7 +310,7 @@ size_t transstr_len(const char *const s, bool untab)
   size_t len = 0;
 
   while (*p) {
-    const size_t l = (size_t)utfc_ptr2len((const char_u *)p);
+    const size_t l = (size_t)utfc_ptr2len(p);
     if (l > 1) {
       int pcc[MAX_MCO + 1];
       pcc[0] = utfc_ptr2char((const char_u *)p, &pcc[1]);
@@ -359,7 +353,7 @@ size_t transstr_buf(const char *const s, char *const buf, const size_t len, bool
   char *const buf_e = buf_p + len - 1;
 
   while (*p != NUL && buf_p < buf_e) {
-    const size_t l = (size_t)utfc_ptr2len((const char_u *)p);
+    const size_t l = (size_t)utfc_ptr2len(p);
     if (l > 1) {
       if (buf_p + l > buf_e) {
         break;  // Exceeded `buf` size.
@@ -429,10 +423,10 @@ char_u *str_foldcase(char_u *str, int orglen, char_u *buf, int buflen)
   int i;
   int len = orglen;
 
-#define GA_CHAR(i) ((char_u *)ga.ga_data)[i]
-#define GA_PTR(i) ((char_u *)ga.ga_data + i)
+#define GA_CHAR(i) ((char *)ga.ga_data)[i]
+#define GA_PTR(i) ((char_u *)ga.ga_data + (i))
 #define STR_CHAR(i) (buf == NULL ? GA_CHAR(i) : buf[i])
-#define STR_PTR(i) (buf == NULL ? GA_PTR(i) : buf + i)
+#define STR_PTR(i) (buf == NULL ? GA_PTR(i) : buf + (i))
 
   // Copy "str" into "buf" or allocated memory, unmodified.
   if (buf == NULL) {
@@ -458,8 +452,8 @@ char_u *str_foldcase(char_u *str, int orglen, char_u *buf, int buflen)
   // Make each character lower case.
   i = 0;
   while (STR_CHAR(i) != NUL) {
-    int c = utf_ptr2char(STR_PTR(i));
-    int olen = utf_ptr2len(STR_PTR(i));
+    int c = utf_ptr2char((char *)STR_PTR(i));
+    int olen = utf_ptr2len((char *)STR_PTR(i));
     int lc = mb_tolower(c);
 
     // Only replace the character when it is not an invalid
@@ -493,13 +487,12 @@ char_u *str_foldcase(char_u *str, int orglen, char_u *buf, int buflen)
           }
         }
       }
-      (void)utf_char2bytes(lc, STR_PTR(i));
+      (void)utf_char2bytes(lc, (char *)STR_PTR(i));
     }
 
     // skip to next multi-byte char
-    i += utfc_ptr2len(STR_PTR(i));
+    i += utfc_ptr2len((char *)STR_PTR(i));
   }
-
 
   if (buf == NULL) {
     return (char_u *)ga.ga_data;
@@ -539,7 +532,7 @@ char_u *transchar_buf(const buf_T *buf, int c)
     c = K_SECOND(c);
   }
 
-  if ((!chartab_initialized && (((c >= ' ') && (c <= '~'))))
+  if ((!chartab_initialized && (c >= ' ' && c <= '~'))
       || ((c <= 0xFF) && vim_isprintc_strict(c))) {
     // printable character
     transchar_charbuf[i] = (char_u)c;
@@ -659,6 +652,7 @@ static inline unsigned nr2hex(unsigned n)
 ///
 /// @reeturn Number of display cells.
 int byte2cells(int b)
+  FUNC_ATTR_PURE
 {
   if (b >= 0x80) {
     return 0;
@@ -693,11 +687,12 @@ int char2cells(int c)
 /// @param p
 ///
 /// @return number of display cells.
-int ptr2cells(const char_u *p)
+int ptr2cells(const char *p_in)
 {
+  uint8_t *p = (uint8_t *)p_in;
   // For UTF-8 we need to look at more bytes if the first byte is >= 0x80.
   if (*p >= 0x80) {
-    return utf_ptr2cells(p);
+    return utf_ptr2cells(p_in);
   }
 
   // For DBCS we can tell the cell count from the first byte.
@@ -712,9 +707,9 @@ int ptr2cells(const char_u *p)
 /// @param s
 ///
 /// @return number of character cells.
-int vim_strsize(char_u *s)
+int vim_strsize(char *s)
 {
-  return vim_strnsize(s, MAXCOL);
+  return vim_strnsize((char_u *)s, MAXCOL);
 }
 
 /// Return the number of character cells string "s[len]" will take on the
@@ -731,8 +726,8 @@ int vim_strnsize(char_u *s, int len)
   assert(s != NULL);
   int size = 0;
   while (*s != NUL && --len >= 0) {
-    int l = utfc_ptr2len(s);
-    size += ptr2cells(s);
+    int l = utfc_ptr2len((char *)s);
+    size += ptr2cells((char *)s);
     s += l;
     len -= l - 1;
   }
@@ -810,7 +805,7 @@ bool vim_iswordp_buf(const char_u *const p, buf_T *const buf)
   int c = *p;
 
   if (MB_BYTE2LEN(c) > 1) {
-    c = utf_ptr2char(p);
+    c = utf_ptr2char((char *)p);
   }
   return vim_iswordc_buf(c, buf);
 }
@@ -875,14 +870,11 @@ bool vim_isprintc_strict(int c)
 bool in_win_border(win_T *wp, colnr_T vcol)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ARG(1)
 {
-  int width1;             // width of first line (after line number)
-  int width2;             // width of further lines
-
   if (wp->w_width_inner == 0) {
     // there is no border
     return false;
   }
-  width1 = wp->w_width_inner - win_col_off(wp);
+  int width1 = wp->w_width_inner - win_col_off(wp);  // width of first line (after line number)
 
   if ((int)vcol < width1 - 1) {
     return false;
@@ -891,7 +883,7 @@ bool in_win_border(win_T *wp, colnr_T vcol)
   if ((int)vcol == width1 - 1) {
     return true;
   }
-  width2 = width1 + win_col_off2(wp);
+  int width2 = width1 + win_col_off2(wp);  // width of further lines
 
   if (width2 <= 0) {
     return false;
@@ -913,27 +905,26 @@ bool in_win_border(win_T *wp, colnr_T vcol)
 /// @param end
 void getvcol(win_T *wp, pos_T *pos, colnr_T *start, colnr_T *cursor, colnr_T *end)
 {
-  colnr_T vcol;
   char_u *ptr;    // points to current char
   char_u *posptr;  // points to char at pos->col
-  char_u *line;   // start of the line
   int incr;
   int head;
   long *vts = wp->w_buffer->b_p_vts_array;
   int ts = (int)wp->w_buffer->b_p_ts;
-  int c;
 
-  vcol = 0;
-  line = ptr = ml_get_buf(wp->w_buffer, pos->lnum, false);
+  colnr_T vcol = 0;
+  char_u *line = ptr = ml_get_buf(wp->w_buffer, pos->lnum, false);  // start of the line
 
   if (pos->col == MAXCOL) {
     // continue until the NUL
     posptr = NULL;
   } else {
-    // Special check for an empty line, which can happen on exit, when
-    // ml_get_buf() always returns an empty string.
-    if (*ptr == NUL) {
-      pos->col = 0;
+    // In a few cases the position can be beyond the end of the line.
+    for (colnr_T i = 0; i < pos->col; i++) {
+      if (ptr[i] == NUL) {
+        pos->col = i;
+        break;
+      }
     }
     posptr = ptr + pos->col;
     posptr -= utf_head_off(line, posptr);
@@ -949,7 +940,7 @@ void getvcol(win_T *wp, pos_T *pos, colnr_T *start, colnr_T *cursor, colnr_T *en
       && !wp->w_p_bri) {
     for (;;) {
       head = 0;
-      c = *ptr;
+      int c = *ptr;
 
       // make sure we don't go past the end of the line
       if (c == NUL) {
@@ -965,7 +956,7 @@ void getvcol(win_T *wp, pos_T *pos, colnr_T *start, colnr_T *cursor, colnr_T *en
         // For utf-8, if the byte is >= 0x80, need to look at
         // further bytes to find the cell width.
         if (c >= 0x80) {
-          incr = utf_ptr2cells(ptr);
+          incr = utf_ptr2cells((char *)ptr);
         } else {
           incr = g_chartab[c] & CT_CELL_MASK;
         }
@@ -1023,7 +1014,7 @@ void getvcol(win_T *wp, pos_T *pos, colnr_T *start, colnr_T *cursor, colnr_T *en
 
   if (cursor != NULL) {
     if ((*ptr == TAB)
-        && (State & NORMAL)
+        && (State & MODE_NORMAL)
         && !wp->w_p_list
         && !virtual_active()
         && !(VIsual_active && ((*p_sel == 'e') || ltoreq(*pos, VIsual)))) {
@@ -1066,22 +1057,19 @@ colnr_T getvcol_nolist(pos_T *posp)
 void getvvcol(win_T *wp, pos_T *pos, colnr_T *start, colnr_T *cursor, colnr_T *end)
 {
   colnr_T col;
-  colnr_T coladd;
-  colnr_T endadd;
-  char_u *ptr;
 
   if (virtual_active()) {
     // For virtual mode, only want one value
     getvcol(wp, pos, &col, NULL, NULL);
 
-    coladd = pos->coladd;
-    endadd = 0;
+    colnr_T coladd = pos->coladd;
+    colnr_T endadd = 0;
 
     // Cannot put the cursor on part of a wide character.
-    ptr = ml_get_buf(wp->w_buffer, pos->lnum, false);
+    char_u *ptr = ml_get_buf(wp->w_buffer, pos->lnum, false);
 
     if (pos->col < (colnr_T)STRLEN(ptr)) {
-      int c = utf_ptr2char(ptr + pos->col);
+      int c = utf_ptr2char((char *)ptr + pos->col);
       if ((c != TAB) && vim_isprintc(c)) {
         endadd = (colnr_T)(char2cells(c) - 1);
         if (coladd > endadd) {
@@ -1155,11 +1143,11 @@ void getvcols(win_T *wp, pos_T *pos1, pos_T *pos2, colnr_T *left, colnr_T *right
 /// @param[in]  p  String to skip in.
 ///
 /// @return Pointer to character after the skipped whitespace.
-char_u *skipwhite(const char_u *const p)
+char *skipwhite(const char *const p)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
   FUNC_ATTR_NONNULL_RET
 {
-  return skipwhite_len(p, STRLEN(p));
+  return (char *)skipwhite_len((char_u *)p, STRLEN(p));
 }
 
 /// Like `skipwhite`, but skip up to `len` characters.
@@ -1188,8 +1176,9 @@ intptr_t getwhitecols_curline(void)
 }
 
 intptr_t getwhitecols(const char_u *p)
+  FUNC_ATTR_PURE
 {
-  return skipwhite(p) - p;
+  return (char_u *)skipwhite((char *)p) - p;
 }
 
 /// Skip over digits
@@ -1197,16 +1186,16 @@ intptr_t getwhitecols(const char_u *p)
 /// @param[in]  q  String to skip digits in.
 ///
 /// @return Pointer to the character after the skipped digits.
-char_u *skipdigits(const char_u *q)
+char *skipdigits(const char *q)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
   FUNC_ATTR_NONNULL_RET
 {
-  const char_u *p = q;
+  const char *p = q;
   while (ascii_isdigit(*p)) {
     // skip to next non-digit
     p++;
   }
-  return (char_u *)p;
+  return (char *)p;
 }
 
 /// skip over binary digits
@@ -1234,6 +1223,7 @@ const char *skipbin(const char *q)
 /// @return Pointer to the character after the skipped digits and hex
 ///         characters.
 char_u *skiphex(char_u *q)
+  FUNC_ATTR_PURE
 {
   char_u *p = q;
   while (ascii_isxdigit(*p)) {
@@ -1249,6 +1239,7 @@ char_u *skiphex(char_u *q)
 ///
 /// @return Pointer to the digit or (NUL after the string).
 char_u *skiptodigit(char_u *q)
+  FUNC_ATTR_PURE
 {
   char_u *p = q;
   while (*p != NUL && !ascii_isdigit(*p)) {
@@ -1282,6 +1273,7 @@ const char *skiptobin(const char *q)
 ///
 /// @return Pointer to the hex character or (NUL after the string).
 char_u *skiptohex(char_u *q)
+  FUNC_ATTR_PURE
 {
   char_u *p = q;
   while (*p != NUL && !ascii_isxdigit(*p)) {
@@ -1297,7 +1289,7 @@ char_u *skiptohex(char_u *q)
 ///
 /// @return Pointer to the next whitespace or NUL character.
 char_u *skiptowhite(const char_u *p)
-  FUNC_ATTR_NONNULL_ALL
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE
 {
   while (*p != ' ' && *p != '\t' && *p != NUL) {
     p++;
@@ -1310,13 +1302,14 @@ char_u *skiptowhite(const char_u *p)
 /// @param p
 ///
 /// @return Pointer to the next whitespace character.
-char_u *skiptowhite_esc(char_u *p)
+char *skiptowhite_esc(char *p)
+  FUNC_ATTR_PURE
 {
   while (*p != ' ' && *p != '\t' && *p != NUL) {
     if (((*p == '\\') || (*p == Ctrl_V)) && (*(p + 1) != NUL)) {
-      ++p;
+      p++;
     }
-    ++p;
+    p++;
   }
   return p;
 }
@@ -1340,10 +1333,10 @@ char_u *skip_to_newline(const char_u *const p)
 /// @param[out]  nr  Number read from the string.
 ///
 /// @return true on success, false on error/overflow
-bool try_getdigits(char_u **pp, intmax_t *nr)
+bool try_getdigits(char **pp, intmax_t *nr)
 {
   errno = 0;
-  *nr = strtoimax((char *)(*pp), (char **)pp, 10);
+  *nr = strtoimax(*pp, pp, 10);
   if (errno == ERANGE && (*nr == INTMAX_MIN || *nr == INTMAX_MAX)) {
     return false;
   }
@@ -1361,7 +1354,7 @@ bool try_getdigits(char_u **pp, intmax_t *nr)
 intmax_t getdigits(char_u **pp, bool strict, intmax_t def)
 {
   intmax_t number;
-  int ok = try_getdigits(pp, &number);
+  int ok = try_getdigits((char **)pp, &number);
   if (strict && !ok) {
     abort();
   }
@@ -1371,9 +1364,9 @@ intmax_t getdigits(char_u **pp, bool strict, intmax_t def)
 /// Gets an int number from a string.
 ///
 /// @see getdigits
-int getdigits_int(char_u **pp, bool strict, int def)
+int getdigits_int(char **pp, bool strict, int def)
 {
-  intmax_t number = getdigits(pp, strict, def);
+  intmax_t number = getdigits((char_u **)pp, strict, def);
 #if SIZEOF_INTMAX_T > SIZEOF_INT
   if (strict) {
     assert(number >= INT_MIN && number <= INT_MAX);
@@ -1400,12 +1393,29 @@ long getdigits_long(char_u **pp, bool strict, long def)
   return (long)number;
 }
 
+/// Gets a int32_t number from a string.
+///
+/// @see getdigits
+int32_t getdigits_int32(char **pp, bool strict, long def)
+{
+  intmax_t number = getdigits((char_u **)pp, strict, def);
+#if SIZEOF_INTMAX_T > SIZEOF_INT32_T
+  if (strict) {
+    assert(number >= INT32_MIN && number <= INT32_MAX);
+  } else if (!(number >= INT32_MIN && number <= INT32_MAX)) {
+    return (int32_t)def;
+  }
+#endif
+  return (int32_t)number;
+}
+
 /// Check that "lbuf" is empty or only contains blanks.
 ///
 /// @param  lbuf  line buffer to check
 bool vim_isblankline(char_u *lbuf)
+  FUNC_ATTR_PURE
 {
-  char_u *p = skipwhite(lbuf);
+  char_u *p = (char_u *)skipwhite((char *)lbuf);
   return *p == NUL || *p == '\r' || *p == '\n';
 }
 
@@ -1441,7 +1451,7 @@ bool vim_isblankline(char_u *lbuf)
 /// @param unptr Returns the unsigned result.
 /// @param maxlen Max length of string to check.
 /// @param strict If true, fail if the number has unexpected trailing
-///               alpha-numeric chars: *len is set to 0 and nothing else is
+///               alphanumeric chars: *len is set to 0 and nothing else is
 ///               returned.
 void vim_str2nr(const char_u *const start, int *const prep, int *const len, const int what,
                 varnumber_T *const nptr, uvarnumber_T *const unptr, const int maxlen,
@@ -1502,7 +1512,7 @@ void vim_str2nr(const char_u *const start, int *const prep, int *const len, cons
   } else if ((what & (STR2NR_HEX | STR2NR_OCT | STR2NR_OOCT | STR2NR_BIN))
              && !STRING_ENDED(ptr + 1) && ptr[0] == '0' && ptr[1] != '8'
              && ptr[1] != '9') {
-    pre = ptr[1];
+    pre = (char_u)ptr[1];
     // Detect hexadecimal: 0x or 0X followed by hex digit.
     if ((what & STR2NR_HEX)
         && !STRING_ENDED(ptr + 2)
@@ -1546,6 +1556,7 @@ void vim_str2nr(const char_u *const start, int *const prep, int *const len, cons
 
   // Do the conversion manually to avoid sscanf() quirks.
   abort();  // Should’ve used goto earlier.
+  // -V:PARSE_NUMBER:560
 #define PARSE_NUMBER(base, cond, conv) \
   do { \
     const char *const after_prefix = ptr; \
@@ -1562,10 +1573,10 @@ void vim_str2nr(const char_u *const start, int *const prep, int *const len, cons
       } \
       const uvarnumber_T digit = (uvarnumber_T)(conv); \
       /* avoid ubsan error for overflow */ \
-      if (un < UVARNUMBER_MAX / base \
-          || (un == UVARNUMBER_MAX / base \
-              && (base != 10 || digit <= UVARNUMBER_MAX % 10))) { \
-        un = base * un + digit; \
+      if (un < UVARNUMBER_MAX / (base) \
+          || (un == UVARNUMBER_MAX / (base) \
+              && ((base) != 10 || digit <= UVARNUMBER_MAX % 10))) { \
+        un = (base) * un + digit; \
       } else { \
         un = UVARNUMBER_MAX; \
       } \
@@ -1587,7 +1598,7 @@ vim_str2nr_hex:
 #undef PARSE_NUMBER
 
 vim_str2nr_proceed:
-  // Check for an alpha-numeric character immediately following, that is
+  // Check for an alphanumeric character immediately following, that is
   // most likely a typo.
   if (strict && ptr - (const char *)start != maxlen && ASCII_ISALNUM(*ptr)) {
     return;
@@ -1630,6 +1641,7 @@ vim_str2nr_proceed:
 ///
 /// @return The value of the hex character.
 int hex2nr(int c)
+  FUNC_ATTR_CONST
 {
   if ((c >= 'a') && (c <= 'f')) {
     return c - 'a' + 10;
@@ -1644,6 +1656,7 @@ int hex2nr(int c)
 /// Convert two hex characters to a byte.
 /// Return -1 if one of the characters is not hex.
 int hexhex2nr(char_u *p)
+  FUNC_ATTR_PURE
 {
   if (!ascii_isxdigit(p[0]) || !ascii_isxdigit(p[1])) {
     return -1;
@@ -1686,7 +1699,7 @@ bool rem_backslash(const char_u *str)
 /// @param p
 void backslash_halve(char_u *p)
 {
-  for (; *p; ++p) {
+  for (; *p; p++) {
     if (rem_backslash(p)) {
       STRMOVE(p, p + 1);
     }

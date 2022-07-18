@@ -15,6 +15,9 @@ local pcall_err = helpers.pcall_err
 local shallowcopy = helpers.shallowcopy
 local sleep = helpers.sleep
 
+local sid_api_client = -9
+local sid_lua = -8
+
 describe('nvim_get_keymap', function()
   before_each(clear)
 
@@ -318,7 +321,7 @@ describe('nvim_get_keymap', function()
     eq({space_table}, meths.get_keymap('n'))
   end)
 
-  it('can handle lua keymaps', function()
+  it('can handle lua mappings', function()
     eq(0, exec_lua [[
       GlobalCount = 0
       vim.api.nvim_set_keymap ('n', 'asdf', '', {callback = function() GlobalCount = GlobalCount + 1 end })
@@ -333,14 +336,14 @@ describe('nvim_get_keymap', function()
       return GlobalCount
     ]])
     local mapargs = meths.get_keymap('n')
-    assert.Truthy(type(mapargs[1].callback) == 'number', 'callback is not luaref number')
+    assert(type(mapargs[1].callback) == 'number', 'callback is not luaref number')
     mapargs[1].callback = nil
     eq({
       lhs='asdf',
       script=0,
       silent=0,
       expr=0,
-      sid=0,
+      sid=sid_lua,
       buffer=0,
       nowait=0,
       mode='n',
@@ -357,7 +360,7 @@ describe('nvim_get_keymap', function()
       script=0,
       silent=0,
       expr=0,
-      sid=0,
+      sid=sid_api_client,
       buffer=0,
       nowait=0,
       mode='n',
@@ -400,7 +403,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
     to_return.silent = not opts.silent and 0 or 1
     to_return.nowait = not opts.nowait and 0 or 1
     to_return.expr = not opts.expr and 0 or 1
-    to_return.sid = not opts.sid and 0 or opts.sid
+    to_return.sid = not opts.sid and sid_api_client or opts.sid
     to_return.buffer = not opts.buffer and 0 or opts.buffer
     to_return.lnum = not opts.lnum and 0 or opts.lnum
     to_return.desc = opts.desc
@@ -579,7 +582,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
   it('can set mappings containing literal keycodes', function()
     meths.set_keymap('n', '\n\r\n', 'rhs', {})
     local expected = generate_mapargs('n', '<NL><CR><NL>', 'rhs')
-    eq(expected, get_mapargs('n', '<C-j><CR><C-j>'))
+    eq(expected, get_mapargs('n', '<NL><CR><NL>'))
   end)
 
   it('can set mappings whose RHS is a <Nop>', function()
@@ -603,6 +606,13 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
     eq({''}, curbufmeths.get_lines(0, -1, 0))
     eq(generate_mapargs('i', 'lhs', '<NOP>', {}),
        get_mapargs('i', 'lhs'))
+
+    -- a single ^V in RHS is also <Nop> (see :h map-empty-rhs)
+    meths.set_keymap('i', 'lhs', '\022', {})
+    command('normal ilhs')
+    eq({''}, curbufmeths.get_lines(0, -1, 0))
+    eq(generate_mapargs('i', 'lhs', '\022', {}),
+       get_mapargs('i', 'lhs'))
   end)
 
   it('treats an empty RHS in a mapping like a <Nop>', function()
@@ -625,7 +635,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
   it('interprets control sequences in expr-quotes correctly when called '
      ..'inside vim', function()
     command([[call nvim_set_keymap('i', "\<space>", "\<tab>", {})]])
-    eq(generate_mapargs('i', '<Space>', '\t', {}),
+    eq(generate_mapargs('i', '<Space>', '\t', {sid=0}),
        get_mapargs('i', '<Space>'))
     feed('i ')
     eq({'\t'}, curbufmeths.get_lines(0, -1, 0))
@@ -782,7 +792,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
 
   end)
 
-  it (':map command shows lua keymap correctly', function()
+  it (':map command shows lua mapping correctly', function()
     exec_lua [[
       vim.api.nvim_set_keymap ('n', 'asdf', '', {callback = function() print('jkl;') end })
     ]]
@@ -790,7 +800,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
                   "^\nn  asdf          <Lua function %d+>"))
   end)
 
-  it ('mapcheck() returns lua keymap correctly', function()
+  it ('mapcheck() returns lua mapping correctly', function()
     exec_lua [[
       vim.api.nvim_set_keymap ('n', 'asdf', '', {callback = function() print('jkl;') end })
     ]]
@@ -798,16 +808,16 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
                   "^<Lua function %d+>"))
   end)
 
-  it ('maparg() returns lua keymap correctly', function()
+  it ('maparg() returns lua mapping correctly', function()
     exec_lua [[
       vim.api.nvim_set_keymap ('n', 'asdf', '', {callback = function() print('jkl;') end })
     ]]
     assert.truthy(string.match(funcs.maparg('asdf', 'n'),
                   "^<Lua function %d+>"))
     local mapargs = funcs.maparg('asdf', 'n', false, true)
-    assert.Truthy(type(mapargs.callback) == 'number', 'callback is not luaref number')
+    assert(type(mapargs.callback) == 'number', 'callback is not luaref number')
     mapargs.callback = nil
-    eq(generate_mapargs('n', 'asdf', nil, {}), mapargs)
+    eq(generate_mapargs('n', 'asdf', nil, {sid=sid_lua}), mapargs)
   end)
 
   it('can make lua expr mappings', function()
@@ -871,7 +881,28 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
     eq('\nNo mapping found', helpers.exec_capture('nmap asdf'))
   end)
 
-  it('can set descriptions on keymaps', function()
+  it('no double-free when unmapping simplifiable lua mappings', function()
+    eq(0, exec_lua [[
+      GlobalCount = 0
+      vim.api.nvim_set_keymap('n', '<C-I>', '', {callback = function() GlobalCount = GlobalCount + 1 end })
+      return GlobalCount
+    ]])
+
+    feed('<C-I>\n')
+
+    eq(1, exec_lua[[return GlobalCount]])
+
+    exec_lua [[
+      vim.api.nvim_del_keymap('n', '<C-I>')
+    ]]
+
+    feed('<C-I>\n')
+
+    eq(1, exec_lua[[return GlobalCount]])
+    eq('\nNo mapping found', helpers.exec_capture('nmap <C-I>'))
+  end)
+
+  it('can set descriptions on mappings', function()
     meths.set_keymap('n', 'lhs', 'rhs', {desc="map description"})
     eq(generate_mapargs('n', 'lhs', 'rhs', {desc="map description"}), get_mapargs('n', 'lhs'))
     eq("\nn  lhs           rhs\n                 map description",
@@ -1036,5 +1067,26 @@ describe('nvim_buf_set_keymap, nvim_buf_del_keymap', function()
 
     eq(1, exec_lua[[return GlobalCount]])
     eq('\nNo mapping found', helpers.exec_capture('nmap asdf'))
+  end)
+
+  it('no double-free when unmapping simplifiable lua mappings', function()
+    eq(0, exec_lua [[
+      GlobalCount = 0
+      vim.api.nvim_buf_set_keymap(0, 'n', '<C-I>', '', {callback = function() GlobalCount = GlobalCount + 1 end })
+      return GlobalCount
+    ]])
+
+    feed('<C-I>\n')
+
+    eq(1, exec_lua[[return GlobalCount]])
+
+    exec_lua [[
+      vim.api.nvim_buf_del_keymap(0, 'n', '<C-I>')
+    ]]
+
+    feed('<C-I>\n')
+
+    eq(1, exec_lua[[return GlobalCount]])
+    eq('\nNo mapping found', helpers.exec_capture('nmap <C-I>'))
   end)
 end)

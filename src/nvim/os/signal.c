@@ -21,7 +21,7 @@
 #include "nvim/os/signal.h"
 #include "nvim/vim.h"
 
-static SignalWatcher spipe, shup, squit, sterm, susr1;
+static SignalWatcher spipe, shup, squit, sterm, susr1, swinch;
 #ifdef SIGPWR
 static SignalWatcher spwr;
 #endif
@@ -54,6 +54,9 @@ void signal_init(void)
 #ifdef SIGUSR1
   signal_watcher_init(&main_loop, &susr1, NULL);
 #endif
+#ifdef SIGWINCH
+  signal_watcher_init(&main_loop, &swinch, NULL);
+#endif
   signal_start();
 }
 
@@ -69,6 +72,9 @@ void signal_teardown(void)
 #endif
 #ifdef SIGUSR1
   signal_watcher_close(&susr1, NULL);
+#endif
+#ifdef SIGWINCH
+  signal_watcher_close(&swinch, NULL);
 #endif
 }
 
@@ -88,6 +94,9 @@ void signal_start(void)
 #ifdef SIGUSR1
   signal_watcher_start(&susr1, on_signal, SIGUSR1);
 #endif
+#ifdef SIGWINCH
+  signal_watcher_start(&swinch, on_signal, SIGWINCH);
+#endif
 }
 
 void signal_stop(void)
@@ -105,6 +114,9 @@ void signal_stop(void)
 #endif
 #ifdef SIGUSR1
   signal_watcher_stop(&susr1);
+#endif
+#ifdef SIGWINCH
+  signal_watcher_stop(&swinch);
 #endif
 }
 
@@ -141,6 +153,10 @@ static char *signal_name(int signum)
   case SIGUSR1:
     return "SIGUSR1";
 #endif
+#ifdef SIGWINCH
+  case SIGWINCH:
+    return "SIGWINCH";
+#endif
   default:
     return "Unknown";
   }
@@ -149,15 +165,15 @@ static char *signal_name(int signum)
 // This function handles deadly signals.
 // It tries to preserve any swap files and exit properly.
 // (partly from Elvis).
-// NOTE: Avoid unsafe functions, such as allocating memory, they can result in
-// a deadlock.
+// NOTE: this is scheduled on the event loop, not called directly from a signal handler.
 static void deadly_signal(int signum)
+  FUNC_ATTR_NORETURN
 {
   // Set the v:dying variable.
   set_vim_var_nr(VV_DYING, 1);
   v_dying = 1;
 
-  WLOG("got signal %d (%s)", signum, signal_name(signum));
+  ILOG("got signal %d (%s)", signum, signal_name(signum));
 
   snprintf((char *)IObuff, sizeof(IObuff), "Vim: Caught deadly signal '%s'\r\n",
            signal_name(signum));
@@ -193,8 +209,12 @@ static void on_signal(SignalWatcher *handle, int signum, void *data)
     break;
 #ifdef SIGUSR1
   case SIGUSR1:
-    apply_autocmds(EVENT_SIGNAL, (char_u *)"SIGUSR1", curbuf->b_fname, true,
-                   curbuf);
+    apply_autocmds(EVENT_SIGNAL, "SIGUSR1", curbuf->b_fname, true, curbuf);
+    break;
+#endif
+#ifdef SIGWINCH
+  case SIGWINCH:
+    apply_autocmds(EVENT_SIGNAL, "SIGWINCH", curbuf->b_fname, true, curbuf);
     break;
 #endif
   default:

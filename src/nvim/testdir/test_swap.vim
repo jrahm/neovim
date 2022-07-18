@@ -1,6 +1,7 @@
 " Tests for the swap feature
 
 source check.vim
+source shared.vim
 
 func s:swapname()
   return trim(execute('swapname'))
@@ -198,14 +199,17 @@ func Test_swapfile_delete()
   quit
   call assert_equal(fnamemodify(swapfile_name, ':t'), fnamemodify(s:swapname, ':t'))
 
-  " Write the swapfile with a modified PID, now it will be automatically
-  " deleted. Process one should never be Vim.
-  let swapfile_bytes[24:27] = 0z01000000
-  call writefile(swapfile_bytes, swapfile_name)
-  let s:swapname = ''
-  split XswapfileText
-  quit
-  call assert_equal('', s:swapname)
+  " This test won't work as root because root can successfully run kill(1, 0)
+  if !IsRoot()
+    " Write the swapfile with a modified PID, now it will be automatically
+    " deleted. Process one should never be Vim.
+    let swapfile_bytes[24:27] = 0z01000000
+    call writefile(swapfile_bytes, swapfile_name)
+    let s:swapname = ''
+    split XswapfileText
+    quit
+    call assert_equal('', s:swapname)
+  endif
 
   " Now set the modified flag, the swap file will not be deleted
   let swapfile_bytes[28 + 80 + 899] = 0x55
@@ -274,7 +278,6 @@ func Test_swap_recover_ext()
     autocmd SwapExists * let v:swapchoice = 'r'
   augroup END
 
-
   " Create a valid swapfile by editing a file with a special extension.
   split Xtest.scr
   call setline(1, ['one', 'two', 'three'])
@@ -305,6 +308,46 @@ func Test_swap_recover_ext()
     autocmd!
   augroup END
   augroup! test_swap_recover_ext
+endfunc
+
+" Test for closing a split window automatically when a swap file is detected
+" and 'Q' is selected in the confirmation prompt.
+func Test_swap_split_win()
+  autocmd! SwapExists
+  augroup test_swap_splitwin
+    autocmd!
+    autocmd SwapExists * let v:swapchoice = 'q'
+  augroup END
+
+  " Create a valid swapfile by editing a file with a special extension.
+  split Xtest.scr
+  call setline(1, ['one', 'two', 'three'])
+  write  " file is written, not modified
+  write  " write again to make sure the swapfile is created
+  " read the swapfile as a Blob
+  let swapfile_name = swapname('%')
+  let swapfile_bytes = readfile(swapfile_name, 'B')
+
+  " Close and delete the file and recreate the swap file.
+  quit
+  call delete('Xtest.scr')
+  call writefile(swapfile_bytes, swapfile_name)
+  " Split edit the file again. This should fail to open the window
+  try
+    split Xtest.scr
+  catch
+    " E308 should be caught, not E306.
+    call assert_exception('E308:')  " Original file may have been changed
+  endtry
+  call assert_equal(1, winnr('$'))
+
+  call delete('Xtest.scr')
+  call delete(swapfile_name)
+
+  augroup test_swap_splitwin
+      autocmd!
+  augroup END
+  augroup! test_swap_splitwin
 endfunc
 
 " Test for selecting 'q' in the attention prompt

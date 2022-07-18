@@ -13,14 +13,15 @@ if(USE_GCOV)
 endif()
 
 if(WIN32)
-  # tell MinGW compiler to enable wmain
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -municode")
+  if(MINGW)
+    # Enable wmain
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -municode")
+  endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework CoreFoundation")
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -framework CoreFoundation")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework CoreServices")
+  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -framework CoreServices")
 endif()
 
-set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
 set(GENERATOR_DIR ${CMAKE_CURRENT_LIST_DIR}/generators)
 set(GENERATED_DIR ${PROJECT_BINARY_DIR}/src/nvim/auto)
 set(BINARY_LIB_DIR ${PROJECT_BINARY_DIR}/lib/nvim/)
@@ -39,6 +40,7 @@ set(GENERATED_UI_EVENTS ${GENERATED_DIR}/ui_events.generated.h)
 set(GENERATED_UI_EVENTS_CALL ${GENERATED_DIR}/ui_events_call.generated.h)
 set(GENERATED_UI_EVENTS_REMOTE ${GENERATED_DIR}/ui_events_remote.generated.h)
 set(GENERATED_UI_EVENTS_BRIDGE ${GENERATED_DIR}/ui_events_bridge.generated.h)
+set(GENERATED_UI_EVENTS_CLIENT ${GENERATED_DIR}/ui_events_client.generated.h)
 set(GENERATED_UI_EVENTS_METADATA ${GENERATED_DIR}/api/private/ui_events_metadata.generated.h)
 set(GENERATED_EX_CMDS_ENUM ${GENERATED_INCLUDES_DIR}/ex_cmds_enum.generated.h)
 set(GENERATED_EX_CMDS_DEFS ${GENERATED_DIR}/ex_cmds_defs.generated.h)
@@ -54,15 +56,17 @@ set(EVENTS_GENERATOR ${GENERATOR_DIR}/gen_events.lua)
 set(KEYSETS_GENERATOR ${GENERATOR_DIR}/gen_keysets.lua)
 set(OPTIONS_GENERATOR ${GENERATOR_DIR}/gen_options.lua)
 set(UNICODE_TABLES_GENERATOR ${GENERATOR_DIR}/gen_unicode_tables.lua)
-set(UNICODE_DIR ${PROJECT_SOURCE_DIR}/unicode)
+set(UNICODE_DIR ${PROJECT_SOURCE_DIR}/src/unicode)
 set(GENERATED_UNICODE_TABLES ${GENERATED_DIR}/unicode_tables.generated.h)
 set(VIM_MODULE_FILE ${GENERATED_DIR}/lua/vim_module.generated.h)
-set(LUA_VIM_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/src/nvim/lua/vim.lua)
+set(LUA_EDITOR_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_editor.lua)
 set(LUA_SHARED_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/shared.lua)
 set(LUA_INSPECT_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/inspect.lua)
 set(LUA_F_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/F.lua)
 set(LUA_META_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_meta.lua)
 set(LUA_FILETYPE_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/filetype.lua)
+set(LUA_INIT_PACKAGES_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_init_packages.lua)
+set(LUA_KEYMAP_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/keymap.lua)
 set(CHAR_BLOB_GENERATOR ${GENERATOR_DIR}/gen_char_blob.lua)
 set(LINT_SUPPRESS_FILE ${PROJECT_BINARY_DIR}/errors.json)
 set(LINT_SUPPRESS_URL_BASE "https://raw.githubusercontent.com/neovim/doc/gh-pages/reports/clint")
@@ -75,10 +79,10 @@ set(LINT_SUPPRESSES_ARCHIVE ${LINT_SUPPRESSES_ROOT}/errors.tar.gz)
 set(LINT_SUPPRESSES_TOUCH_FILE "${TOUCHES_DIR}/unpacked-clint-errors-archive")
 set(LINT_SUPPRESSES_INSTALL_SCRIPT "${PROJECT_SOURCE_DIR}/cmake/InstallClintErrors.cmake")
 
-file(GLOB UNICODE_FILES ${UNICODE_DIR}/*.txt)
-file(GLOB API_HEADERS api/*.h)
+glob_wrapper(UNICODE_FILES ${UNICODE_DIR}/*.txt)
+glob_wrapper(API_HEADERS api/*.h)
 list(REMOVE_ITEM API_HEADERS ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h)
-file(GLOB MSGPACK_RPC_HEADERS msgpack_rpc/*.h)
+glob_wrapper(MSGPACK_RPC_HEADERS msgpack_rpc/*.h)
 
 include_directories(${GENERATED_DIR})
 include_directories(${CACHED_GENERATED_DIR})
@@ -90,10 +94,10 @@ file(MAKE_DIRECTORY ${GENERATED_INCLUDES_DIR})
 file(MAKE_DIRECTORY ${LINT_SUPPRESSES_ROOT})
 file(MAKE_DIRECTORY ${LINT_SUPPRESSES_ROOT}/src)
 
-file(GLOB NVIM_SOURCES *.c)
-file(GLOB NVIM_HEADERS *.h)
-file(GLOB EXTERNAL_SOURCES ../xdiff/*.c ../mpack/*.c ../cjson/*.c)
-file(GLOB EXTERNAL_HEADERS ../xdiff/*.h ../mpack/*.h ../cjson/*.h)
+glob_wrapper(NVIM_SOURCES *.c)
+glob_wrapper(NVIM_HEADERS *.h)
+glob_wrapper(EXTERNAL_SOURCES ../xdiff/*.c ../mpack/*.c ../cjson/*.c)
+glob_wrapper(EXTERNAL_HEADERS ../xdiff/*.h ../mpack/*.h ../cjson/*.h)
 
 foreach(subdir
         os
@@ -113,13 +117,13 @@ foreach(subdir
 
   file(MAKE_DIRECTORY ${GENERATED_DIR}/${subdir})
   file(MAKE_DIRECTORY ${GENERATED_INCLUDES_DIR}/${subdir})
-  file(GLOB sources ${subdir}/*.c)
-  file(GLOB headers ${subdir}/*.h)
+  glob_wrapper(sources ${subdir}/*.c)
+  glob_wrapper(headers ${subdir}/*.h)
   list(APPEND NVIM_SOURCES ${sources})
   list(APPEND NVIM_HEADERS ${headers})
 endforeach()
 
-file(GLOB UNIT_TEST_FIXTURES ${PROJECT_SOURCE_DIR}/test/unit/fixtures/*.c)
+glob_wrapper(UNIT_TEST_FIXTURES ${PROJECT_SOURCE_DIR}/test/unit/fixtures/*.c)
 
 # Sort file lists to ensure generated files are created in the same order from
 # build to build.
@@ -131,6 +135,9 @@ list(APPEND LINT_NVIM_SOURCES ${NVIM_SOURCES} ${NVIM_HEADERS})
 foreach(sfile ${NVIM_SOURCES})
   get_filename_component(f ${sfile} NAME)
   if(${f} MATCHES "^(regexp_nfa.c)$")
+    list(APPEND to_remove ${sfile})
+  endif()
+  if(${f} MATCHES "^(regexp_bt.c)$")
     list(APPEND to_remove ${sfile})
   endif()
   if(WIN32 AND ${f} MATCHES "^(pty_process_unix.c)$")
@@ -151,50 +158,40 @@ list(REMOVE_ITEM NVIM_SOURCES ${to_remove})
 
 # Legacy files that do not yet pass -Wconversion.
 set(CONV_SOURCES
-  diff.c
-  edit.c
-  eval.c
-  eval/funcs.c
-  eval/userfunc.c
-  ex_cmds.c
-  ex_docmd.c
-  fileio.c
   lua/treesitter.c
   mbyte.c
   memline.c
-  message.c
   regexp.c
   screen.c
   search.c
   spell.c
   spellfile.c
   syntax.c
-  tag.c
   window.c)
 foreach(sfile ${CONV_SOURCES})
   if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/${sfile}")
     message(FATAL_ERROR "${sfile} doesn't exist (it was added to CONV_SOURCES)")
   endif()
 endforeach()
-# xdiff, mpack, lua-cjson: inlined external project, we don't maintain it. #9306
-list(APPEND CONV_SOURCES ${EXTERNAL_SOURCES})
 
 if(NOT MSVC)
   set_source_files_properties(
     ${CONV_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion")
-  # gperf generates ANSI-C with incorrect linkage, ignore it.
-  check_c_compiler_flag(-Wstatic-in-inline HAS_WSTATIC_IN_INLINE)
-  if(HAS_WSTATIC_IN_INLINE)
-    set_source_files_properties(
-      eval/funcs.c PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-static-in-inline -Wno-conversion")
-  else()
-    set_source_files_properties(
-      eval/funcs.c PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion")
-  endif()
+
+  # xdiff, mpack, lua-cjson: inlined external project, we don't maintain it. #9306
+  set_source_files_properties(
+    ${EXTERNAL_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion -Wno-missing-noreturn -Wno-missing-format-attribute -Wno-double-promotion")
+
+  set_source_files_properties(
+    eval/funcs.c PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion")
 endif()
 
 if(NOT "${MIN_LOG_LEVEL}" MATCHES "^$")
   add_definitions(-DMIN_LOG_LEVEL=${MIN_LOG_LEVEL})
+endif()
+
+if(DEBUG OR CLANG_ASAN_UBSAN OR CLANG_MSAN OR CLANG_TSAN)
+  add_definitions(-DEXITFREE)
 endif()
 
 get_directory_property(gen_cdefs COMPILE_DEFINITIONS)
@@ -203,9 +200,6 @@ foreach(gen_cdef ${gen_cdefs} DO_NOT_DEFINE_EMPTY_ATTRIBUTES)
     list(APPEND gen_cflags "-D${gen_cdef}")
   endif()
 endforeach()
-if(CLANG_ASAN_UBSAN OR CLANG_MSAN OR CLANG_TSAN)
-  list(APPEND gen_cflags "-DEXITFREE")
-endif()
 
 get_directory_property(gen_includes INCLUDE_DIRECTORIES)
 foreach(gen_include ${gen_includes} ${LUA_PREFERRED_INCLUDE_DIRS})
@@ -228,43 +222,31 @@ function(get_preproc_output varname iname)
   endif()
 endfunction()
 
-# Handle generating version from Git.
-set(use_git_version 0)
-if(NVIM_VERSION_MEDIUM)
-  message(STATUS "NVIM_VERSION_MEDIUM: ${NVIM_VERSION_MEDIUM}")
-elseif(EXISTS ${PROJECT_SOURCE_DIR}/.git)
-  find_program(GIT_EXECUTABLE git)
-  if(GIT_EXECUTABLE)
-    message(STATUS "Using NVIM_VERSION_MEDIUM from Git")
-    set(use_git_version 1)
-  else()
-    message(STATUS "Skipping version-string generation (cannot find git)")
-  endif()
-endif()
-if(use_git_version)
-  # Create a update_version_stamp target to update the version during build.
-  file(RELATIVE_PATH relbuild "${PROJECT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
-  add_custom_target(update_version_stamp ALL
-    COMMAND ${LUA_PRG} scripts/update_version_stamp.lua
-      ${relbuild}/config/auto/versiondef_git.h
-      "v${NVIM_VERSION_MAJOR}.${NVIM_VERSION_MINOR}.${NVIM_VERSION_PATCH}${NVIM_VERSION_PRERELEASE}"
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    BYPRODUCTS ${CMAKE_BINARY_DIR}/config/auto/versiondef_git.h)
-else()
-  file(WRITE ${CMAKE_BINARY_DIR}/config/auto/versiondef_git.h "")
-endif()
+set(NVIM_VERSION_GIT_H ${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef_git.h)
+add_custom_target(update_version_stamp
+  COMMAND ${CMAKE_COMMAND}
+    -DNVIM_VERSION_MAJOR=${NVIM_VERSION_MAJOR}
+    -DNVIM_VERSION_MINOR=${NVIM_VERSION_MINOR}
+    -DNVIM_VERSION_PATCH=${NVIM_VERSION_PATCH}
+    -DNVIM_VERSION_PRERELEASE=${NVIM_VERSION_PRERELEASE}
+    -DOUTPUT=${NVIM_VERSION_GIT_H}
+    -P ${PROJECT_SOURCE_DIR}/cmake/GenerateVersion.cmake
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  BYPRODUCTS ${NVIM_VERSION_GIT_H})
 
 # NVIM_GENERATED_FOR_HEADERS: generated headers to be included in headers
 # NVIM_GENERATED_FOR_SOURCES: generated headers to be included in sources
 # NVIM_GENERATED_SOURCES: generated source files
 # These lists must be mutually exclusive.
 foreach(sfile ${NVIM_SOURCES}
+              "${CMAKE_CURRENT_LIST_DIR}/regexp_bt.c"
               "${CMAKE_CURRENT_LIST_DIR}/regexp_nfa.c"
               ${GENERATED_API_DISPATCH}
               "${GENERATED_UI_EVENTS_CALL}"
               "${GENERATED_UI_EVENTS_REMOTE}"
               "${GENERATED_UI_EVENTS_BRIDGE}"
               "${GENERATED_KEYSETS}"
+              "${GENERATED_UI_EVENTS_CLIENT}"
               )
   get_filename_component(full_d ${sfile} PATH)
   file(RELATIVE_PATH d "${CMAKE_CURRENT_LIST_DIR}" "${full_d}")
@@ -284,9 +266,9 @@ foreach(sfile ${NVIM_SOURCES}
   get_preproc_output(PREPROC_OUTPUT ${gf_i})
 
   set(depends "${HEADER_GENERATOR}" "${sfile}")
-  if(use_git_version AND "${f}" STREQUAL "version.c")
+  if("${f}" STREQUAL "version.c")
     # Ensure auto/versiondef_git.h exists after "make clean".
-    list(APPEND depends update_version_stamp)
+    list(APPEND depends "${NVIM_VERSION_GIT_H}")
   endif()
   add_custom_command(
     OUTPUT "${gf_c_h}" "${gf_h_h}"
@@ -330,20 +312,25 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E env
       "LUAC_PRG=${LUAC_PRG}"
       ${LUA_PRG} ${CHAR_BLOB_GENERATOR} -c ${VIM_MODULE_FILE}
-      ${LUA_VIM_MODULE_SOURCE} vim_module
-      ${LUA_SHARED_MODULE_SOURCE} shared_module
-      ${LUA_INSPECT_MODULE_SOURCE} inspect_module
-      ${LUA_F_MODULE_SOURCE} lua_F_module
-      ${LUA_META_MODULE_SOURCE} lua_meta_module
-      ${LUA_FILETYPE_MODULE_SOURCE} lua_filetype_module
+      ${LUA_INIT_PACKAGES_MODULE_SOURCE} "vim._init_packages"
+      ${LUA_INSPECT_MODULE_SOURCE} "vim.inspect"
+      ${LUA_EDITOR_MODULE_SOURCE} "vim._editor"
+      ${LUA_SHARED_MODULE_SOURCE} "vim.shared"
+      ${LUA_F_MODULE_SOURCE} "vim.F"
+      ${LUA_META_MODULE_SOURCE} "vim._meta"
+      ${LUA_FILETYPE_MODULE_SOURCE} "vim.filetype"
+      ${LUA_KEYMAP_MODULE_SOURCE} "vim.keymap"
   DEPENDS
     ${CHAR_BLOB_GENERATOR}
-    ${LUA_VIM_MODULE_SOURCE}
+    ${LUA_INIT_PACKAGES_MODULE_SOURCE}
+    ${LUA_EDITOR_MODULE_SOURCE}
     ${LUA_SHARED_MODULE_SOURCE}
     ${LUA_INSPECT_MODULE_SOURCE}
     ${LUA_F_MODULE_SOURCE}
     ${LUA_META_MODULE_SOURCE}
     ${LUA_FILETYPE_MODULE_SOURCE}
+    ${LUA_LOAD_PACKAGE_MODULE_SOURCE}
+    ${LUA_KEYMAP_MODULE_SOURCE}
   VERBATIM
 )
 
@@ -357,6 +344,7 @@ add_custom_command(
          ${GENERATED_UI_EVENTS_REMOTE}
          ${GENERATED_UI_EVENTS_BRIDGE}
          ${GENERATED_UI_EVENTS_METADATA}
+         ${GENERATED_UI_EVENTS_CLIENT}
   COMMAND ${LUA_PRG} ${API_UI_EVENTS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}
                      ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h
                      ${GENERATED_UI_EVENTS}
@@ -364,6 +352,7 @@ add_custom_command(
                      ${GENERATED_UI_EVENTS_REMOTE}
                      ${GENERATED_UI_EVENTS_BRIDGE}
                      ${GENERATED_UI_EVENTS_METADATA}
+                     ${GENERATED_UI_EVENTS_CLIENT}
   DEPENDS
     ${API_UI_EVENTS_GENERATOR}
     ${GENERATOR_C_GRAMMAR}
@@ -387,7 +376,7 @@ list(APPEND NVIM_GENERATED_FOR_SOURCES
 )
 
 list(APPEND NVIM_GENERATED_SOURCES
-  "${PROJECT_BINARY_DIR}/config/auto/pathdef.c"
+  "${PROJECT_BINARY_DIR}/cmake.config/auto/pathdef.c"
 )
 
 add_custom_command(OUTPUT ${GENERATED_EX_CMDS_ENUM} ${GENERATED_EX_CMDS_DEFS}
@@ -396,14 +385,9 @@ add_custom_command(OUTPUT ${GENERATED_EX_CMDS_ENUM} ${GENERATED_EX_CMDS_DEFS}
   DEPENDS ${EX_CMDS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/ex_cmds.lua
 )
 
-if(NOT GPERF_PRG)
-  message(FATAL_ERROR "gperf was not found.")
-endif()
 add_custom_command(OUTPUT ${GENERATED_FUNCS} ${FUNCS_DATA}
   COMMAND ${LUA_PRG} ${FUNCS_GENERATOR}
-      ${CMAKE_CURRENT_LIST_DIR} ${GENERATED_DIR} ${API_METADATA} ${FUNCS_DATA}
-  COMMAND ${GPERF_PRG}
-      ${GENERATED_DIR}/funcs.generated.h.gperf --output-file=${GENERATED_FUNCS}
+      ${CMAKE_CURRENT_LIST_DIR} ${LUA_SHARED_MODULE_SOURCE} ${GENERATED_DIR} ${API_METADATA} ${FUNCS_DATA}
   DEPENDS ${FUNCS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/eval.lua ${API_METADATA}
 )
 list(APPEND NVIM_GENERATED_FOR_SOURCES
@@ -451,7 +435,6 @@ endif()
 
 if(WIN32)
   list(APPEND NVIM_LINK_LIBRARIES netapi32)
-  list(APPEND NVIM_LINK_LIBRARIES ${WINPTY_LIBRARIES})
 endif()
 
 # Use "luv" as imported library, to work around CMake using "-lluv" for
@@ -493,6 +476,9 @@ add_executable(nvim ${NVIM_GENERATED_FOR_SOURCES} ${NVIM_GENERATED_FOR_HEADERS}
   ${EXTERNAL_SOURCES} ${EXTERNAL_HEADERS})
 target_link_libraries(nvim ${NVIM_EXEC_LINK_LIBRARIES})
 install_helper(TARGETS nvim)
+if(MSVC)
+  install(FILES $<TARGET_PDB_FILE:nvim> DESTINATION ${CMAKE_INSTALL_BINDIR} OPTIONAL)
+endif()
 
 set_property(TARGET nvim APPEND PROPERTY
              INCLUDE_DIRECTORIES ${LUA_PREFERRED_INCLUDE_DIRS})
@@ -535,8 +521,6 @@ if(WIN32)
                       diff.exe
                       tee.exe
                       win32yank.exe
-                      winpty-agent.exe
-                      winpty.dll
                       xxd.exe
 
                       # Dependencies for neovim-qt
@@ -689,17 +673,14 @@ if(CLANG_ASAN_UBSAN)
       set(SANITIZE_RECOVER -fno-sanitize-recover)      # Clang 3.5-
     endif()
   endif()
-  set_property(TARGET nvim APPEND PROPERTY COMPILE_DEFINITIONS EXITFREE)
   set_property(TARGET nvim APPEND PROPERTY COMPILE_OPTIONS ${SANITIZE_RECOVER} -fno-omit-frame-pointer -fno-optimize-sibling-calls -fsanitize=address -fsanitize=undefined -fsanitize-blacklist=${PROJECT_SOURCE_DIR}/src/.asan-blacklist)
   set_property(TARGET nvim APPEND_STRING PROPERTY LINK_FLAGS "-fsanitize=address -fsanitize=undefined ")
 elseif(CLANG_MSAN)
   message(STATUS "Enabling Clang memory sanitizer for nvim.")
-  set_property(TARGET nvim APPEND PROPERTY COMPILE_DEFINITIONS EXITFREE)
   set_property(TARGET nvim APPEND PROPERTY COMPILE_OPTIONS -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -fno-optimize-sibling-calls)
   set_property(TARGET nvim APPEND_STRING PROPERTY LINK_FLAGS "-fsanitize=memory -fsanitize-memory-track-origins ")
 elseif(CLANG_TSAN)
   message(STATUS "Enabling Clang thread sanitizer for nvim.")
-  set_property(TARGET nvim APPEND PROPERTY COMPILE_DEFINITIONS EXITFREE)
   set_property(TARGET nvim APPEND PROPERTY COMPILE_OPTIONS -fsanitize=thread)
   set_property(TARGET nvim APPEND PROPERTY COMPILE_OPTIONS -fPIE)
   set_property(TARGET nvim APPEND_STRING PROPERTY LINK_FLAGS "-fsanitize=thread ")
@@ -783,6 +764,12 @@ add_custom_command(
 
 add_download(${LINT_SUPPRESS_FILE} ${LINT_SUPPRESS_URL} off)
 
+if(CI_BUILD)
+  set(LINT_OUTPUT_FORMAT gh_action)
+else()
+  set(LINT_OUTPUT_FORMAT vs7)
+endif()
+
 set(LINT_NVIM_REL_SOURCES)
 foreach(sfile ${LINT_NVIM_SOURCES})
   get_test_target("" "${sfile}" r suffix)
@@ -792,7 +779,7 @@ foreach(sfile ${LINT_NVIM_SOURCES})
   set(touch_file "${TOUCHES_DIR}/ran-clint-${suffix}")
   add_custom_command(
     OUTPUT ${touch_file}
-    COMMAND ${LINT_PRG} --suppress-errors=${suppress_file} ${rsfile}
+    COMMAND ${LINT_PRG} --suppress-errors=${suppress_file} --output=${LINT_OUTPUT_FORMAT} ${rsfile}
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     COMMAND ${CMAKE_COMMAND} -E touch ${touch_file}
     DEPENDS ${LINT_PRG} ${sfile} ${LINT_SUPPRESSES_TOUCH_FILE}
@@ -800,14 +787,21 @@ foreach(sfile ${LINT_NVIM_SOURCES})
   list(APPEND LINT_TARGETS ${touch_file})
   list(APPEND LINT_NVIM_REL_SOURCES ${rsfile})
 endforeach()
-add_custom_target(clint DEPENDS ${LINT_TARGETS})
+add_custom_target(lintc DEPENDS ${LINT_TARGETS})
+
+add_glob_targets(
+  TARGET lintuncrustify
+  COMMAND ${UNCRUSTIFY_PRG}
+  FLAGS -c "${PROJECT_SOURCE_DIR}/src/uncrustify.cfg" -q --check
+  FILES ${LINT_NVIM_SOURCES}
+  )
 
 add_custom_target(
-  clint-full
+  lintcfull
   COMMAND
-    ${LINT_PRG} --suppress-errors=${LINT_SUPPRESS_FILE} ${LINT_NVIM_REL_SOURCES}
+    ${LINT_PRG} --suppress-errors=${LINT_SUPPRESS_FILE} --output=${LINT_OUTPUT_FORMAT} ${LINT_NVIM_REL_SOURCES}
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  DEPENDS ${LINT_PRG} ${LINT_NVIM_SOURCES} ${LINT_SUPPRESS_FILE}
+  DEPENDS ${LINT_PRG} ${LINT_NVIM_SOURCES} ${LINT_SUPPRESS_FILE} lintuncrustify
 )
 
 add_custom_target(generated-sources DEPENDS

@@ -22,11 +22,11 @@
 
 /// @deprecated
 /// @see nvim_exec
-String nvim_command_output(String command, Error *err)
+String nvim_command_output(uint64_t channel_id, String command, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(7)
 {
-  return nvim_exec(command, true, err);
+  return nvim_exec(channel_id, command, true, err);
 }
 
 /// @deprecated Use nvim_exec_lua() instead.
@@ -51,11 +51,10 @@ Integer nvim_buf_get_number(Buffer buffer, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(2)
 {
-  Integer rv = 0;
   buf_T *buf = find_buffer_by_handle(buffer, err);
 
   if (!buf) {
-    return rv;
+    return 0;
   }
 
   return buf->b_fnum;
@@ -78,7 +77,6 @@ void nvim_buf_clear_highlight(Buffer buffer, Integer ns_id, Integer line_start, 
 {
   nvim_buf_clear_namespace(buffer, ns_id, line_start, line_end, err);
 }
-
 
 /// Set the virtual text (annotation) for a buffer line.
 ///
@@ -130,14 +128,13 @@ Integer nvim_buf_set_virtual_text(Buffer buffer, Integer src_id, Integer line, A
     return 0;
   }
 
-  uint64_t ns_id = src2ns(&src_id);
+  uint32_t ns_id = src2ns(&src_id);
   int width;
 
   VirtText virt_text = parse_virt_text(chunks, err, &width);
   if (ERROR_SET(err)) {
     return 0;
   }
-
 
   Decoration *existing = decor_find_virttext(buf, (int)line, ns_id);
 
@@ -148,11 +145,12 @@ Integer nvim_buf_set_virtual_text(Buffer buffer, Integer src_id, Integer line, A
     return src_id;
   }
 
-  Decoration *decor = xcalloc(1, sizeof(*decor));
-  decor->virt_text = virt_text;
-  decor->virt_text_width = width;
+  Decoration decor = DECORATION_INIT;
+  decor.virt_text = virt_text;
+  decor.virt_text_width = width;
+  decor.priority = 0;
 
-  extmark_set(buf, ns_id, NULL, (int)line, 0, -1, -1, decor, true,
+  extmark_set(buf, ns_id, NULL, (int)line, 0, -1, -1, &decor, true,
               false, kExtmarkNoUndo);
   return src_id;
 }
@@ -192,7 +190,7 @@ String buffer_get_line(Buffer buffer, Integer index, Error *err)
   String rv = { .size = 0 };
 
   index = convert_index(index);
-  Array slice = nvim_buf_get_lines(0, buffer, index, index+1, true, err);
+  Array slice = nvim_buf_get_lines(0, buffer, index, index + 1, true, err);
 
   if (!ERROR_SET(err) && slice.size) {
     rv = slice.items[0].data.string;
@@ -221,7 +219,7 @@ void buffer_set_line(Buffer buffer, Integer index, String line, Error *err)
   Object l = STRING_OBJ(line);
   Array array = { .items = &l, .size = 1 };
   index = convert_index(index);
-  nvim_buf_set_lines(0, buffer, index, index+1, true,  array, err);
+  nvim_buf_set_lines(0, buffer, index, index + 1, true,  array, err);
 }
 
 /// Deletes a buffer line
@@ -239,7 +237,7 @@ void buffer_del_line(Buffer buffer, Integer index, Error *err)
 {
   Array array = ARRAY_DICT_INIT;
   index = convert_index(index);
-  nvim_buf_set_lines(0, buffer, index, index+1, true, array, err);
+  nvim_buf_set_lines(0, buffer, index, index + 1, true, array, err);
 }
 
 /// Retrieves a line range from the buffer
@@ -291,7 +289,6 @@ void buffer_set_line_slice(Buffer buffer, Integer start, Integer end, Boolean in
   end = convert_index(end) + include_end;
   nvim_buf_set_lines(0, buffer, start, end, false, replacement, err);
 }
-
 
 /// Sets a buffer-scoped (b:) variable
 ///

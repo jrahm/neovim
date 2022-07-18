@@ -2,6 +2,7 @@
 #define NVIM_EXTMARK_H
 
 #include "nvim/buffer_defs.h"
+#include "nvim/decoration.h"
 #include "nvim/extmark_defs.h"
 #include "nvim/marktree.h"
 #include "nvim/pos.h"
@@ -15,14 +16,15 @@ typedef struct {
   colnr_T col;
   int end_row;
   colnr_T end_col;
-  Decoration *decor;
+  bool right_gravity;
+  bool end_right_gravity;
+  Decoration decor;  // TODO(bfredl): CHONKY
 } ExtmarkInfo;
 
 typedef kvec_t(ExtmarkInfo) ExtmarkInfoArray;
 
 // TODO(bfredl): good enough name for now.
 typedef ptrdiff_t bcount_t;
-
 
 // delete the columns between mincol and endcol
 typedef struct {
@@ -76,7 +78,6 @@ struct undo_object {
     ExtmarkSavePos savepos;
   } data;
 };
-
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "extmark.h.generated.h"

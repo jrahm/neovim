@@ -40,6 +40,7 @@ typedef struct sign_attrs_S {
   int sat_linehl;
   int sat_culhl;
   int sat_numhl;
+  int sat_prio;  // Used for inserting extmark signs
 } sign_attrs_T;
 
 #define SIGN_SHOW_MAX 9
@@ -53,6 +54,5 @@ typedef enum {
   SIGN_NUMHL,
   SIGN_TEXT,
 } SignType;
-
 
 #endif // NVIM_SIGN_DEFS_H

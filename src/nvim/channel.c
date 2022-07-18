@@ -25,7 +25,7 @@ static bool did_stdio = false;
 /// next free id for a job or rpc channel
 /// 1 is reserved for stdio channel
 /// 2 is reserved for stderr channel
-static uint64_t next_chan_id = CHAN_STDERR+1;
+static uint64_t next_chan_id = CHAN_STDERR + 1;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "channel.c.generated.h"
@@ -138,8 +138,14 @@ bool channel_close(uint64_t id, ChannelPart part, const char **error)
       *error = (const char *)e_invstream;
       return false;
     }
-    api_free_luaref(chan->stream.internal.cb);
-    chan->stream.internal.cb = LUA_NOREF;
+    if (chan->term) {
+      api_free_luaref(chan->stream.internal.cb);
+      chan->stream.internal.cb = LUA_NOREF;
+      chan->stream.internal.closed = true;
+      terminal_close(&chan->term, 0);
+    } else {
+      channel_decref(chan);
+    }
     break;
 
   default:
@@ -182,7 +188,7 @@ Channel *channel_alloc(ChannelStreamType type)
 
 void channel_create_event(Channel *chan, const char *ext_source)
 {
-#if MIN_LOG_LEVEL <= INFO_LOG_LEVEL
+#if MIN_LOG_LEVEL <= LOGLVL_INF
   const char *source;
 
   if (ext_source) {
@@ -273,12 +279,10 @@ static void channel_destroy_early(Channel *chan)
   multiqueue_put(main_loop.events, free_channel_event, 1, chan);
 }
 
-
 static void close_cb(Stream *stream, void *data)
 {
   channel_decref(data);
 }
-
 
 /// Starts a job and returns the associated channel
 ///
@@ -410,7 +414,6 @@ Channel *channel_job_start(char **argv, CallbackReader on_stdout, CallbackReader
   return chan;
 }
 
-
 uint64_t channel_connect(bool tcp, const char *address, bool rpc, CallbackReader on_output,
                          int timeout, const char **error)
 {
@@ -536,7 +539,11 @@ size_t channel_send(uint64_t id, char *data, size_t len, bool data_owned, const 
   }
 
   if (chan->streamtype == kChannelStreamInternal) {
-    if (!chan->term) {
+    if (chan->is_rpc) {
+      *error = _("Can't send raw data to rpc channel");
+      goto retfree;
+    }
+    if (!chan->term || chan->stream.internal.closed) {
       *error = _("Can't send data to closed stream");
       goto retfree;
     }
@@ -544,7 +551,6 @@ size_t channel_send(uint64_t id, char *data, size_t len, bool data_owned, const 
     written = len;
     goto retfree;
   }
-
 
   Stream *in = channel_instream(chan);
   if (in->closed) {
@@ -613,7 +619,6 @@ static void on_channel_output(Stream *stream, Channel *chan, RBuffer *buf, size_
   } else {
     if (chan->term) {
       terminal_receive(chan->term, ptr, count);
-      terminal_flush_output(chan->term);
     }
 
     rbuffer_consumed(buf, count);
@@ -700,7 +705,7 @@ static void channel_process_exit_cb(Process *proc, int status, void *data)
 {
   Channel *chan = data;
   if (chan->term) {
-    terminal_close(chan->term, status);
+    terminal_close(&chan->term, status);
   }
 
   // If process did not exit, we only closed the handle of a detached process.
@@ -730,13 +735,13 @@ static void channel_callback_call(Channel *chan, CallbackReader *reader)
     tv_list_ref(argv[1].vval.v_list);
     ga_clear(&reader->buffer);
     cb = &reader->cb;
-    argv[2].vval.v_string = (char_u *)reader->type;
+    argv[2].vval.v_string = (char *)reader->type;
   } else {
     argv[1].v_type = VAR_NUMBER;
     argv[1].v_lock = VAR_UNLOCKED;
     argv[1].vval.v_number = chan->exit_status;
     cb = &chan->on_exit;
-    argv[2].vval.v_string = (char_u *)"exit";
+    argv[2].vval.v_string = "exit";
   }
 
   argv[2].v_type = VAR_STRING;
@@ -746,7 +751,6 @@ static void channel_callback_call(Channel *chan, CallbackReader *reader)
   callback_call(cb, 3, argv, &rettv);
   tv_clear(&rettv);
 }
-
 
 /// Open terminal for channel
 ///
@@ -794,8 +798,9 @@ static inline void term_delayed_free(void **argv)
     return;
   }
 
-  terminal_destroy(chan->term);
-  chan->term = NULL;
+  if (chan->term) {
+    terminal_destroy(&chan->term);
+  }
   channel_decref(chan);
 }
 
@@ -827,6 +832,7 @@ static void set_info_event(void **argv)
   typval_T retval;
   (void)object_to_vim(DICTIONARY_OBJ(info), &retval, NULL);
   tv_dict_add_dict(dict, S_LEN("info"), retval.vval.v_dict);
+  tv_dict_set_keys_readonly(dict);
 
   apply_autocmds(event, NULL, NULL, false, curbuf);
 

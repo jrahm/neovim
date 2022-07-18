@@ -18,6 +18,9 @@ typedef struct {
   TriState italic;
   TriState underline;
   int undercurl;
+  int underdouble;
+  int underdotted;
+  int underdashed;
 } prt_text_attr_T;
 
 /*
@@ -76,7 +79,6 @@ typedef struct {
 #define PRT_UNIT_NAMES { "pc", "in", "mm", "pt" }
 
 #define PRINT_NUMBER_WIDTH 8
-
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "hardcopy.h.generated.h"

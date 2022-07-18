@@ -1,7 +1,7 @@
 " Test for breakindent
 "
 " Note: if you get strange failures when adding new tests, it might be that
-" while the test is run, the breakindent cacheing gets in its way.
+" while the test is run, the breakindent caching gets in its way.
 " It helps to change the tabstop setting and force a redraw (e.g. see
 " Test_breakindent08())
 if !exists('+breakindent')
@@ -20,7 +20,7 @@ func s:screen_lines2(lnums, lnume, width) abort
   return ScreenLines([a:lnums, a:lnume], a:width)
 endfunc
 
-func! s:compare_lines(expect, actual)
+func s:compare_lines(expect, actual)
   call assert_equal(join(a:expect, "\n"), join(a:actual, "\n"))
 endfunc
 
@@ -770,7 +770,7 @@ func Test_breakindent20_list()
 	\ "shall make no law   ",
 	\ ]
   call s:compare_lines(expect, lines)
-  " set mininum indent
+  " set minimum indent
   setl briopt=min:5
   redraw!
   let lines = s:screen_lines2(1, 6, 20)

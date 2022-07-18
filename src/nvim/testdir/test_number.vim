@@ -284,10 +284,10 @@ func Test_relativenumber_colors()
   " Default colors
   call VerifyScreenDump(buf, 'Test_relnr_colors_1', {})
 
-  call term_sendkeys(buf, ":hi LineNrAbove ctermfg=blue\<CR>")
+  call term_sendkeys(buf, ":hi LineNrAbove ctermfg=blue\<CR>:\<CR>")
   call VerifyScreenDump(buf, 'Test_relnr_colors_2', {})
 
-  call term_sendkeys(buf, ":hi LineNrBelow ctermfg=green\<CR>")
+  call term_sendkeys(buf, ":hi LineNrBelow ctermfg=green\<CR>:\<CR>")
   call VerifyScreenDump(buf, 'Test_relnr_colors_3', {})
 
   call term_sendkeys(buf, ":hi clear LineNrAbove\<CR>")
@@ -296,6 +296,31 @@ func Test_relativenumber_colors()
   " clean up
   call StopVimInTerminal(buf)
   call delete('XTest_relnr')
+endfunc
+
+func Test_relativenumber_callback()
+  CheckScreendump
+  CheckFeature timers
+
+  let lines =<< trim END
+      call setline(1, ['aaaaa', 'bbbbb', 'ccccc', 'ddddd'])
+      set relativenumber
+      call cursor(4, 1)
+
+      func Func(timer)
+        call cursor(1, 1)
+      endfunc
+
+      call timer_start(300, 'Func')
+  END
+  call writefile(lines, 'Xrnu_timer')
+
+  let buf = RunVimInTerminal('-S Xrnu_timer', #{rows: 8})
+  call TermWait(buf, 310)
+  call VerifyScreenDump(buf, 'Test_relativenumber_callback_1', {})
+
+  call StopVimInTerminal(buf)
+  call delete('Xrnu_timer')
 endfunc
 
 " Test for displaying line numbers with 'rightleft'

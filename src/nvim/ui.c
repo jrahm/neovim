@@ -8,7 +8,7 @@
 #include <string.h>
 
 #include "nvim/ascii.h"
-#include "nvim/aucmd.h"
+#include "nvim/autocmd.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/cursor_shape.h"
@@ -24,6 +24,7 @@
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
 #include "nvim/move.h"
+#include "nvim/msgpack_rpc/channel.h"
 #include "nvim/normal.h"
 #include "nvim/option.h"
 #include "nvim/os/input.h"
@@ -63,7 +64,9 @@ static handle_T cursor_grid_handle = DEFAULT_GRID_HANDLE;
 static bool has_mouse = false;
 static int pending_has_mouse = -1;
 
-#if MIN_LOG_LEVEL > DEBUG_LOG_LEVEL
+static Array call_buf = ARRAY_DICT_INIT;
+
+#if MIN_LOG_LEVEL > LOGLVL_DBG
 # define UI_LOG(funname)
 #else
 static size_t uilog_seen = 0;
@@ -81,10 +84,10 @@ static char uilog_last_event[1024] = { 0 };
       uilog_seen++; \
     } else { \
       if (uilog_seen > 0) { \
-        logmsg(DEBUG_LOG_LEVEL, "UI: ", NULL, -1, true, \
+        logmsg(LOGLVL_DBG, "UI: ", NULL, -1, true, \
                "%s (+%zu times...)", uilog_last_event, uilog_seen); \
       } \
-      logmsg(DEBUG_LOG_LEVEL, "UI: ", NULL, -1, true, STR(funname)); \
+      logmsg(LOGLVL_DBG, "UI: ", NULL, -1, true, STR(funname)); \
       uilog_seen = 0; \
       xstrlcpy(uilog_last_event, STR(funname), sizeof(uilog_last_event)); \
     } \
@@ -122,6 +125,12 @@ void ui_init(void)
   default_grid.handle = 1;
   msg_grid_adj.target = &default_grid;
   ui_comp_init();
+  kv_ensure_space(call_buf, 16);
+}
+
+void ui_free_all_mem(void)
+{
+  kv_destroy(call_buf);
 }
 
 void ui_builtin_start(void)
@@ -172,16 +181,6 @@ bool ui_active(void)
   return ui_count > 1;
 }
 
-void ui_event(char *name, Array args)
-{
-  bool args_consumed = false;
-  ui_call_event(name, args, &args_consumed);
-  if (!args_consumed) {
-    api_free_array(args);
-  }
-}
-
-
 void ui_refresh(void)
 {
   if (!ui_active()) {
@@ -222,10 +221,17 @@ void ui_refresh(void)
 
   ui_default_colors_set();
 
-  int save_p_lz = p_lz;
-  p_lz = false;  // convince redrawing() to return true ...
-  screen_resize(width, height);
-  p_lz = save_p_lz;
+  if (!ui_client_channel_id) {
+    int save_p_lz = p_lz;
+    p_lz = false;  // convince redrawing() to return true ...
+    screen_resize(width, height);
+    p_lz = save_p_lz;
+  } else {
+    Array args = ARRAY_DICT_INIT;
+    ADD(args, INTEGER_OBJ((int)width));
+    ADD(args, INTEGER_OBJ((int)height));
+    rpc_send_event(ui_client_channel_id, "nvim_ui_try_resize", args);
+  }
 
   if (ext_widgets[kUIMessages]) {
     p_ch = 0;
@@ -330,7 +336,7 @@ void vim_beep(unsigned val)
     // When 'debug' contains "beep" produce a message.  If we are sourcing
     // a script or executing a function give the user a hint where the beep
     // comes from.
-    if (vim_strchr(p_debug, 'e') != NULL) {
+    if (vim_strchr((char *)p_debug, 'e') != NULL) {
       msg_source(HL_ATTR(HLF_W));
       msg_attr(_("Beep!"), HL_ATTR(HLF_W));
     }
@@ -422,7 +428,7 @@ void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
 void ui_line(ScreenGrid *grid, int row, int startcol, int endcol, int clearcol, int clearattr,
              bool wrap)
 {
-  assert(0 <= row && row < grid->Rows);
+  assert(0 <= row && row < grid->rows);
   LineFlags flags = wrap ? kLineFlagWrap : 0;
   if (startcol == -1) {
     startcol = 0;
@@ -439,7 +445,7 @@ void ui_line(ScreenGrid *grid, int row, int startcol, int endcol, int clearcol, 
   if (p_wd && !(rdb_flags & RDB_COMPOSITOR)) {
     // If 'writedelay' is active, set the cursor to indicate what was drawn.
     ui_call_grid_cursor_goto(grid->handle, row,
-                             MIN(clearcol, (int)grid->Columns-1));
+                             MIN(clearcol, (int)grid->cols - 1));
     ui_call_flush();
     uint64_t wd = (uint64_t)labs(p_wd);
     os_microdelay(wd * 1000u, true);
@@ -489,6 +495,11 @@ int ui_current_col(void)
   return cursor_col;
 }
 
+handle_T ui_cursor_grid(void)
+{
+  return cursor_grid_handle;
+}
+
 void ui_flush(void)
 {
   cmdline_ui_flush();
@@ -501,13 +512,15 @@ void ui_flush(void)
     pending_cursor_update = false;
   }
   if (pending_mode_info_update) {
-    Array style = mode_style_array();
+    Arena arena = ARENA_EMPTY;
+    arena_start(&arena, &ui_ext_fixblk);
+    Array style = mode_style_array(&arena);
     bool enabled = (*p_guicursor != NUL);
     ui_call_mode_info_set(enabled, style);
-    api_free_array(style);
+    arena_mem_free(arena_finish(&arena), &ui_ext_fixblk);
     pending_mode_info_update = false;
   }
-  if (pending_mode_update) {
+  if (pending_mode_update && !starting) {
     char *full_name = shape_table[ui_mode_idx].full_name;
     ui_call_mode_change(cstr_as_string(full_name), ui_mode_idx);
     pending_mode_update = false;
@@ -518,7 +531,6 @@ void ui_flush(void)
   }
   ui_call_flush();
 }
-
 
 /// Check if 'mouse' is active for the current mode
 ///
@@ -535,13 +547,13 @@ void ui_check_mouse(void)
   int checkfor = MOUSE_NORMAL;  // assume normal mode
   if (VIsual_active) {
     checkfor = MOUSE_VISUAL;
-  } else if (State == HITRETURN || State == ASKMORE || State == SETWSIZE) {
+  } else if (State == MODE_HITRETURN || State == MODE_ASKMORE || State == MODE_SETWSIZE) {
     checkfor = MOUSE_RETURN;
-  } else if (State & INSERT) {
+  } else if (State & MODE_INSERT) {
     checkfor = MOUSE_INSERT;
-  } else if (State & CMDLINE) {
+  } else if (State & MODE_CMDLINE) {
     checkfor = MOUSE_COMMAND;
-  } else if (State == CONFIRM || State == EXTERNCMD) {
+  } else if (State == MODE_CONFIRM || State == MODE_EXTERNCMD) {
     checkfor = ' ';  // don't use mouse for ":confirm" or ":!cmd"
   }
 
@@ -553,7 +565,7 @@ void ui_check_mouse(void)
   for (char_u *p = p_mouse; *p; p++) {
     switch (*p) {
     case 'a':
-      if (vim_strchr((char_u *)MOUSE_A, checkfor) != NULL) {
+      if (vim_strchr(MOUSE_A, checkfor) != NULL) {
         has_mouse = true;
         return;
       }
@@ -639,8 +651,8 @@ void ui_grid_resize(handle_T grid_handle, int width, int height, Error *error)
     }
   } else {
     // non-positive indicates no request
-    wp->w_height_request = (int)MAX(height, 0);
-    wp->w_width_request = (int)MAX(width, 0);
+    wp->w_height_request = MAX(height, 0);
+    wp->w_width_request = MAX(width, 0);
     win_set_inner_size(wp);
   }
 }

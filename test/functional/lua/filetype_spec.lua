@@ -3,6 +3,7 @@ local exec_lua = helpers.exec_lua
 local eq = helpers.eq
 local clear = helpers.clear
 local pathroot = helpers.pathroot
+local command = helpers.command
 
 local root = pathroot()
 
@@ -23,8 +24,7 @@ describe('vim.filetype', function()
           rs = 'radicalscript',
         },
       })
-      vim.filetype.match('main.rs')
-      return vim.bo.filetype
+      return vim.filetype.match({ filename = 'main.rs' })
     ]])
   end)
 
@@ -38,8 +38,7 @@ describe('vim.filetype', function()
           ['main.rs'] = 'somethingelse',
         },
       })
-      vim.filetype.match('main.rs')
-      return vim.bo.filetype
+      return vim.filetype.match({ filename = 'main.rs' })
     ]])
   end)
 
@@ -50,8 +49,7 @@ describe('vim.filetype', function()
           ['s_O_m_e_F_i_l_e'] = 'nim',
         },
       })
-      vim.filetype.match('s_O_m_e_F_i_l_e')
-      return vim.bo.filetype
+      return vim.filetype.match({ filename = 's_O_m_e_F_i_l_e' })
     ]])
 
     eq('dosini', exec_lua([[
@@ -62,25 +60,26 @@ describe('vim.filetype', function()
           [root .. '/.config/fun/config'] = 'dosini',
         },
       })
-      vim.filetype.match(root .. '/.config/fun/config')
-      return vim.bo.filetype
+      return vim.filetype.match({ filename = root .. '/.config/fun/config' })
     ]], root))
   end)
 
   it('works with patterns', function()
     eq('markdown', exec_lua([[
       local root = ...
+      vim.env.HOME = '/a-funky+home%dir'
       vim.filetype.add({
         pattern = {
-          [root .. '/blog/.*%.txt'] = 'markdown',
+          ['~/blog/.*%.txt'] = 'markdown',
         }
       })
-      vim.filetype.match(root .. '/blog/why_neovim_is_awesome.txt')
-      return vim.bo.filetype
+      return vim.filetype.match({ filename = '~/blog/why_neovim_is_awesome.txt' })
     ]], root))
   end)
 
   it('works with functions', function()
+    command('new')
+    command('file relevant_to_me')
     eq('foss', exec_lua [[
       vim.filetype.add({
         pattern = {
@@ -91,8 +90,7 @@ describe('vim.filetype', function()
           end,
         }
       })
-      vim.filetype.match('relevant_to_me')
-      return vim.bo.filetype
+      return vim.filetype.match({ buf = 0 })
     ]])
   end)
 end)

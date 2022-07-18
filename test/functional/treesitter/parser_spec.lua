@@ -167,6 +167,27 @@ void ui_refresh(void)
     eq('variable', ret)
   end)
 
+  it("supports caching queries", function()
+    local long_query = query:rep(100)
+    local function q(n)
+      return exec_lua ([[
+        local query, n = ...
+        local before = vim.loop.hrtime()
+        for i=1,n,1 do
+          cquery = vim.treesitter.parse_query("c", ...)
+        end
+        local after = vim.loop.hrtime()
+        return after - before
+      ]], long_query, n)
+    end
+
+    local firstrun = q(1)
+    local manyruns = q(100)
+
+    -- First run should be at least 4x slower.
+    assert(400 * manyruns < firstrun, ('firstrun: %d ms, manyruns: %d ms'):format(firstrun / 1000, manyruns / 1000))
+  end)
+
   it('support query and iter by capture', function()
     insert(test_text)
 
@@ -260,6 +281,25 @@ end]]
         return 3, 0, 23
       end
       return vim.treesitter.get_node_text(fake_node, 0) == nil
+    ]])
+    eq(true, result)
+  end)
+
+  it('support getting empty text if node range is zero width', function()
+    local text = [[
+```lua
+{}
+```]]
+    insert(text)
+    local result = exec_lua([[
+      local fake_node = {}
+      function fake_node:start()
+        return 1, 0, 7
+      end
+      function fake_node:end_()
+        return 1, 0, 7
+      end
+      return vim.treesitter.get_node_text(fake_node, 0) == ''
     ]])
     eq(true, result)
   end)
@@ -644,6 +684,21 @@ int x = INT_MAX;
           {1, 26, 2, 68}  -- READ_STRING(x, y) (char_u *)read_string((x), (size_t)(y))
                           -- READ_STRING_OK(x, y) (char_u *)read_string((x), (size_t)(y))
         }, get_ranges())
+      end)
+
+      it("should not inject bad languages", function()
+        if helpers.pending_win32(pending) then return end
+        exec_lua([=[
+        vim.treesitter.add_directive("inject-bad!", function(match, _, _, pred, metadata)
+          metadata.language = "{"
+          metadata.combined = true
+          metadata.content = pred[2]
+        end)
+
+        parser = vim.treesitter.get_parser(0, "c", {
+          injections = {
+            c = "(preproc_function_def value: ((preproc_arg) @_a (#inject-bad! @_a)))"}})
+        ]=])
       end)
     end)
 

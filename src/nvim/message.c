@@ -18,13 +18,14 @@
 #include "nvim/eval.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
+#include "nvim/ex_getln.h"
 #include "nvim/fileio.h"
 #include "nvim/func_attr.h"
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
 #include "nvim/highlight.h"
 #include "nvim/input.h"
-#include "nvim/keymap.h"
+#include "nvim/keycodes.h"
 #include "nvim/main.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
@@ -114,7 +115,6 @@ bool keep_msg_more = false;    // keep_msg was set by msgmore()
  *                  This is an allocated string or NULL when not used.
  */
 
-
 // Extended msg state, currently used for external UIs with ext_messages
 static const char *msg_ext_kind = NULL;
 static Array msg_ext_chunks = ARRAY_DICT_INIT;
@@ -125,6 +125,8 @@ static size_t msg_ext_cur_len = 0;
 static bool msg_ext_overwrite = false;  ///< will overwrite last message
 static int msg_ext_visible = 0;  ///< number of messages currently visible
 
+static bool msg_ext_history_visible = false;
+
 /// Shouldn't clear message after leaving cmdline
 static bool msg_ext_keep_after_cmdline = false;
 
@@ -134,7 +136,7 @@ static int msg_grid_scroll_discount = 0;
 static void ui_ext_msg_set_pos(int row, bool scrolled)
 {
   char buf[MAX_MCO + 1];
-  size_t size = utf_char2bytes(curwin->w_p_fcs_chars.msgsep, (char_u *)buf);
+  size_t size = (size_t)utf_char2bytes(curwin->w_p_fcs_chars.msgsep, buf);
   buf[size] = '\0';
   ui_call_msg_set_pos(msg_grid.handle, row, scrolled,
                       (String){ .data = buf, .size = size });
@@ -162,7 +164,8 @@ void msg_grid_validate(void)
 {
   grid_assign_handle(&msg_grid);
   bool should_alloc = msg_use_grid();
-  if (should_alloc && (msg_grid.Rows != Rows || msg_grid.Columns != Columns
+  int max_rows = Rows - (int)p_ch;
+  if (should_alloc && (msg_grid.rows != Rows || msg_grid.cols != Columns
                        || !msg_grid.chars)) {
     // TODO(bfredl): eventually should be set to "invalid". I e all callers
     // will use the grid including clear to EOS if necessary.
@@ -170,20 +173,20 @@ void msg_grid_validate(void)
     msg_grid.zindex = kZIndexMessages;
 
     xfree(msg_grid.dirty_col);
-    msg_grid.dirty_col = xcalloc(Rows, sizeof(*msg_grid.dirty_col));
+    msg_grid.dirty_col = xcalloc((size_t)Rows, sizeof(*msg_grid.dirty_col));
 
     // Tricky: allow resize while pager is active
-    int pos = msg_scrolled ? msg_grid_pos : Rows - p_ch;
-    ui_comp_put_grid(&msg_grid, pos, 0, msg_grid.Rows, msg_grid.Columns,
+    int pos = msg_scrolled ? msg_grid_pos : max_rows;
+    ui_comp_put_grid(&msg_grid, pos, 0, msg_grid.rows, msg_grid.cols,
                      false, true);
-    ui_call_grid_resize(msg_grid.handle, msg_grid.Columns, msg_grid.Rows);
+    ui_call_grid_resize(msg_grid.handle, msg_grid.cols, msg_grid.rows);
 
     msg_grid.throttled = false;  // don't throttle in 'cmdheight' area
     msg_scrolled_at_flush = msg_scrolled;
     msg_grid.focusable = false;
     msg_grid_adj.target = &msg_grid;
     if (!msg_scrolled) {
-      msg_grid_set_pos(Rows - p_ch, false);
+      msg_grid_set_pos(max_rows, false);
     }
   } else if (!should_alloc && msg_grid.chars) {
     ui_comp_remove_grid(&msg_grid);
@@ -194,8 +197,8 @@ void msg_grid_validate(void)
     msg_grid_adj.row_offset = 0;
     msg_grid_adj.target = &default_grid;
     redraw_cmdline = true;
-  } else if (msg_grid.chars && !msg_scrolled && msg_grid_pos != Rows - p_ch) {
-    msg_grid_set_pos(Rows - p_ch, false);
+  } else if (msg_grid.chars && !msg_scrolled && msg_grid_pos != max_rows) {
+    msg_grid_set_pos(max_rows, false);
   }
 
   if (msg_grid.chars && cmdline_row < msg_grid_pos) {
@@ -206,11 +209,10 @@ void msg_grid_validate(void)
   }
 }
 
-/*
- * msg(s) - displays the string 's' on the status line
- * When terminal not initialized (yet) mch_errmsg(..) is used.
- * return TRUE if wait_return not called
- */
+/// Displays the string 's' on the status line
+/// When terminal not initialized (yet) mch_errmsg(..) is used.
+///
+/// @return  TRUE if wait_return not called
 int msg(char *s)
 {
   return msg_attr_keep(s, 0, false, false);
@@ -232,7 +234,7 @@ int msg_attr(const char *s, const int attr)
   return msg_attr_keep(s, attr, false, false);
 }
 
-/// similar to msg_outtrans_attr, but support newlines and tabs.
+/// Similar to msg_outtrans_attr, but support newlines and tabs.
 void msg_multiline_attr(const char *s, int attr, bool check_int, bool *need_clear)
   FUNC_ATTR_NONNULL_ALL
 {
@@ -246,7 +248,7 @@ void msg_multiline_attr(const char *s, int attr, bool check_int, bool *need_clea
 
     if (next_spec != NULL) {
       // Printing all char that are before the char found by strpbrk
-      msg_outtrans_len_attr((const char_u *)s, next_spec - s, attr);
+      msg_outtrans_len_attr((const char_u *)s, (int)(next_spec - s), attr);
 
       if (*next_spec != TAB && *need_clear) {
         msg_clr_eos();
@@ -262,9 +264,26 @@ void msg_multiline_attr(const char *s, int attr, bool check_int, bool *need_clea
   if (*s != NUL) {
     msg_outtrans_attr((char_u *)s, attr);
   }
-  return;
 }
 
+void msg_multiattr(HlMessage hl_msg, const char *kind, bool history)
+{
+  no_wait_return++;
+  msg_start();
+  msg_clr_eos();
+  bool need_clear = false;
+  for (uint32_t i = 0; i < kv_size(hl_msg); i++) {
+    HlMessageChunk chunk = kv_A(hl_msg, i);
+    msg_multiline_attr((const char *)chunk.text.data, chunk.attr,
+                       true, &need_clear);
+  }
+  msg_ext_set_kind(kind);
+  if (history && kv_size(hl_msg)) {
+    add_msg_hist_multiattr(NULL, 0, 0, true, hl_msg);
+  }
+  no_wait_return--;
+  msg_end();
+}
 
 /// @param keep set keep_msg if it doesn't scroll
 bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
@@ -329,10 +348,11 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
   }
   retval = msg_end();
 
-  if (keep && retval && vim_strsize((char_u *)s) < (int)(Rows - cmdline_row - 1)
-      * Columns + sc_col) {
+  if (keep && retval && vim_strsize((char *)s) < (Rows - cmdline_row - 1) * Columns + sc_col) {
     set_keep_msg((char *)s, 0);
   }
+
+  need_fileinfo = false;
 
   xfree(buf);
   --entered;
@@ -340,7 +360,8 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
 }
 
 /// Truncate a string such that it can be printed without causing a scroll.
-/// Returns an allocated string or NULL when no truncating is done.
+///
+/// @return  an allocated string or NULL when no truncating is done.
 ///
 /// @param force  always truncate
 char_u *msg_strtrunc(char_u *s, int force)
@@ -353,37 +374,42 @@ char_u *msg_strtrunc(char_u *s, int force)
   if ((!msg_scroll && !need_wait_return && shortmess(SHM_TRUNCALL)
        && !exmode_active && msg_silent == 0 && !ui_has(kUIMessages))
       || force) {
-    len = vim_strsize(s);
+    len = vim_strsize((char *)s);
     if (msg_scrolled != 0) {
       // Use all the columns.
-      room = (int)(Rows - msg_row) * Columns - 1;
+      room = (Rows - msg_row) * Columns - 1;
     } else {
       // Use up to 'showcmd' column.
-      room = (int)(Rows - msg_row - 1) * Columns + sc_col - 1;
+      room = (Rows - msg_row - 1) * Columns + sc_col - 1;
     }
     if (len > room && room > 0) {
       // may have up to 18 bytes per cell (6 per char, up to two
       // composing chars)
       len = (room + 2) * 18;
-      buf = xmalloc(len);
-      trunc_string(s, buf, room, len);
+      buf = xmalloc((size_t)len);
+      trunc_string((char *)s, (char *)buf, room, len);
     }
   }
   return buf;
 }
 
-/*
- * Truncate a string "s" to "buf" with cell width "room".
- * "s" and "buf" may be equal.
- */
-void trunc_string(char_u *s, char_u *buf, int room_in, int buflen)
+/// Truncate a string "s" to "buf" with cell width "room".
+/// "s" and "buf" may be equal.
+void trunc_string(char *s, char *buf, int room_in, int buflen)
 {
-  size_t room = room_in - 3;  // "..." takes 3 chars
-  size_t half;
-  size_t len = 0;
+  int room = room_in - 3;  // "..." takes 3 chars
+  int half;
+  int len = 0;
   int e;
   int i;
   int n;
+
+  if (*s == NUL) {
+    if (buflen > 0) {
+      *buf = NUL;
+    }
+    return;
+  }
 
   if (room_in < 3) {
     room = 0;
@@ -415,7 +441,7 @@ void trunc_string(char_u *s, char_u *buf, int room_in, int buflen)
   half = i = (int)STRLEN(s);
   for (;;) {
     do {
-      half = half - utf_head_off(s, s + half - 1) - 1;
+      half = half - utf_head_off((char_u *)s, (char_u *)s + half - 1) - 1;
     } while (half > 0 && utf_iscomposing(utf_ptr2char(s + half)));
     n = ptr2cells(s + half);
     if (len + n > room || half == 0) {
@@ -428,25 +454,25 @@ void trunc_string(char_u *s, char_u *buf, int room_in, int buflen)
   if (i <= e + 3) {
     // text fits without truncating
     if (s != buf) {
-      len = STRLEN(s);
-      if (len >= (size_t)buflen) {
+      len = (int)STRLEN(s);
+      if (len >= buflen) {
         len = buflen - 1;
       }
       len = len - e + 1;
       if (len < 1) {
         buf[e - 1] = NUL;
       } else {
-        memmove(buf + e, s + e, len);
+        memmove(buf + e, s + e, (size_t)len);
       }
     }
   } else if (e + 3 < buflen) {
     // set the middle and copy the last part
     memmove(buf + e, "...", (size_t)3);
-    len = STRLEN(s + i) + 1;
-    if (len >= (size_t)buflen - e - 3) {
+    len = (int)STRLEN(s + i) + 1;
+    if (len >= buflen - e - 3) {
       len = buflen - e - 3 - 1;
     }
-    memmove(buf + e + 3, s + i, len);
+    memmove(buf + e + 3, s + i, (size_t)len);
     buf[e + 3 + len - 1] = NUL;
   } else {
     // can't fit in the "...", just truncate it
@@ -499,19 +525,15 @@ int smsg_attr_keep(int attr, const char *s, ...)
 static int last_sourcing_lnum = 0;
 static char_u *last_sourcing_name = NULL;
 
-/*
- * Reset the last used sourcing name/lnum.  Makes sure it is displayed again
- * for the next error message;
- */
+/// Reset the last used sourcing name/lnum.  Makes sure it is displayed again
+/// for the next error message;
 void reset_last_sourcing(void)
 {
   XFREE_CLEAR(last_sourcing_name);
   last_sourcing_lnum = 0;
 }
 
-/*
- * Return TRUE if "sourcing_name" differs from "last_sourcing_name".
- */
+/// @return  TRUE if "sourcing_name" differs from "last_sourcing_name".
 static int other_sourcing_name(void)
 {
   if (sourcing_name != NULL) {
@@ -561,11 +583,9 @@ static char *get_emsg_lnum(void)
   return NULL;
 }
 
-/*
- * Display name and line number for the source of an error.
- * Remember the file name and line number, so that for the next error the info
- * is only displayed if it changed.
- */
+/// Display name and line number for the source of an error.
+/// Remember the file name and line number, so that for the next error the info
+/// is only displayed if it changed.
 void msg_source(int attr)
 {
   no_wait_return++;
@@ -587,22 +607,20 @@ void msg_source(int attr)
     if (sourcing_name == NULL) {
       last_sourcing_name = NULL;
     } else {
-      last_sourcing_name = vim_strsave(sourcing_name);
+      last_sourcing_name = vim_strsave((char_u *)sourcing_name);
     }
   }
   --no_wait_return;
 }
 
-/*
- * Return TRUE if not giving error messages right now:
- * If "emsg_off" is set: no error messages at the moment.
- * If "msg" is in 'debug': do error message but without side effects.
- * If "emsg_skip" is set: never do error messages.
- */
+/// @return  TRUE if not giving error messages right now:
+///            If "emsg_off" is set: no error messages at the moment.
+///            If "msg" is in 'debug': do error message but without side effects.
+///            If "emsg_skip" is set: never do error messages.
 int emsg_not_now(void)
 {
-  if ((emsg_off > 0 && vim_strchr(p_debug, 'm') == NULL
-       && vim_strchr(p_debug, 't') == NULL)
+  if ((emsg_off > 0 && vim_strchr((char *)p_debug, 'm') == NULL
+       && vim_strchr((char *)p_debug, 't') == NULL)
       || emsg_skip > 0) {
     return TRUE;
   }
@@ -619,24 +637,22 @@ static bool emsg_multiline(const char *s, bool multiline)
     return true;
   }
 
-  called_emsg = true;
+  called_emsg++;
 
   // If "emsg_severe" is true: When an error exception is to be thrown,
   // prefer this message over previous messages for the same command.
   bool severe = emsg_severe;
   emsg_severe = false;
 
-  if (!emsg_off || vim_strchr(p_debug, 't') != NULL) {
-    /*
-     * Cause a throw of an error exception if appropriate.  Don't display
-     * the error message in this case.  (If no matching catch clause will
-     * be found, the message will be displayed later on.)  "ignore" is set
-     * when the message should be ignored completely (used for the
-     * interrupt message).
-     */
-    if (cause_errthrow((char_u *)s, severe, &ignore)) {
+  if (!emsg_off || vim_strchr((char *)p_debug, 't') != NULL) {
+    // Cause a throw of an error exception if appropriate.  Don't display
+    // the error message in this case.  (If no matching catch clause will
+    // be found, the message will be displayed later on.)  "ignore" is set
+    // when the message should be ignored completely (used for the
+    // interrupt message).
+    if (cause_errthrow(s, severe, &ignore)) {
       if (!ignore) {
-        did_emsg++;
+        did_emsg = true;
       }
       return true;
     }
@@ -655,17 +671,17 @@ static bool emsg_multiline(const char *s, bool multiline)
         if (p != NULL) {
           const size_t p_len = strlen(p);
           p[p_len] = '\n';
-          redir_write(p, p_len + 1);
+          redir_write(p, (ptrdiff_t)p_len + 1);
           xfree(p);
         }
         p = get_emsg_lnum();
         if (p != NULL) {
           const size_t p_len = strlen(p);
           p[p_len] = '\n';
-          redir_write(p, p_len + 1);
+          redir_write(p, (ptrdiff_t)p_len + 1);
           xfree(p);
         }
-        redir_write(s, strlen(s));
+        redir_write(s, (ptrdiff_t)strlen(s));
       }
 
       // Log (silent) errors as debug messages.
@@ -701,7 +717,7 @@ static bool emsg_multiline(const char *s, bool multiline)
     } else {
       flush_buffers(FLUSH_MINIMAL);  // flush internal buffers
     }
-    did_emsg++;               // flag for DoOneCmd()
+    did_emsg = true;               // flag for DoOneCmd()
   }
 
   emsg_on_display = true;     // remember there is an error message
@@ -762,7 +778,6 @@ bool semsg_multiline(const char *const fmt, ...)
 {
   bool ret;
   va_list ap;
-
 
   static char errbuf[MULTILINE_BUFSIZE];
   if (emsg_not_now()) {
@@ -838,13 +853,14 @@ void msg_schedule_semsg(const char *const fmt, ...)
   va_end(ap);
 
   char *s = xstrdup((char *)IObuff);
-  multiqueue_put(main_loop.events, msg_semsg_event, 1, s);
+  loop_schedule_deferred(&main_loop, event_create(msg_semsg_event, 1, s));
 }
 
-// Like msg(), but truncate to a single line if p_shm contains 't', or when
-// "force" is true.  This truncates in another way as for normal messages.
-// Careful: The string may be changed by msg_may_trunc()!
-// Returns a pointer to the printed message, if wait_return() not called.
+/// Like msg(), but truncate to a single line if p_shm contains 't', or when
+/// "force" is true.  This truncates in another way as for normal messages.
+/// Careful: The string may be changed by msg_may_trunc()!
+///
+/// @return  a pointer to the printed message, if wait_return() not called.
 char *msg_trunc_attr(char *s, bool force, int attr)
 {
   int n;
@@ -864,19 +880,19 @@ char *msg_trunc_attr(char *s, bool force, int attr)
   return NULL;
 }
 
-/*
- * Check if message "s" should be truncated at the start (for filenames).
- * Return a pointer to where the truncated message starts.
- * Note: May change the message by replacing a character with '<'.
- */
+/// Check if message "s" should be truncated at the start (for filenames).
+///
+/// @return  a pointer to where the truncated message starts.
+///
+/// @note: May change the message by replacing a character with '<'.
 char_u *msg_may_trunc(bool force, char_u *s)
 {
   int room;
 
-  room = (int)(Rows - cmdline_row - 1) * Columns + sc_col - 1;
+  room = (Rows - cmdline_row - 1) * Columns + sc_col - 1;
   if ((force || (shortmess(SHM_TRUNC) && !exmode_active))
-      && (int)STRLEN(s) - room > 0) {
-    int size = vim_strsize(s);
+      && (int)STRLEN(s) - room > 0 && p_ch > 0) {
+    int size = vim_strsize((char *)s);
 
     // There may be room anyway when there are multibyte chars.
     if (size <= room) {
@@ -884,8 +900,8 @@ char_u *msg_may_trunc(bool force, char_u *s)
     }
     int n;
     for (n = 0; size >= room;) {
-      size -= utf_ptr2cells(s + n);
-      n += utfc_ptr2len(s + n);
+      size -= utf_ptr2cells((char *)s + n);
+      n += utfc_ptr2len((char *)s + n);
     }
     n--;
     s += n;
@@ -894,44 +910,34 @@ char_u *msg_may_trunc(bool force, char_u *s)
   return s;
 }
 
-void clear_hl_msg(HlMessage *hl_msg)
+void hl_msg_free(HlMessage hl_msg)
 {
-  for (size_t i = 0; i < kv_size(*hl_msg); i++) {
-    xfree(kv_A(*hl_msg, i).text.data);
+  for (size_t i = 0; i < kv_size(hl_msg); i++) {
+    xfree(kv_A(hl_msg, i).text.data);
   }
-  kv_destroy(*hl_msg);
-  *hl_msg = (HlMessage)KV_INITIAL_VALUE;
+  kv_destroy(hl_msg);
 }
 
 #define LINE_BUFFER_SIZE 4096
 
 void add_hl_msg_hist(HlMessage hl_msg)
 {
-  // TODO(notomo): support multi highlighted message history
-  size_t pos = 0;
-  char buf[LINE_BUFFER_SIZE];
-  for (uint32_t i = 0; i < kv_size(hl_msg); i++) {
-    HlMessageChunk chunk = kv_A(hl_msg, i);
-    for (uint32_t j = 0; j < chunk.text.size; j++) {
-      if (pos == LINE_BUFFER_SIZE - 1) {
-        buf[pos] = NUL;
-        add_msg_hist((const char *)buf, -1, MSG_HIST, true);
-        pos = 0;
-        continue;
-      }
-      buf[pos++] = chunk.text.data[j];
-    }
-  }
-  if (pos != 0) {
-    buf[pos] = NUL;
-    add_msg_hist((const char *)buf, -1, MSG_HIST, true);
+  if (kv_size(hl_msg)) {
+    add_msg_hist_multiattr(NULL, 0, 0, true, hl_msg);
   }
 }
 
 /// @param[in]  len  Length of s or -1.
 static void add_msg_hist(const char *s, int len, int attr, bool multiline)
 {
+  add_msg_hist_multiattr(s, len, attr, multiline, (HlMessage)KV_INITIAL_VALUE);
+}
+
+static void add_msg_hist_multiattr(const char *s, int len, int attr, bool multiline,
+                                   HlMessage multiattr)
+{
   if (msg_hist_off || msg_silent != 0) {
+    hl_msg_free(multiattr);
     return;
   }
 
@@ -942,21 +948,26 @@ static void add_msg_hist(const char *s, int len, int attr, bool multiline)
 
   // allocate an entry and add the message at the end of the history
   struct msg_hist *p = xmalloc(sizeof(struct msg_hist));
-  if (len < 0) {
-    len = (int)STRLEN(s);
+  if (s) {
+    if (len < 0) {
+      len = (int)STRLEN(s);
+    }
+    // remove leading and trailing newlines
+    while (len > 0 && *s == '\n') {
+      s++;
+      len--;
+    }
+    while (len > 0 && s[len - 1] == '\n') {
+      len--;
+    }
+    p->msg = (char_u *)xmemdupz(s, (size_t)len);
+  } else {
+    p->msg = NULL;
   }
-  // remove leading and trailing newlines
-  while (len > 0 && *s == '\n') {
-    ++s;
-    --len;
-  }
-  while (len > 0 && s[len - 1] == '\n') {
-    len--;
-  }
-  p->msg = (char_u *)xmemdupz(s, (size_t)len);
   p->next = NULL;
   p->attr = attr;
   p->multiline = multiline;
+  p->multiattr = multiattr;
   p->kind = msg_ext_kind;
   if (last_msg_hist != NULL) {
     last_msg_hist->next = p;
@@ -968,10 +979,9 @@ static void add_msg_hist(const char *s, int len, int attr, bool multiline)
   msg_hist_len++;
 }
 
-/*
- * Delete the first (oldest) message from the history.
- * Returns FAIL if there are no messages.
- */
+/// Delete the first (oldest) message from the history.
+///
+/// @return  FAIL if there are no messages.
 int delete_first_msg(void)
 {
   struct msg_hist *p;
@@ -986,6 +996,7 @@ int delete_first_msg(void)
     last_msg_hist = NULL;
   }
   xfree(p->msg);
+  hl_msg_free(p->multiattr);
   xfree(p);
   --msg_hist_len;
   return OK;
@@ -1013,7 +1024,6 @@ void ex_messages(void *const eap_p)
     return;
   }
 
-
   p = first_msg_hist;
 
   if (eap->addr_count != 0) {
@@ -1025,31 +1035,48 @@ void ex_messages(void *const eap_p)
     c -= eap->line2;
 
     // Skip without number of messages specified
-    for (p = first_msg_hist; p != NULL && !got_int && c > 0; p = p->next, c--) {
-    }
+    for (p = first_msg_hist; p != NULL && !got_int && c > 0; p = p->next, c--) {}
   }
 
   // Display what was not skipped.
   if (ui_has(kUIMessages)) {
+    if (msg_silent) {
+      return;
+    }
     Array entries = ARRAY_DICT_INIT;
     for (; p != NULL; p = p->next) {
-      if (p->msg != NULL && p->msg[0] != NUL) {
+      if (kv_size(p->multiattr) || (p->msg && p->msg[0])) {
         Array entry = ARRAY_DICT_INIT;
         ADD(entry, STRING_OBJ(cstr_to_string(p->kind)));
-        Array content_entry = ARRAY_DICT_INIT;
-        ADD(content_entry, INTEGER_OBJ(p->attr));
-        ADD(content_entry, STRING_OBJ(cstr_to_string((char *)(p->msg))));
         Array content = ARRAY_DICT_INIT;
-        ADD(content, ARRAY_OBJ(content_entry));
+        if (kv_size(p->multiattr)) {
+          for (uint32_t i = 0; i < kv_size(p->multiattr); i++) {
+            HlMessageChunk chunk = kv_A(p->multiattr, i);
+            Array content_entry = ARRAY_DICT_INIT;
+            ADD(content_entry, INTEGER_OBJ(chunk.attr));
+            ADD(content_entry, STRING_OBJ(copy_string(chunk.text)));
+            ADD(content, ARRAY_OBJ(content_entry));
+          }
+        } else if (p->msg && p->msg[0]) {
+          Array content_entry = ARRAY_DICT_INIT;
+          ADD(content_entry, INTEGER_OBJ(p->attr));
+          ADD(content_entry, STRING_OBJ(cstr_to_string((char *)(p->msg))));
+          ADD(content, ARRAY_OBJ(content_entry));
+        }
         ADD(entry, ARRAY_OBJ(content));
         ADD(entries, ARRAY_OBJ(entry));
       }
     }
     ui_call_msg_history_show(entries);
+    api_free_array(entries);
+    msg_ext_history_visible = true;
+    wait_return(false);
   } else {
     msg_hist_off = true;
     for (; p != NULL && !got_int; p = p->next) {
-      if (p->msg != NULL) {
+      if (kv_size(p->multiattr)) {
+        msg_multiattr(p->multiattr, p->kind, false);
+      } else if (p->msg != NULL) {
         msg_attr_keep((char *)p->msg, p->attr, false, p->multiline);
       }
     }
@@ -1057,10 +1084,8 @@ void ex_messages(void *const eap_p)
   }
 }
 
-/*
- * Call this after prompting the user.  This will avoid a hit-return message
- * and a delay.
- */
+/// Call this after prompting the user.  This will avoid a hit-return message
+/// and a delay.
 void msg_end_prompt(void)
 {
   msg_ext_clear_later();
@@ -1074,9 +1099,9 @@ void msg_end_prompt(void)
 
 /// Wait for the user to hit a key (normally Enter)
 ///
-/// If 'redraw' is true, redraw the entire screen NOT_VALID
-/// If 'redraw' is false, do a normal redraw
-/// If 'redraw' is -1, don't redraw at all
+/// @param redraw  if true, redraw the entire screen NOT_VALID
+///                if false, do a normal redraw
+///                if -1, don't redraw at all
 void wait_return(int redraw)
 {
   int c;
@@ -1092,6 +1117,10 @@ void wait_return(int redraw)
   // If using ":silent cmd", don't wait for a return.  Also don't set
   // need_wait_return to do it later.
   if (msg_silent != 0) {
+    return;
+  }
+
+  if (headless_mode && !ui_active()) {
     return;
   }
 
@@ -1127,7 +1156,7 @@ void wait_return(int redraw)
     // just changed.
     screenalloc();
 
-    State = HITRETURN;
+    State = MODE_HITRETURN;
     setmouse();
     cmdline_row = msg_row;
     // Avoid the sequence that the user types ":" at the hit-return prompt
@@ -1147,6 +1176,7 @@ void wait_return(int redraw)
       // Don't do mappings here, we put the character back in the
       // typeahead buffer.
       no_mapping++;
+      allow_keys++;
 
       // Temporarily disable Recording. If Recording is active, the
       // character will be recorded later, since it will be added to the
@@ -1160,9 +1190,9 @@ void wait_return(int redraw)
         got_int = false;
       }
       no_mapping--;
+      allow_keys--;
       reg_recording = save_reg_recording;
       scriptout = save_scriptout;
-
 
       /*
        * Allow scrolling back in the messages.
@@ -1212,10 +1242,10 @@ void wait_return(int redraw)
     if (c == K_LEFTMOUSE || c == K_MIDDLEMOUSE || c == K_RIGHTMOUSE
         || c == K_X1MOUSE || c == K_X2MOUSE) {
       (void)jump_to_mouse(MOUSE_SETPOS, NULL, 0);
-    } else if (vim_strchr((char_u *)"\r\n ", c) == NULL && c != Ctrl_C) {
+    } else if (vim_strchr("\r\n ", c) == NULL && c != Ctrl_C) {
       // Put the character back in the typeahead buffer.  Don't use the
       // stuff buffer, because lmaps wouldn't work.
-      ins_char_typebuf(c);
+      ins_char_typebuf(vgetc_char, vgetc_mod_mask);
       do_redraw = true;             // need a redraw even though there is
                                     // typeahead
     }
@@ -1233,11 +1263,11 @@ void wait_return(int redraw)
     msg_ext_keep_after_cmdline = true;
   }
 
-  // If the window size changed set_shellsize() will redraw the screen.
+  // If the screen size changed screen_resize() will redraw the screen.
   // Otherwise the screen is only redrawn if 'redraw' is set and no ':'
   // typed.
   tmpState = State;
-  State = oldState;                 // restore State before set_shellsize
+  State = oldState;  // restore State before screen_resize()
   setmouse();
   msg_check();
   need_wait_return = false;
@@ -1245,12 +1275,12 @@ void wait_return(int redraw)
   emsg_on_display = false;      // can delete error message now
   lines_left = -1;              // reset lines_left at next msg_start()
   reset_last_sourcing();
-  if (keep_msg != NULL && vim_strsize(keep_msg) >=
+  if (keep_msg != NULL && vim_strsize((char *)keep_msg) >=
       (Rows - cmdline_row - 1) * Columns + sc_col) {
     XFREE_CLEAR(keep_msg);          // don't redisplay message, it's too long
   }
 
-  if (tmpState == SETWSIZE) {       // got resize event while in vgetc()
+  if (tmpState == MODE_SETWSIZE) {       // got resize event while in vgetc()
     ui_refresh();
   } else if (!skip_redraw) {
     if (redraw == true || (msg_scrolled != 0 && redraw != -1)) {
@@ -1262,9 +1292,7 @@ void wait_return(int redraw)
   }
 }
 
-/*
- * Write the hit-return prompt.
- */
+/// Write the hit-return prompt.
 static void hit_return_msg(void)
 {
   int save_p_more = p_more;
@@ -1285,9 +1313,7 @@ static void hit_return_msg(void)
   p_more = save_p_more;
 }
 
-/*
- * Set "keep_msg" to "s".  Free the old value and check for NULL pointer.
- */
+/// Set "keep_msg" to "s".  Free the old value and check for NULL pointer.
 void set_keep_msg(char *s, int attr)
 {
   xfree(keep_msg);
@@ -1342,7 +1368,6 @@ void msgmore(long n)
   }
 }
 
-
 void msg_ext_set_kind(const char *msg_kind)
 {
   // Don't change the label of an existing batch:
@@ -1354,18 +1379,19 @@ void msg_ext_set_kind(const char *msg_kind)
   msg_ext_kind = msg_kind;
 }
 
-/*
- * Prepare for outputting characters in the command line.
- */
+/// Prepare for outputting characters in the command line.
 void msg_start(void)
 {
   int did_return = false;
 
   if (!msg_silent) {
     XFREE_CLEAR(keep_msg);              // don't display old message now
+    need_fileinfo = false;
   }
 
-  if (need_clr_eos) {
+  bool no_msg_area = !ui_has(kUIMessages) && p_ch < 1;
+
+  if (need_clr_eos || (no_msg_area && redrawing_cmdline)) {
     // Halfway an ":echo" command and getting an (error) message: clear
     // any text from the command.
     need_clr_eos = false;
@@ -1374,10 +1400,11 @@ void msg_start(void)
 
   if (!msg_scroll && full_screen) {     // overwrite last message
     msg_row = cmdline_row;
-    msg_col =
-      cmdmsg_rl ? Columns - 1 :
-      0;
-  } else if (msg_didout) {                // start message on next line
+    msg_col = cmdmsg_rl ? Columns - 1 : 0;
+    if (no_msg_area && get_cmdprompt() == NULL) {
+      msg_row -= 1;
+    }
+  } else if (msg_didout || no_msg_area) {  // start message on next line
     msg_putchar('\n');
     did_return = true;
     cmdline_row = msg_row;
@@ -1403,9 +1430,7 @@ void msg_start(void)
   }
 }
 
-/*
- * Note that the current msg position is where messages start.
- */
+/// Note that the current msg position is where messages start.
 void msg_starthere(void)
 {
   lines_left = cmdline_row;
@@ -1419,7 +1444,7 @@ void msg_putchar(int c)
 
 void msg_putchar_attr(int c, int attr)
 {
-  char_u buf[MB_MAXBYTES + 1];
+  char buf[MB_MAXBYTES + 1];
 
   if (IS_SPECIAL(c)) {
     buf[0] = (char)K_SPECIAL;
@@ -1427,7 +1452,7 @@ void msg_putchar_attr(int c, int attr)
     buf[2] = (char)K_THIRD(c);
     buf[3] = NUL;
   } else {
-    buf[utf_char2bytes(c, buf)] = NUL;
+    buf[utf_char2bytes(c, (char *)buf)] = NUL;
   }
   msg_puts_attr((const char *)buf, attr);
 }
@@ -1452,22 +1477,19 @@ void msg_home_replace_hl(char_u *fname)
 
 static void msg_home_replace_attr(char_u *fname, int attr)
 {
-  char_u *name;
-
-  name = home_replace_save(NULL, fname);
-  msg_outtrans_attr(name, attr);
+  char *name = home_replace_save(NULL, (char *)fname);
+  msg_outtrans_attr((char_u *)name, attr);
   xfree(name);
 }
 
-/*
- * Output 'len' characters in 'str' (including NULs) with translation
- * if 'len' is -1, output up to a NUL character.
- * Use attributes 'attr'.
- * Return the number of characters it takes on the screen.
- */
-int msg_outtrans(char_u *str)
+/// Output 'len' characters in 'str' (including NULs) with translation
+/// if 'len' is -1, output up to a NUL character.
+/// Use attributes 'attr'.
+///
+/// @return  the number of characters it takes on the screen.
+int msg_outtrans(char *str)
 {
-  return msg_outtrans_attr(str, 0);
+  return msg_outtrans_attr((char_u *)str, 0);
 }
 
 int msg_outtrans_attr(const char_u *str, int attr)
@@ -1480,15 +1502,15 @@ int msg_outtrans_len(const char_u *str, int len)
   return msg_outtrans_len_attr(str, len, 0);
 }
 
-/*
- * Output one character at "p".  Return pointer to the next character.
- * Handles multi-byte characters.
- */
+/// Output one character at "p".
+/// Handles multi-byte characters.
+///
+/// @return  pointer to the next character.
 char_u *msg_outtrans_one(char_u *p, int attr)
 {
   int l;
 
-  if ((l = utfc_ptr2len(p)) > 1) {
+  if ((l = utfc_ptr2len((char *)p)) > 1) {
     msg_outtrans_len_attr(p, l, attr);
     return p + l;
   }
@@ -1504,6 +1526,10 @@ int msg_outtrans_len_attr(const char_u *msgstr, int len, int attr)
   char_u *s;
   int mb_l;
   int c;
+  int save_got_int = got_int;
+
+  // Only quit when got_int was set in here.
+  got_int = false;
 
   // if MSG_HIST flag set, add message to history
   if (attr & MSG_HIST) {
@@ -1513,7 +1539,7 @@ int msg_outtrans_len_attr(const char_u *msgstr, int len, int attr)
 
   // If the string starts with a composing character first draw a space on
   // which the composing char can be drawn.
-  if (utf_iscomposing(utf_ptr2char(msgstr))) {
+  if (utf_iscomposing(utf_ptr2char((char *)msgstr))) {
     msg_puts_attr(" ", attr);
   }
 
@@ -1521,14 +1547,14 @@ int msg_outtrans_len_attr(const char_u *msgstr, int len, int attr)
    * Go over the string.  Special characters are translated and printed.
    * Normal characters are printed several at a time.
    */
-  while (--len >= 0) {
+  while (--len >= 0 && !got_int) {
     // Don't include composing chars after the end.
     mb_l = utfc_ptr2len_len((char_u *)str, len + 1);
     if (mb_l > 1) {
-      c = utf_ptr2char((char_u *)str);
+      c = utf_ptr2char(str);
       if (vim_isprintc(c)) {
         // Printable multi-byte char: count the cells.
-        retval += utf_ptr2cells((char_u *)str);
+        retval += utf_ptr2cells(str);
       } else {
         // Unprintable multi-byte char: print the printable chars so
         // far and the translation of the unprintable char.
@@ -1560,10 +1586,12 @@ int msg_outtrans_len_attr(const char_u *msgstr, int len, int attr)
     }
   }
 
-  if (str > plain_start) {
+  if (str > plain_start && !got_int) {
     // Print the printable chars at the end.
     msg_puts_attr_len(plain_start, str - plain_start, attr);
   }
+
+  got_int |= save_got_int;
 
   return retval;
 }
@@ -1573,8 +1601,8 @@ void msg_make(char_u *arg)
   int i;
   static char_u *str = (char_u *)"eeffoc", *rs = (char_u *)"Plon#dqg#vxjduB";
 
-  arg = skipwhite(arg);
-  for (i = 5; *arg && i >= 0; --i) {
+  arg = (char_u *)skipwhite((char *)arg);
+  for (i = 5; *arg && i >= 0; i--) {
     if (*arg++ != str[i]) {
       break;
     }
@@ -1620,13 +1648,17 @@ int msg_outtrans_special(const char_u *strstart, bool from, int maxlen)
     } else {
       text = str2special((const char **)&str, from, false);
     }
-    const int len = vim_strsize((char_u *)text);
+    if (text[0] != NUL && text[1] == NUL) {
+      // single-byte character or illegal byte
+      text = (char *)transchar_byte((uint8_t)text[0]);
+    }
+    const int len = vim_strsize((char *)text);
     if (maxlen > 0 && retval + len >= maxlen) {
       break;
     }
     // Highlight special keys
     msg_puts_attr(text, (len > 1
-                         && utfc_ptr2len((char_u *)text) <= 1
+                         && utfc_ptr2len(text) <= 1
                          ? attr : 0));
     retval += len;
   }
@@ -1668,16 +1700,19 @@ char *str2special_save(const char *const str, const bool replace_spaces, const b
 /// @return Converted key code, in a static buffer. Buffer is always one and the
 ///         same, so save converted string somewhere before running str2special
 ///         for the second time.
+///         On illegal byte return a string with only that byte.
 const char *str2special(const char **const sp, const bool replace_spaces, const bool replace_lt)
   FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_RET
 {
   static char buf[7];
 
-  // Try to un-escape a multi-byte character.  Return the un-escaped
-  // string if it is a multi-byte character.
-  const char *const p = mb_unescape(sp);
-  if (p != NULL) {
-    return p;
+  {
+    // Try to un-escape a multi-byte character.  Return the un-escaped
+    // string if it is a multi-byte character.
+    const char *const p = mb_unescape(sp);
+    if (p != NULL) {
+      return p;
+    }
   }
 
   const char *str = *sp;
@@ -1699,26 +1734,26 @@ const char *str2special(const char **const sp, const bool replace_spaces, const 
     }
   }
 
-  if (!IS_SPECIAL(c)) {
-    const int len = utf_ptr2len((const char_u *)str);
-
-    // Check for an illegal byte.
-    if (MB_BYTE2LEN((uint8_t)(*str)) > len) {
-      transchar_nonprint(curbuf, (char_u *)buf, c);
+  if (!IS_SPECIAL(c) && MB_BYTE2LEN(c) > 1) {
+    *sp = str;
+    // Try to un-escape a multi-byte character after modifiers.
+    const char *p = mb_unescape(sp);
+    if (p != NULL) {
+      // Since 'special' is true the multi-byte character 'c' will be
+      // processed by get_special_key_name().
+      c = utf_ptr2char(p);
+    } else {
+      // illegal byte
       *sp = str + 1;
-      return buf;
     }
-    // Since 'special' is TRUE the multi-byte character 'c' will be
-    // processed by get_special_key_name().
-    c = utf_ptr2char((const char_u *)str);
-    *sp = str + len;
   } else {
+    // single-byte character or illegal byte
     *sp = str + 1;
   }
 
-  // Make unprintable characters in <> form, also <M-Space> and <Tab>.
+  // Make special keys and C0 control characters in <> form, also <M-Space>.
   if (special
-      || char2cells(c) > 1
+      || c < ' '
       || (replace_spaces && c == ' ')
       || (replace_lt && c == '<')) {
     return (const char *)get_special_key_name(c, modifiers);
@@ -1749,9 +1784,7 @@ void str2specialbuf(const char *sp, char *buf, size_t len)
   *buf = NUL;
 }
 
-/*
- * print line for :print or :list command
- */
+/// print line for :print or :list command
 void msg_prt_line(char_u *s, int list)
 {
   int c;
@@ -1781,7 +1814,7 @@ void msg_prt_line(char_u *s, int list)
       }
     }
     // find end of leading whitespace
-    if (curwin->w_p_lcs_chars.lead) {
+    if (curwin->w_p_lcs_chars.lead || curwin->w_p_lcs_chars.leadmultispace != NULL) {
       lead = s;
       while (ascii_iswhite(lead[0])) {
         lead++;
@@ -1809,16 +1842,16 @@ void msg_prt_line(char_u *s, int list)
         assert(p_extra != NULL);
         c = *p_extra++;
       }
-    } else if ((l = utfc_ptr2len(s)) > 1) {
-      col += utf_ptr2cells(s);
+    } else if ((l = utfc_ptr2len((char *)s)) > 1) {
+      col += utf_ptr2cells((char *)s);
       char buf[MB_MAXBYTES + 1];
       if (l >= MB_MAXBYTES) {
         xstrlcpy(buf, "?", sizeof(buf));
       } else if (curwin->w_p_lcs_chars.nbsp != NUL && list
-                 && (utf_ptr2char(s) == 160
-                     || utf_ptr2char(s) == 0x202f)) {
-        utf_char2bytes(curwin->w_p_lcs_chars.nbsp, (char_u *)buf);
-        buf[utfc_ptr2len((char_u *)buf)] = NUL;
+                 && (utf_ptr2char((char *)s) == 160
+                     || utf_ptr2char((char *)s) == 0x202f)) {
+        int len = utf_char2bytes(curwin->w_p_lcs_chars.nbsp, buf);
+        buf[len] = NUL;
       } else {
         memmove(buf, s, (size_t)l);
         buf[l] = NUL;
@@ -1871,13 +1904,21 @@ void msg_prt_line(char_u *s, int list)
         // the same in plain text.
         attr = HL_ATTR(HLF_0);
       } else if (c == ' ') {
-        if (lead != NULL && s <= lead) {
+        if (list && lead != NULL && s <= lead && in_multispace
+            && curwin->w_p_lcs_chars.leadmultispace != NULL) {
+          c = curwin->w_p_lcs_chars.leadmultispace[multispace_pos++];
+          if (curwin->w_p_lcs_chars.leadmultispace[multispace_pos] == NUL) {
+            multispace_pos = 0;
+          }
+          attr = HL_ATTR(HLF_0);
+        } else if (lead != NULL && s <= lead && curwin->w_p_lcs_chars.lead != NUL) {
           c = curwin->w_p_lcs_chars.lead;
           attr = HL_ATTR(HLF_0);
         } else if (trail != NULL && s > trail) {
           c = curwin->w_p_lcs_chars.trail;
           attr = HL_ATTR(HLF_0);
-        } else if (list && in_multispace && curwin->w_p_lcs_chars.multispace != NULL) {
+        } else if (list && in_multispace
+                   && curwin->w_p_lcs_chars.multispace != NULL) {
           c = curwin->w_p_lcs_chars.multispace[multispace_pos++];
           if (curwin->w_p_lcs_chars.multispace[multispace_pos] == NUL) {
             multispace_pos = 0;
@@ -1900,15 +1941,16 @@ void msg_prt_line(char_u *s, int list)
   msg_clr_eos();
 }
 
-// Use grid_puts() to output one multi-byte character.
-// Return the pointer "s" advanced to the next character.
+/// Use grid_puts() to output one multi-byte character.
+///
+/// @return  the pointer "s" advanced to the next character.
 static char_u *screen_puts_mbyte(char_u *s, int l, int attr)
 {
   int cw;
   attr = hl_combine_attr(HL_ATTR(HLF_MSG), attr);
 
   msg_didout = true;            // remember that line is not empty
-  cw = utf_ptr2cells(s);
+  cw = utf_ptr2cells((char *)s);
   if (cw > 1
       && (cmdmsg_rl ? msg_col <= 1 : msg_col == Columns - 1)) {
     // Doesn't fit, print a highlighted '>' to fill it up.
@@ -1933,10 +1975,8 @@ static char_u *screen_puts_mbyte(char_u *s, int l, int attr)
   return s + l;
 }
 
-/*
- * Output a string to the screen at position msg_row, msg_col.
- * Update msg_row and msg_col for the next message.
- */
+/// Output a string to the screen at position msg_row, msg_col.
+/// Update msg_row and msg_col for the next message.
 void msg_puts(const char *s)
 {
   msg_puts_attr(s, 0);
@@ -1947,11 +1987,9 @@ void msg_puts_title(const char *s)
   msg_puts_attr(s, HL_ATTR(HLF_T));
 }
 
-/*
- * Show a message in such a way that it always fits in the line.  Cut out a
- * part in the middle and replace it with "..." when necessary.
- * Does not handle multi-byte characters!
- */
+/// Show a message in such a way that it always fits in the line.  Cut out a
+/// part in the middle and replace it with "..." when necessary.
+/// Does not handle multi-byte characters!
 void msg_outtrans_long_attr(char_u *longstr, int attr)
 {
   msg_outtrans_long_len_attr(longstr, (int)STRLEN(longstr), attr);
@@ -1971,9 +2009,7 @@ void msg_outtrans_long_len_attr(char_u *longstr, int len, int attr)
   msg_outtrans_len_attr(longstr + len - slen, slen, attr);
 }
 
-/*
- * Basic function for writing a message with highlight attributes.
- */
+/// Basic function for writing a message with highlight attributes.
 void msg_puts_attr(const char *const s, const int attr)
 {
   msg_puts_attr_len(s, -1, attr);
@@ -1987,7 +2023,7 @@ void msg_puts_attr(const char *const s, const int attr)
 void msg_puts_attr_len(const char *const str, const ptrdiff_t len, int attr)
   FUNC_ATTR_NONNULL_ALL
 {
-  assert(len < 0 || memchr(str, 0, len) == NULL);
+  assert(len < 0 || memchr(str, 0, (size_t)len) == NULL);
   // If redirection is on, also write to the redirection file.
   redir_write(str, len);
 
@@ -2036,8 +2072,10 @@ void msg_puts_attr_len(const char *const str, const ptrdiff_t len, int attr)
     }
   }
   if (!msg_use_printf() || (headless_mode && default_grid.chars)) {
-    msg_puts_display((const char_u *)str, len, attr, false);
+    msg_puts_display((const char_u *)str, (int)len, attr, false);
   }
+
+  need_fileinfo = false;
 }
 
 /// Print a formatted message
@@ -2054,7 +2092,7 @@ void msg_printf_attr(const int attr, const char *const fmt, ...)
 
   va_list ap;
   va_start(ap, fmt);
-  const size_t len = vim_vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
+  const size_t len = (size_t)vim_vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
   va_end(ap);
 
   msg_scroll = true;
@@ -2075,10 +2113,8 @@ static void msg_ext_emit_chunk(void)
   ADD(msg_ext_chunks, ARRAY_OBJ(chunk));
 }
 
-/*
- * The display part of msg_puts_attr_len().
- * May be called recursively to display scroll-back text.
- */
+/// The display part of msg_puts_attr_len().
+/// May be called recursively to display scroll-back text.
 static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurse)
 {
   const char_u *s = str;
@@ -2117,12 +2153,12 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
         && (*s == '\n' || (cmdmsg_rl
                            ? (msg_col <= 1
                               || (*s == TAB && msg_col <= 7)
-                              || (utf_ptr2cells(s) > 1
+                              || (utf_ptr2cells((char *)s) > 1
                                   && msg_col <= 2))
                            : ((*s != '\r' && msg_col + t_col >= Columns - 1)
                               || (*s == TAB
                                   && msg_col + t_col >= ((Columns - 1) & ~7))
-                              || (utf_ptr2cells(s) > 1
+                              || (utf_ptr2cells((char *)s) > 1
                                   && msg_col + t_col >= Columns - 2))))) {
       // The screen is scrolled up when at the last row (some terminals
       // scroll automatically, some don't.  To avoid problems we scroll
@@ -2152,7 +2188,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
           // Avoid including composing chars after the end.
           l = utfc_ptr2len_len(s, (int)((str + maxlen) - s));
         } else {
-          l = utfc_ptr2len(s);
+          l = utfc_ptr2len((char *)s);
         }
         s = screen_puts_mbyte((char_u *)s, l, attr);
         did_last_char = true;
@@ -2188,7 +2224,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
       if (lines_left > 0) {
         --lines_left;
       }
-      if (p_more && lines_left == 0 && State != HITRETURN
+      if (p_more && lines_left == 0 && State != MODE_HITRETURN
           && !msg_no_more && !exmode_active) {
         if (do_more_prompt(NUL)) {
           s = confirm_msg_tail;
@@ -2207,7 +2243,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
 
     wrap = *s == '\n'
            || msg_col + t_col >= Columns
-           || (utf_ptr2cells(s) > 1
+           || (utf_ptr2cells((char *)s) > 1
                && msg_col + t_col >= Columns - 1)
     ;
     if (t_col > 0 && (wrap || *s == '\r' || *s == '\b'
@@ -2244,12 +2280,12 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
     } else if (*s == BELL) {  // beep (from ":sh")
       vim_beep(BO_SH);
     } else if (*s >= 0x20) {  // printable char
-      cw = utf_ptr2cells(s);
+      cw = utf_ptr2cells((char *)s);
       if (maxlen >= 0) {
         // avoid including composing chars after the end
         l = utfc_ptr2len_len(s, (int)((str + maxlen) - s));
       } else {
-        l = utfc_ptr2len(s);
+        l = utfc_ptr2len((char *)s);
       }
       // When drawing from right to left or when a double-wide character
       // doesn't fit, draw a single character here.  Otherwise collect
@@ -2283,22 +2319,22 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
   msg_check();
 }
 
-/// Return true when ":filter pattern" was used and "msg" does not match
-/// "pattern".
+/// @return  true when ":filter pattern" was used and "msg" does not match
+///          "pattern".
 bool message_filtered(char_u *msg)
 {
-  if (cmdmod.filter_regmatch.regprog == NULL) {
+  if (cmdmod.cmod_filter_regmatch.regprog == NULL) {
     return false;
   }
 
-  bool match = vim_regexec(&cmdmod.filter_regmatch, msg, (colnr_T)0);
-  return cmdmod.filter_force ? match : !match;
+  bool match = vim_regexec(&cmdmod.cmod_filter_regmatch, (char *)msg, (colnr_T)0);
+  return cmdmod.cmod_filter_force ? match : !match;
 }
 
 /// including horizontal separator
 int msg_scrollsize(void)
 {
-  return msg_scrolled + p_ch + 1;
+  return msg_scrolled + (int)p_ch + 1;
 }
 
 bool msg_use_msgsep(void)
@@ -2322,18 +2358,18 @@ void msg_scroll_up(bool may_throttle)
   msg_did_scroll = true;
   if (msg_use_msgsep()) {
     if (msg_grid_pos > 0) {
-      msg_grid_set_pos(msg_grid_pos-1, true);
+      msg_grid_set_pos(msg_grid_pos - 1, true);
     } else {
-      grid_del_lines(&msg_grid, 0, 1, msg_grid.Rows, 0, msg_grid.Columns);
-      memmove(msg_grid.dirty_col, msg_grid.dirty_col+1,
-              (msg_grid.Rows-1) * sizeof(*msg_grid.dirty_col));
-      msg_grid.dirty_col[msg_grid.Rows-1] = 0;
+      grid_del_lines(&msg_grid, 0, 1, msg_grid.rows, 0, msg_grid.cols);
+      memmove(msg_grid.dirty_col, msg_grid.dirty_col + 1,
+              (size_t)(msg_grid.rows - 1) * sizeof(*msg_grid.dirty_col));
+      msg_grid.dirty_col[msg_grid.rows - 1] = 0;
     }
   } else {
     grid_del_lines(&msg_grid_adj, 0, 1, Rows, 0, Columns);
   }
 
-  grid_fill(&msg_grid_adj, Rows-1, Rows, 0, Columns, ' ', ' ',
+  grid_fill(&msg_grid_adj, Rows - 1, Rows, 0, Columns, ' ', ' ',
             HL_ATTR(HLF_MSG));
 }
 
@@ -2360,13 +2396,13 @@ void msg_scroll_flush(void)
     msg_grid.throttled = false;
     int pos_delta = msg_grid_pos_at_flush - msg_grid_pos;
     assert(pos_delta >= 0);
-    int delta = MIN(msg_scrolled - msg_scrolled_at_flush, msg_grid.Rows);
+    int delta = MIN(msg_scrolled - msg_scrolled_at_flush, msg_grid.rows);
 
     if (pos_delta > 0) {
       ui_ext_msg_set_pos(msg_grid_pos, true);
     }
 
-    int to_scroll = delta-pos_delta-msg_grid_scroll_discount;
+    int to_scroll = delta - pos_delta - msg_grid_scroll_discount;
     assert(to_scroll >= 0);
 
     // TODO(bfredl): msg_grid_pos should be 0 already when starting scrolling
@@ -2375,10 +2411,10 @@ void msg_scroll_flush(void)
       ui_call_grid_scroll(msg_grid.handle, 0, Rows, 0, Columns, to_scroll, 0);
     }
 
-    for (int i = MAX(Rows-MAX(delta, 1), 0); i < Rows; i++) {
-      int row = i-msg_grid_pos;
+    for (int i = MAX(Rows - MAX(delta, 1), 0); i < Rows; i++) {
+      int row = i - msg_grid_pos;
       assert(row >= 0);
-      ui_line(&msg_grid, row, 0, msg_grid.dirty_col[row], msg_grid.Columns,
+      ui_line(&msg_grid, row, 0, msg_grid.dirty_col[row], msg_grid.cols,
               HL_ATTR(HLF_MSG), false);
       msg_grid.dirty_col[row] = 0;
     }
@@ -2400,13 +2436,13 @@ void msg_reset_scroll(void)
     msg_grid.throttled = false;
     // TODO(bfredl): risk for extra flicker i e with
     // "nvim -o has_swap also_has_swap"
-    msg_grid_set_pos(Rows - p_ch, false);
+    msg_grid_set_pos(Rows - (int)p_ch, false);
     clear_cmdline = true;
     if (msg_grid.chars) {
       // non-displayed part of msg_grid is considered invalid.
-      for (int i = 0; i < MIN(msg_scrollsize(), msg_grid.Rows); i++) {
+      for (int i = 0; i < MIN(msg_scrollsize(), msg_grid.rows); i++) {
         grid_clear_line(&msg_grid, msg_grid.line_offset[i],
-                        msg_grid.Columns, false);
+                        msg_grid.cols, false);
       }
     }
   } else {
@@ -2416,13 +2452,11 @@ void msg_reset_scroll(void)
   msg_scrolled_at_flush = 0;
 }
 
-/*
- * Increment "msg_scrolled".
- */
+/// Increment "msg_scrolled".
 static void inc_msg_scrolled(void)
 {
   if (*get_vim_var_str(VV_SCROLLSTART) == NUL) {
-    char *p = (char *)sourcing_name;
+    char *p = sourcing_name;
     char *tofree = NULL;
 
     // v:scrollstart is empty, set it to the script/function name and line
@@ -2473,11 +2507,11 @@ static void store_sb_text(char_u **sb_str, char_u *s, int attr, int *sb_col, int
   }
 
   if (s > *sb_str) {
-    mp = xmalloc((sizeof(msgchunk_T) + (s - *sb_str)));
-    mp->sb_eol = finish;
+    mp = xmalloc((sizeof(msgchunk_T) + (size_t)(s - *sb_str)));
+    mp->sb_eol = (char)finish;
     mp->sb_msg_col = *sb_col;
     mp->sb_attr = attr;
-    memcpy(mp->sb_text, *sb_str, s - *sb_str);
+    memcpy(mp->sb_text, *sb_str, (size_t)(s - *sb_str));
     mp->sb_text[s - *sb_str] = NUL;
 
     if (last_msgchunk == NULL) {
@@ -2497,9 +2531,7 @@ static void store_sb_text(char_u **sb_str, char_u *s, int attr, int *sb_col, int
   *sb_col = 0;
 }
 
-/*
- * Finished showing messages, clear the scroll-back text on the next message.
- */
+/// Finished showing messages, clear the scroll-back text on the next message.
 void may_clear_sb_text(void)
 {
   do_clear_sb_text = SB_CLEAR_ALL;
@@ -2542,9 +2574,7 @@ void clear_sb_text(int all)
   }
 }
 
-/*
- * "g<" command.
- */
+/// "g<" command.
 void show_sb_text(void)
 {
   msgchunk_T *mp;
@@ -2560,9 +2590,7 @@ void show_sb_text(void)
   }
 }
 
-/*
- * Move to the start of screen line in already displayed text.
- */
+/// Move to the start of screen line in already displayed text.
 static msgchunk_T *msg_sb_start(msgchunk_T *mps)
 {
   msgchunk_T *mp = mps;
@@ -2573,9 +2601,7 @@ static msgchunk_T *msg_sb_start(msgchunk_T *mps)
   return mp;
 }
 
-/*
- * Mark the last message chunk as finishing the line.
- */
+/// Mark the last message chunk as finishing the line.
 void msg_sb_eol(void)
 {
   if (last_msgchunk != NULL) {
@@ -2583,10 +2609,9 @@ void msg_sb_eol(void)
   }
 }
 
-/*
- * Display a screen line from previously displayed text at row "row".
- * Returns a pointer to the text for the next line (can be NULL).
- */
+/// Display a screen line from previously displayed text at row "row".
+///
+/// @return  a pointer to the text for the next line (can be NULL).
 static msgchunk_T *disp_sb_line(int row, msgchunk_T *smp)
 {
   msgchunk_T *mp = smp;
@@ -2609,9 +2634,7 @@ static msgchunk_T *disp_sb_line(int row, msgchunk_T *smp)
   return mp->sb_next;
 }
 
-/*
- * Output any postponed text for msg_puts_attr_len().
- */
+/// Output any postponed text for msg_puts_attr_len().
 static void t_puts(int *t_col, const char_u *t_s, const char_u *s, int attr)
 {
   attr = hl_combine_attr(HL_ATTR(HLF_MSG), attr);
@@ -2623,7 +2646,7 @@ static void t_puts(int *t_col, const char_u *t_s, const char_u *s, int attr)
   *t_col = 0;
   // If the string starts with a composing character don't increment the
   // column position for it.
-  if (utf_iscomposing(utf_ptr2char(t_s))) {
+  if (utf_iscomposing(utf_ptr2char((char *)t_s))) {
     msg_col--;
   }
   if (msg_col >= Columns) {
@@ -2632,9 +2655,9 @@ static void t_puts(int *t_col, const char_u *t_s, const char_u *s, int attr)
   }
 }
 
-// Returns TRUE when messages should be printed to stdout/stderr:
-//    - "batch mode" ("silent mode", -es/-Es)
-//    - no UI and not embedded
+/// @return  TRUE when messages should be printed to stdout/stderr:
+///          - "batch mode" ("silent mode", -es/-Es)
+///          - no UI and not embedded
 int msg_use_printf(void)
 {
   return !embedded_mode && !ui_active();
@@ -2647,15 +2670,26 @@ static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
   char buf[7];
   char *p;
 
+  if (on_print.type != kCallbackNone) {
+    typval_T argv[1];
+    argv[0].v_type = VAR_STRING;
+    argv[0].v_lock = VAR_UNLOCKED;
+    argv[0].vval.v_string = (char *)str;
+    typval_T rettv = TV_INITIAL_VALUE;
+    callback_call(&on_print, 1, argv, &rettv);
+    tv_clear(&rettv);
+    return;
+  }
+
   while ((maxlen < 0 || s - str < maxlen) && *s != NUL) {
-    int len = utf_ptr2len((const char_u *)s);
+    int len = utf_ptr2len(s);
     if (!(silent_mode && p_verbose == 0)) {
       // NL --> CR NL translation (for Unix, not for "--version")
       p = &buf[0];
       if (*s == '\n' && !info_message) {
         *p++ = '\r';
       }
-      memcpy(p, s, len);
+      memcpy(p, s, (size_t)len);
       *(p + len) = '\0';
       if (info_message) {
         mch_msg(buf);
@@ -2664,7 +2698,7 @@ static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
       }
     }
 
-    int cw = utf_char2cells(utf_ptr2char((const char_u *)s));
+    int cw = utf_char2cells(utf_ptr2char(s));
     // primitive way to compute the current column
     if (cmdmsg_rl) {
       if (*s == '\r' || *s == '\n') {
@@ -2684,13 +2718,12 @@ static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
   msg_didout = true;  // assume that line is not empty
 }
 
-/*
- * Show the more-prompt and handle the user response.
- * This takes care of scrolling back and displaying previously displayed text.
- * When at hit-enter prompt "typed_char" is the already typed character,
- * otherwise it's NUL.
- * Returns TRUE when jumping ahead to "confirm_msg_tail".
- */
+/// Show the more-prompt and handle the user response.
+/// This takes care of scrolling back and displaying previously displayed text.
+/// When at hit-enter prompt "typed_char" is the already typed character,
+/// otherwise it's NUL.
+///
+/// @return  TRUE when jumping ahead to "confirm_msg_tail".
 static int do_more_prompt(int typed_char)
 {
   static bool entered = false;
@@ -2712,7 +2745,7 @@ static int do_more_prompt(int typed_char)
   // We get called recursively when a timer callback outputs a message. In
   // that case don't show another prompt. Also when at the hit-Enter prompt
   // and nothing was typed.
-  if (no_need_more || entered || (State == HITRETURN && typed_char == 0)) {
+  if (no_need_more || entered || (State == MODE_HITRETURN && typed_char == 0)) {
     return false;
   }
   entered = true;
@@ -2726,7 +2759,7 @@ static int do_more_prompt(int typed_char)
     }
   }
 
-  State = ASKMORE;
+  State = MODE_ASKMORE;
   setmouse();
   if (typed_char == NUL) {
     msg_moremsg(FALSE);
@@ -2741,7 +2774,6 @@ static int do_more_prompt(int typed_char)
     } else {
       c = get_keystroke(resize_events);
     }
-
 
     toscroll = 0;
     switch (c) {
@@ -2892,7 +2924,7 @@ static int do_more_prompt(int typed_char)
           // scroll up, display line at bottom
           msg_scroll_up(true);
           inc_msg_scrolled();
-          grid_fill(&msg_grid_adj, Rows-2, Rows-1, 0, Columns, ' ', ' ',
+          grid_fill(&msg_grid_adj, Rows - 2, Rows - 1, 0, Columns, ' ', ' ',
                     HL_ATTR(HLF_MSG));
           mp_last = disp_sb_line(Rows - 2, mp_last);
           toscroll--;
@@ -2948,7 +2980,7 @@ void mch_errmsg(char *str)
   }
 }
 
-// Give a message.  To be used when the UI is not initialized yet.
+/// Give a message.  To be used when the UI is not initialized yet.
 void mch_msg(char *str)
 {
   assert(str != NULL);
@@ -2963,10 +2995,8 @@ void mch_msg(char *str)
 }
 #endif  // WIN32
 
-/*
- * Put a character on the screen at the current message position and advance
- * to the next position.  Only for printable ASCII!
- */
+/// Put a character on the screen at the current message position and advance
+/// to the next position.  Only for printable ASCII!
 static void msg_screen_putchar(int c, int attr)
 {
   attr = hl_combine_attr(HL_ATTR(HLF_MSG), attr);
@@ -2995,25 +3025,23 @@ void msg_moremsg(int full)
   if (full) {
     grid_puts(&msg_grid_adj, (char_u *)
               _(" SPACE/d/j: screen/page/line down, b/u/k: up, q: quit "),
-              Rows - 1, vim_strsize(s), attr);
+              Rows - 1, vim_strsize((char *)s), attr);
   }
 }
 
-/*
- * Repeat the message for the current mode: ASKMORE, EXTERNCMD, CONFIRM or
- * exmode_active.
- */
+/// Repeat the message for the current mode: MODE_ASKMORE, MODE_EXTERNCMD,
+/// MODE_CONFIRM or exmode_active.
 void repeat_message(void)
 {
-  if (State == ASKMORE) {
-    msg_moremsg(TRUE);          // display --more-- message again
+  if (State == MODE_ASKMORE) {
+    msg_moremsg(true);          // display --more-- message again
     msg_row = Rows - 1;
-  } else if (State == CONFIRM) {
+  } else if (State == MODE_CONFIRM) {
     display_confirm_msg();      // display ":confirm" message again
     msg_row = Rows - 1;
-  } else if (State == EXTERNCMD) {
+  } else if (State == MODE_EXTERNCMD) {
     ui_cursor_goto(msg_row, msg_col);     // put cursor back
-  } else if (State == HITRETURN || State == SETWSIZE) {
+  } else if (State == MODE_HITRETURN || State == MODE_SETWSIZE) {
     if (msg_row == Rows - 1) {
       // Avoid drawing the "hit-enter" prompt below the previous one,
       // overwrite it.  Esp. useful when regaining focus and a
@@ -3027,22 +3055,18 @@ void repeat_message(void)
   }
 }
 
-/*
- * Clear from current message position to end of screen.
- * Skip this when ":silent" was used, no need to clear for redirection.
- */
+/// Clear from current message position to end of screen.
+/// Skip this when ":silent" was used, no need to clear for redirection.
 void msg_clr_eos(void)
 {
-  if (msg_silent == 0) {
+  if (msg_silent == 0 && p_ch > 0) {
     msg_clr_eos_force();
   }
 }
 
-/*
- * Clear from current message position to end of screen.
- * Note: msg_col is not updated, so we remember the end of the message
- * for msg_check().
- */
+/// Clear from current message position to end of screen.
+/// Note: msg_col is not updated, so we remember the end of the message
+/// for msg_check().
 void msg_clr_eos_force(void)
 {
   if (ui_has(kUIMessages)) {
@@ -3057,21 +3081,21 @@ void msg_clr_eos_force(void)
     msg_row = msg_grid_pos;
   }
 
-  grid_fill(&msg_grid_adj, msg_row, msg_row + 1, msg_startcol, msg_endcol, ' ',
-            ' ', HL_ATTR(HLF_MSG));
-  grid_fill(&msg_grid_adj, msg_row + 1, Rows, 0, Columns, ' ', ' ',
-            HL_ATTR(HLF_MSG));
+  if (p_ch > 0) {
+    grid_fill(&msg_grid_adj, msg_row, msg_row + 1, msg_startcol, msg_endcol,
+              ' ', ' ', HL_ATTR(HLF_MSG));
+    grid_fill(&msg_grid_adj, msg_row + 1, Rows, 0, Columns,
+              ' ', ' ', HL_ATTR(HLF_MSG));
+  }
 
   redraw_cmdline = true;  // overwritten the command line
-  if (msg_row < Rows-1 || msg_col == (cmdmsg_rl ? Columns : 0)) {
+  if (msg_row < Rows - 1 || msg_col == (cmdmsg_rl ? Columns : 0)) {
     clear_cmdline = false;  // command line has been cleared
     mode_displayed = false;  // mode cleared or overwritten
   }
 }
 
-/*
- * Clear the command line.
- */
+/// Clear the command line.
 void msg_clr_cmdline(void)
 {
   msg_row = cmdline_row;
@@ -3079,11 +3103,10 @@ void msg_clr_cmdline(void)
   msg_clr_eos_force();
 }
 
-/*
- * end putting a message on the screen
- * call wait_return if the message does not fit in the available space
- * return TRUE if wait_return not called.
- */
+/// end putting a message on the screen
+/// call wait_return if the message does not fit in the available space
+///
+/// @return  TRUE if wait_return not called.
 int msg_end(void)
 {
   /*
@@ -3092,9 +3115,9 @@ int msg_end(void)
    * we have to redraw the window.
    * Do not do this if we are abandoning the file or editing the command line.
    */
-  if (!exiting && need_wait_return && !(State & CMDLINE)) {
-    wait_return(FALSE);
-    return FALSE;
+  if (!exiting && need_wait_return && !(State & MODE_CMDLINE)) {
+    wait_return(false);
+    return false;
   }
 
   // NOTE: ui_flush() used to be called here. This had to be removed, as it
@@ -3113,12 +3136,13 @@ void msg_ext_ui_flush(void)
 
   msg_ext_emit_chunk();
   if (msg_ext_chunks.size > 0) {
-    ui_call_msg_show(cstr_to_string(msg_ext_kind),
+    ui_call_msg_show(cstr_as_string((char *)msg_ext_kind),
                      msg_ext_chunks, msg_ext_overwrite);
     if (!msg_ext_overwrite) {
       msg_ext_visible++;
     }
     msg_ext_kind = NULL;
+    api_free_array(msg_ext_chunks);
     msg_ext_chunks = (Array)ARRAY_DICT_INIT;
     msg_ext_cur_len = 0;
     msg_ext_overwrite = false;
@@ -3132,6 +3156,7 @@ void msg_ext_flush_showmode(void)
   if (ui_has(kUIMessages)) {
     msg_ext_emit_chunk();
     ui_call_msg_showmode(msg_ext_chunks);
+    api_free_array(msg_ext_chunks);
     msg_ext_chunks = (Array)ARRAY_DICT_INIT;
     msg_ext_cur_len = 0;
   }
@@ -3143,6 +3168,10 @@ void msg_ext_clear(bool force)
     ui_call_msg_clear();
     msg_ext_visible = 0;
     msg_ext_overwrite = false;  // nothing to overwrite
+  }
+  if (msg_ext_history_visible) {
+    ui_call_msg_history_clear();
+    msg_ext_history_visible = false;
   }
 
   // Only keep once.
@@ -3173,10 +3202,8 @@ bool msg_ext_is_visible(void)
   return ui_has(kUIMessages) && msg_ext_visible > 0;
 }
 
-/*
- * If the written message runs into the shown command or ruler, we have to
- * wait for hit-return and redraw the window later.
- */
+/// If the written message runs into the shown command or ruler, we have to
+/// wait for hit-return and redraw the window later.
 void msg_check(void)
 {
   if (ui_has(kUIMessages)) {
@@ -3188,10 +3215,9 @@ void msg_check(void)
   }
 }
 
-/*
- * May write a string to the redirection file.
- * When "maxlen" is -1 write the whole string, otherwise up to "maxlen" bytes.
- */
+/// May write a string to the redirection file.
+///
+/// @param maxlen  if -1, write the whole string, otherwise up to "maxlen" bytes.
 static void redir_write(const char *const str, const ptrdiff_t maxlen)
 {
   const char_u *s = (char_u *)str;
@@ -3221,7 +3247,7 @@ static void redir_write(const char *const str, const ptrdiff_t maxlen)
         if (redir_reg) {
           write_reg_contents(redir_reg, (char_u *)" ", 1, true);
         } else if (redir_vname) {
-          var_redir_str((char_u *)" ", -1);
+          var_redir_str(" ", -1);
         } else if (redir_fd != NULL) {
           fputs(" ", redir_fd);
         }
@@ -3237,10 +3263,10 @@ static void redir_write(const char *const str, const ptrdiff_t maxlen)
       ga_concat_len(capture_ga, str, len);
     }
     if (redir_reg) {
-      write_reg_contents(redir_reg, s, len, true);
+      write_reg_contents(redir_reg, s, (ssize_t)len, true);
     }
     if (redir_vname) {
-      var_redir_str((char_u *)s, maxlen);
+      var_redir_str((char *)s, (int)maxlen);
     }
 
     // Write and adjust the current column.
@@ -3276,10 +3302,8 @@ int redirecting(void)
          || redir_reg || redir_vname || capture_ga != NULL;
 }
 
-/*
- * Before giving verbose message.
- * Must always be called paired with verbose_leave()!
- */
+/// Before giving verbose message.
+/// Must always be called paired with verbose_leave()!
 void verbose_enter(void)
 {
   if (*p_vfile != NUL) {
@@ -3287,10 +3311,8 @@ void verbose_enter(void)
   }
 }
 
-/*
- * After giving verbose message.
- * Must always be called paired with verbose_enter()!
- */
+/// After giving verbose message.
+/// Must always be called paired with verbose_enter()!
 void verbose_leave(void)
 {
   if (*p_vfile != NUL) {
@@ -3300,9 +3322,7 @@ void verbose_leave(void)
   }
 }
 
-/*
- * Like verbose_enter() and set msg_scroll when displaying the message.
- */
+/// Like verbose_enter() and set msg_scroll when displaying the message.
 void verbose_enter_scroll(void)
 {
   if (*p_vfile != NUL) {
@@ -3313,9 +3333,7 @@ void verbose_enter_scroll(void)
   }
 }
 
-/*
- * Like verbose_leave() and set cmdline_row when displaying the message.
- */
+/// Like verbose_leave() and set cmdline_row when displaying the message.
 void verbose_leave_scroll(void)
 {
   if (*p_vfile != NUL) {
@@ -3327,9 +3345,7 @@ void verbose_leave_scroll(void)
   }
 }
 
-/*
- * Called when 'verbosefile' is set: stop writing to the file.
- */
+/// Called when 'verbosefile' is set: stop writing to the file.
 void verbose_stop(void)
 {
   if (verbose_fd != NULL) {
@@ -3339,10 +3355,9 @@ void verbose_stop(void)
   verbose_did_open = FALSE;
 }
 
-/*
- * Open the file 'verbosefile'.
- * Return FAIL or OK.
- */
+/// Open the file 'verbosefile'.
+///
+/// @return  FAIL or OK.
 int verbose_open(void)
 {
   if (verbose_fd == NULL && !verbose_did_open) {
@@ -3358,11 +3373,10 @@ int verbose_open(void)
   return OK;
 }
 
-/*
- * Give a warning message (for searching).
- * Use 'w' highlighting and may repeat the message after redrawing
- */
-void give_warning(char_u *message, bool hl) FUNC_ATTR_NONNULL_ARG(1)
+/// Give a warning message (for searching).
+/// Use 'w' highlighting and may repeat the message after redrawing
+void give_warning(char *message, bool hl)
+  FUNC_ATTR_NONNULL_ARG(1)
 {
   // Don't do this for ":silent".
   if (msg_silent != 0) {
@@ -3372,7 +3386,7 @@ void give_warning(char_u *message, bool hl) FUNC_ATTR_NONNULL_ARG(1)
   // Don't want a hit-enter prompt here.
   no_wait_return++;
 
-  set_vim_var_string(VV_WARNINGMSG, (char *)message, -1);
+  set_vim_var_string(VV_WARNINGMSG, message, -1);
   XFREE_CLEAR(keep_msg);
   if (hl) {
     keep_msg_attr = HL_ATTR(HLF_W);
@@ -3385,7 +3399,7 @@ void give_warning(char_u *message, bool hl) FUNC_ATTR_NONNULL_ARG(1)
   }
 
   if (msg_attr((const char *)message, keep_msg_attr) && msg_scrolled == 0) {
-    set_keep_msg((char *)message, keep_msg_attr);
+    set_keep_msg(message, keep_msg_attr);
   }
   msg_didout = false;  // Overwrite this message.
   msg_nowait = true;   // Don't wait for this message.
@@ -3397,12 +3411,10 @@ void give_warning(char_u *message, bool hl) FUNC_ATTR_NONNULL_ARG(1)
 void give_warning2(char_u *const message, char_u *const a1, bool hl)
 {
   vim_snprintf((char *)IObuff, IOSIZE, (char *)message, a1);
-  give_warning(IObuff, hl);
+  give_warning((char *)IObuff, hl);
 }
 
-/*
- * Advance msg cursor to column "col".
- */
+/// Advance msg cursor to column "col".
 void msg_advance(int col)
 {
   if (msg_silent != 0) {        // nothing to advance to
@@ -3450,6 +3462,7 @@ void msg_advance(int col)
 ///
 /// @param textfiel  IObuff for inputdialog(), NULL otherwise
 /// @param ex_cmd  when TRUE pressing : accepts default and starts Ex command
+/// @returns 0 if cancelled, otherwise the nth button (1-indexed).
 int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfltbutton,
               char_u *textfield, int ex_cmd)
 {
@@ -3464,12 +3477,11 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
     return dfltbutton;  // return default option
   }
 
-
   int save_msg_silent = msg_silent;
   int oldState = State;
 
   msg_silent = 0;  // If dialog prompts for input, user needs to see it! #8788
-  State = CONFIRM;
+  State = MODE_CONFIRM;
   setmouse();
 
   /*
@@ -3497,7 +3509,7 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
       }
       if (c == ':' && ex_cmd) {
         retval = dfltbutton;
-        ins_char_typebuf(':');
+        ins_char_typebuf(':', 0);
         break;
       }
 
@@ -3505,10 +3517,10 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
       c = mb_tolower(c);
       retval = 1;
       for (i = 0; hotkeys[i]; i++) {
-        if (utf_ptr2char(hotkeys + i) == c) {
+        if (utf_ptr2char((char *)hotkeys + i) == c) {
           break;
         }
-        i += utfc_ptr2len(hotkeys + i) - 1;
+        i += utfc_ptr2len((char *)hotkeys + i) - 1;
         retval++;
       }
       if (hotkeys[i]) {
@@ -3531,7 +3543,6 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
   return retval;
 }
 
-
 /// Copy one character from "*from" to "*to", taking care of multi-byte
 /// characters.  Return the length of the character in bytes.
 ///
@@ -3540,10 +3551,10 @@ static int copy_char(const char_u *from, char_u *to, bool lowercase)
   FUNC_ATTR_NONNULL_ALL
 {
   if (lowercase) {
-    int c = mb_tolower(utf_ptr2char(from));
-    return utf_char2bytes(c, to);
+    int c = mb_tolower(utf_ptr2char((char *)from));
+    return utf_char2bytes(c, (char *)to);
   }
-  int len = utfc_ptr2len(from);
+  int len = utfc_ptr2len((char *)from);
   memmove(to, from, (size_t)len);
   return len;
 }
@@ -3602,24 +3613,21 @@ static char_u *console_dialog_alloc(const char_u *message, char_u *buttons, bool
     len += 2;                                // "x" -> "[x]"
   }
 
-
   // Now allocate space for the strings
   xfree(confirm_msg);
-  confirm_msg = xmalloc(len);
+  confirm_msg = xmalloc((size_t)len);
   *confirm_msg = NUL;
 
-  return xmalloc(lenhotkey);
+  return xmalloc((size_t)lenhotkey);
 }
 
-/*
- * Format the dialog string, and display it at the bottom of
- * the screen. Return a string of hotkey chars (if defined) for
- * each 'button'. If a button has no hotkey defined, the first character of
- * the button is used.
- * The hotkeys can be multi-byte characters, but without combining chars.
- *
- * Returns an allocated string with hotkeys.
- */
+/// Format the dialog string, and display it at the bottom of
+/// the screen. Return a string of hotkey chars (if defined) for
+/// each 'button'. If a button has no hotkey defined, the first character of
+/// the button is used.
+/// The hotkeys can be multi-byte characters, but without combining chars.
+///
+/// @return  an allocated string with hotkeys.
 static char_u *msg_show_console_dialog(char_u *message, char_u *buttons, int dfltbutton)
   FUNC_ATTR_NONNULL_RET
 {
@@ -3712,9 +3720,7 @@ static void copy_hotkeys_and_msg(const char_u *message, char_u *buttons, int def
   *msgp = NUL;
 }
 
-/*
- * Display the ":confirm" message.  Also called when screen resized.
- */
+/// Display the ":confirm" message.  Also called when screen resized.
 void display_confirm_msg(void)
 {
   // Avoid that 'q' at the more prompt truncates the message here.

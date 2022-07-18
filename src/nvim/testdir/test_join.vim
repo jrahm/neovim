@@ -51,7 +51,7 @@ func Test_join_marks()
 
   /^This line/;'}-join
   call assert_equal([0, 4, 11, 0], getpos("'["))
-  call assert_equal([0, 4, 66, 0], getpos("']"))
+  call assert_equal([0, 4, 67, 0], getpos("']"))
   enew!
 endfunc
 
@@ -437,5 +437,11 @@ func Test_join_lines()
   call setline(1, ['a', 'b', '', 'c', 'd'])
   normal 5J
   call assert_equal('a b c d', getline(1))
+  call setline(1, ['a', 'b', 'c'])
+  2,2join
+  call assert_equal(['a', 'b', 'c'], getline(1, '$'))
+  call assert_equal(2, line('.'))
+  2join
+  call assert_equal(['a', 'b c'], getline(1, '$'))
   bwipe!
 endfunc

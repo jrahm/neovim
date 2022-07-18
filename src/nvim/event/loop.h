@@ -10,8 +10,8 @@
 
 typedef void *WatcherPtr;
 
-#define _noop(x)
-KLIST_INIT(WatcherPtr, WatcherPtr, _noop)
+#define _NOOP(x)
+KLIST_INIT(WatcherPtr, WatcherPtr, _NOOP)
 
 typedef struct loop {
   uv_loop_t uv;
@@ -35,6 +35,8 @@ typedef struct loop {
 
   // generic timer, used by loop_poll_events()
   uv_timer_t poll_timer;
+
+  uv_timer_t exit_delay_timer;
 
   uv_async_t async;
   uv_mutex_t mutex;
@@ -81,7 +83,6 @@ typedef struct loop {
       loop_poll_events(loop, timeout); \
     } \
   } while (0)
-
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "event/loop.h.generated.h"

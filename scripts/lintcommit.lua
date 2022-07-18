@@ -45,8 +45,13 @@ end
 -- Returns nil if the given commit message is valid, or returns a string
 -- message explaining why it is invalid.
 local function validate_commit(commit_message)
-  local commit_split = vim.split(commit_message, ":")
+  -- Return nil if the commit message starts with "fixup" as it signifies it's
+  -- a work in progress and shouldn't be linted yet.
+  if vim.startswith(commit_message, "fixup") then
+    return nil
+  end
 
+  local commit_split = vim.split(commit_message, ":")
   -- Return nil if the type is vim-patch since most of the normal rules don't
   -- apply.
   if commit_split[1] == "vim-patch" then
@@ -73,7 +78,7 @@ local function validate_commit(commit_message)
 
   -- Check if type is correct
   local type = vim.split(before_colon, "%(")[1]
-  local allowed_types = {'build', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'test', 'chore', 'vim-patch'}
+  local allowed_types = {'build', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'test', 'dist', 'vim-patch'}
   if not vim.tbl_contains(allowed_types, type) then
     return string.format(
       'Invalid commit type "%s". Allowed types are:\n    %s',
@@ -94,10 +99,24 @@ local function validate_commit(commit_message)
     return [[Description ends with a period (".").]]
   end
 
-  -- Check that description has exactly one whitespace after colon, followed by
-  -- a lowercase letter and then any number of letters.
-  if not string.match(after_colon, '^ %l%a*') then
-    return [[There should be one whitespace after the colon and the first letter should lowercase.]]
+  -- Check that description starts with a whitespace.
+  if after_colon:sub(1,1) ~= " " then
+    return [[There should be a whitespace after the colon.]]
+  end
+
+  -- Check that description doesn't start with multiple whitespaces.
+  if after_colon:sub(1,2) == "  " then
+    return [[There should only be one whitespace after the colon.]]
+  end
+
+  -- Check that first character after space isn't uppercase.
+  if string.match(after_colon:sub(2,2), '%u') then
+    return [[First character should not be uppercase.]]
+   end
+
+  -- Check that description isn't just whitespaces
+  if vim.trim(after_colon) == "" then
+    return [[Description shouldn't be empty.]]
   end
 
   return nil
@@ -162,18 +181,23 @@ function M._test()
     ['refactor: normal message'] = true,
     ['revert: normal message'] = true,
     ['test: normal message'] = true,
-    ['chore: normal message'] = true,
+    ['dist: normal message'] = true,
     ['ci(window): message with scope'] = true,
     ['ci!: message with breaking change'] = true,
     ['ci(tui)!: message with scope and breaking change'] = true,
     ['vim-patch:8.2.3374: Pyret files are not recognized (#15642)'] = true,
     ['vim-patch:8.1.1195,8.2.{3417,3419}'] = true,
+    ['revert: "ci: use continue-on-error instead of "|| true""'] = true,
+    ['fixup'] = true,
+    ['fixup: commit message'] = true,
+    ['fixup! commit message'] = true,
     [':no type before colon 1'] = false,
     [' :no type before colon 2'] = false,
     ['  :no type before colon 3'] = false,
     ['ci(empty description):'] = false,
-    ['ci(whitespace as description): '] = false,
+    ['ci(only whitespace as description): '] = false,
     ['docs(multiple whitespaces as description):   '] = false,
+    ['revert(multiple whitespaces and then characters as description):  description'] = false,
     ['ci no colon after type'] = false,
     ['test:  extra space after colon'] = false,
     ['ci:	tab after colon'] = false,
@@ -181,10 +205,10 @@ function M._test()
     ['ci :extra space before colon'] = false,
     ['refactor(): empty scope'] = false,
     ['ci( ): whitespace as scope'] = false,
-    ['chore: period at end of sentence.'] = false,
+    ['ci: period at end of sentence.'] = false,
     ['ci: Starting sentence capitalized'] = false,
     ['unknown: using unknown type'] = false,
-    ['chore: you\'re saying this commit message just goes on and on and on and on and on and on for way too long?'] = false,
+    ['ci: you\'re saying this commit message just goes on and on and on and on and on and on for way too long?'] = false,
   }
 
   local failed = 0

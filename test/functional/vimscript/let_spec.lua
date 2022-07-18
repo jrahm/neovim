@@ -5,9 +5,10 @@ local clear = helpers.clear
 local command = helpers.command
 local eval = helpers.eval
 local meths = helpers.meths
+local exec = helpers.exec
 local exec_capture = helpers.exec_capture
 local source = helpers.source
-local nvim_dir = helpers.nvim_dir
+local testprg = helpers.testprg
 
 before_each(clear)
 
@@ -47,33 +48,33 @@ describe(':let', function()
   end)
 
   it("multibyte env var #8398 #9267", function()
-    command("let $NVIM_TEST = 'AìaB'")
-    eq('AìaB', eval('$NVIM_TEST'))
-    command("let $NVIM_TEST = 'AaあB'")
-    eq('AaあB', eval('$NVIM_TEST'))
+    command("let $NVIM_TEST_LET = 'AìaB'")
+    eq('AìaB', eval('$NVIM_TEST_LET'))
+    command("let $NVIM_TEST_LET = 'AaあB'")
+    eq('AaあB', eval('$NVIM_TEST_LET'))
     local mbyte = [[\p* .ม .ม .ม .ม่ .ม่ .ม่ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹֻ ֹֻ ֹֻ
                     .ֹֻ .ֹֻ .ֹֻ ֹֻ ֹֻ ֹֻ .ֹֻ .ֹֻ .ֹֻ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹֻ ֹֻ
                     .ֹֻ .ֹֻ .ֹֻ a a a ca ca ca à à à]]
-    command("let $NVIM_TEST = '"..mbyte.."'")
-    eq(mbyte, eval('$NVIM_TEST'))
+    command("let $NVIM_TEST_LET = '"..mbyte.."'")
+    eq(mbyte, eval('$NVIM_TEST_LET'))
   end)
 
   it("multibyte env var to child process #8398 #9267",  function()
-    local cmd_get_child_env = "let g:env_from_child = system(['"..nvim_dir.."/printenv-test', 'NVIM_TEST'])"
-    command("let $NVIM_TEST = 'AìaB'")
+    local cmd_get_child_env = ("let g:env_from_child = system(['%s', 'NVIM_TEST_LET'])"):format(testprg('printenv-test'))
+    command("let $NVIM_TEST_LET = 'AìaB'")
     command(cmd_get_child_env)
-    eq(eval('$NVIM_TEST'), eval('g:env_from_child'))
+    eq(eval('$NVIM_TEST_LET'), eval('g:env_from_child'))
 
-    command("let $NVIM_TEST = 'AaあB'")
+    command("let $NVIM_TEST_LET = 'AaあB'")
     command(cmd_get_child_env)
-    eq(eval('$NVIM_TEST'), eval('g:env_from_child'))
+    eq(eval('$NVIM_TEST_LET'), eval('g:env_from_child'))
 
     local mbyte = [[\p* .ม .ม .ม .ม่ .ม่ .ม่ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹֻ ֹֻ ֹֻ
                     .ֹֻ .ֹֻ .ֹֻ ֹֻ ֹֻ ֹֻ .ֹֻ .ֹֻ .ֹֻ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹ ֹ ֹ .ֹ .ֹ .ֹ ֹֻ ֹֻ
                     .ֹֻ .ֹֻ .ֹֻ a a a ca ca ca à à à]]
-    command("let $NVIM_TEST = '"..mbyte.."'")
+    command("let $NVIM_TEST_LET = '"..mbyte.."'")
     command(cmd_get_child_env)
-    eq(eval('$NVIM_TEST'), eval('g:env_from_child'))
+    eq(eval('$NVIM_TEST_LET'), eval('g:env_from_child'))
   end)
 
   it("release of list assigned to l: variable does not trigger assertion #12387, #12430", function()
@@ -89,5 +90,21 @@ describe(':let', function()
       call feedkeys('i', 't')
     ]])
     eq(1, eval('1'))
+  end)
+end)
+
+describe(':let and :const', function()
+  it('have the same output when called without arguments', function()
+    eq(exec_capture('let'), exec_capture('const'))
+  end)
+
+  it('can be used in sandbox', function()
+    exec([[
+      func Func()
+        let l:foo = 'foo'
+        const l:bar = 'bar'
+      endfunc
+      sandbox call Func()
+    ]])
   end)
 end)

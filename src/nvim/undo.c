@@ -89,6 +89,7 @@
 #include "nvim/change.h"
 #include "nvim/cursor.h"
 #include "nvim/edit.h"
+#include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
@@ -272,7 +273,7 @@ int u_inssub(linenr_T lnum)
  */
 int u_savedel(linenr_T lnum, long nlines)
 {
-  return u_savecommon(curbuf, lnum - 1, lnum + nlines,
+  return u_savecommon(curbuf, lnum - 1, lnum + (linenr_T)nlines,
                       nlines == curbuf->b_ml.ml_line_count ? 2 : lnum, false);
 }
 
@@ -297,7 +298,7 @@ bool undo_allowed(buf_T *buf)
   // Don't allow changes in the buffer while editing the cmdline.  The
   // caller of getcmdline() may get confused.
   if (textlock != 0) {
-    emsg(_(e_secure));
+    emsg(_(e_textlock));
     return false;
   }
 
@@ -611,7 +612,6 @@ int u_savecommon(buf_T *buf, linenr_T top, linenr_T bot, linenr_T newbot, int re
   return OK;
 }
 
-
 // magic at start of undofile
 #define UF_START_MAGIC     "Vim\237UnDo\345"
 #define UF_START_MAGIC_LEN     9
@@ -694,15 +694,14 @@ char *u_get_undo_file_name(const char *const buf_ffname, const bool reading)
   // When not reading use the first directory that exists or ".".
   dirp = (char *)p_udir;
   while (*dirp != NUL) {
-    size_t dir_len = copy_option_part((char_u **)&dirp, (char_u *)dir_name,
-                                      MAXPATHL, ",");
+    size_t dir_len = copy_option_part(&dirp, dir_name, MAXPATHL, ",");
     if (dir_len == 1 && dir_name[0] == '.') {
       // Use same directory as the ffname,
       // "dir/name" -> "dir/.name.un~"
       const size_t ffname_len = strlen(ffname);
       undo_file_name = xmalloc(ffname_len + 6);
       memmove(undo_file_name, ffname, ffname_len + 1);
-      char *const tail = (char *)path_tail((char_u *)undo_file_name);
+      char *const tail = path_tail(undo_file_name);
       const size_t tail_len = strlen(tail);
       memmove(tail + 1, tail, tail_len + 1);
       *tail = '.';
@@ -1187,7 +1186,7 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
   bufinfo_T bi;
 
   if (name == NULL) {
-    file_name = u_get_undo_file_name((char *)buf->b_ffname, false);
+    file_name = u_get_undo_file_name(buf->b_ffname, false);
     if (file_name == NULL) {
       if (p_verbose > 0) {
         verbose_enter();
@@ -1292,7 +1291,7 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
   FileInfo file_info_old;
   FileInfo file_info_new;
   if (buf->b_ffname != NULL
-      && os_fileinfo((char *)buf->b_ffname, &file_info_old)
+      && os_fileinfo(buf->b_ffname, &file_info_old)
       && os_fileinfo(file_name, &file_info_new)
       && file_info_old.stat.st_gid != file_info_new.stat.st_gid
       && os_fchown(fd, (uv_uid_t)-1, (uv_gid_t)file_info_old.stat.st_gid)) {
@@ -1371,10 +1370,8 @@ write_error:
 
 #ifdef HAVE_ACL
   if (buf->b_ffname != NULL) {
-    vim_acl_T acl;
-
     // For systems that support ACL: get the ACL from the original file.
-    acl = mch_get_acl(buf->b_ffname);
+    vim_acl_T acl = mch_get_acl((char_u *)buf->b_ffname);
     mch_set_acl((char_u *)file_name, acl);
     mch_free_acl(acl);
   }
@@ -1399,7 +1396,7 @@ void u_read_undo(char *name, const char_u *hash, const char_u *orig_name FUNC_AT
 
   char *file_name;
   if (name == NULL) {
-    file_name = u_get_undo_file_name((char *)curbuf->b_ffname, true);
+    file_name = u_get_undo_file_name(curbuf->b_ffname, true);
     if (file_name == NULL) {
       return;
     }
@@ -1469,8 +1466,7 @@ void u_read_undo(char *name, const char_u *hash, const char_u *orig_name FUNC_AT
       if (name == NULL) {
         verbose_enter();
       }
-      give_warning((char_u *)
-                   _("File contents changed, cannot use undo info"), true);
+      give_warning(_("File contents changed, cannot use undo info"), true);
       if (name == NULL) {
         verbose_leave();
       }
@@ -1959,6 +1955,11 @@ void undo_time(long step, bool sec, bool file, bool absolute)
   bool above = false;
   bool did_undo = true;
 
+  if (text_locked()) {
+    text_locked_msg();
+    return;
+  }
+
   // First make sure the current undoable change is synced.
   if (curbuf->b_u_synced == false) {
     u_sync(true);
@@ -2338,7 +2339,7 @@ static void u_undoredo(int undo, bool do_buf_event)
     }
 
     oldsize = bot - top - 1;        // number of lines before undo
-    newsize = uep->ue_size;         // number of lines after undo
+    newsize = (linenr_T)uep->ue_size;         // number of lines after undo
 
     if (top < newlnum) {
       /* If the saved cursor is somewhere in this undo block, move it to
@@ -2352,8 +2353,8 @@ static void u_undoredo(int undo, bool do_buf_event)
         /* Use the first line that actually changed.  Avoids that
          * undoing auto-formatting puts the cursor in the previous
          * line. */
-        for (i = 0; i < newsize && i < oldsize; ++i) {
-          if (STRCMP(uep->ue_array[i], ml_get(top + 1 + i)) != 0) {
+        for (i = 0; i < newsize && i < oldsize; i++) {
+          if (STRCMP(uep->ue_array[i], ml_get(top + 1 + (linenr_T)i)) != 0) {
             break;
           }
         }
@@ -2361,7 +2362,7 @@ static void u_undoredo(int undo, bool do_buf_event)
           newlnum = top;
           curwin->w_cursor.lnum = newlnum + 1;
         } else if (i < newsize) {
-          newlnum = top + i;
+          newlnum = top + (linenr_T)i;
           curwin->w_cursor.lnum = newlnum + 1;
         }
       }
@@ -2395,9 +2396,9 @@ static void u_undoredo(int undo, bool do_buf_event)
          * should get rid of, by replacing it with the new line
          */
         if (empty_buffer && lnum == 0) {
-          ml_replace((linenr_T)1, uep->ue_array[i], true);
+          ml_replace((linenr_T)1, (char *)uep->ue_array[i], true);
         } else {
-          ml_append(lnum, uep->ue_array[i], (colnr_T)0, false);
+          ml_append(lnum, (char *)uep->ue_array[i], (colnr_T)0, false);
         }
         xfree(uep->ue_array[i]);
       }
@@ -2406,8 +2407,7 @@ static void u_undoredo(int undo, bool do_buf_event)
 
     // Adjust marks
     if (oldsize != newsize) {
-      mark_adjust(top + 1, top + oldsize, (long)MAXLNUM,
-                  (long)newsize - (long)oldsize, kExtmarkNOOP);
+      mark_adjust(top + 1, top + oldsize, MAXLNUM, newsize - oldsize, kExtmarkNOOP);
       if (curbuf->b_op_start.lnum > top + oldsize) {
         curbuf->b_op_start.lnum += newsize - oldsize;
       }
@@ -2418,10 +2418,11 @@ static void u_undoredo(int undo, bool do_buf_event)
 
     changed_lines(top + 1, 0, bot, newsize - oldsize, do_buf_event);
 
-    // set '[ and '] mark
+    // Set the '[ mark.
     if (top + 1 < curbuf->b_op_start.lnum) {
       curbuf->b_op_start.lnum = top + 1;
     }
+    // Set the '] mark.
     if (newsize == 0 && top + 1 > curbuf->b_op_end.lnum) {
       curbuf->b_op_end.lnum = top + 1;
     } else if (top + newsize > curbuf->b_op_end.lnum) {
@@ -2440,6 +2441,14 @@ static void u_undoredo(int undo, bool do_buf_event)
     nuep = uep->ue_next;
     uep->ue_next = newlist;
     newlist = uep;
+  }
+
+  // Ensure the '[ and '] marks are within bounds.
+  if (curbuf->b_op_start.lnum > curbuf->b_ml.ml_line_count) {
+    curbuf->b_op_start.lnum = curbuf->b_ml.ml_line_count;
+  }
+  if (curbuf->b_op_end.lnum > curbuf->b_ml.ml_line_count) {
+    curbuf->b_op_end.lnum = curbuf->b_ml.ml_line_count;
   }
 
   // Adjust Extmarks
@@ -2462,7 +2471,6 @@ static void u_undoredo(int undo, bool do_buf_event)
     buf_updates_unload(curbuf, true);
   }
   // finish Adjusting extmarks
-
 
   curhead->uh_entry = newlist;
   curhead->uh_flags = new_flags;
@@ -2631,6 +2639,10 @@ static void u_undo_end(bool did_undo, bool absolute, bool quiet)
         redraw_later(wp, NOT_VALID);
       }
     }
+  }
+
+  if (VIsual_active) {
+    check_pos(curbuf, &VIsual);
   }
 
   smsg_attr_keep(0,
@@ -2905,7 +2917,7 @@ static void u_getbot(buf_T *buf)
      * old line count subtracted from the current line count.
      */
     extra = buf->b_ml.ml_line_count - uep->ue_lcount;
-    uep->ue_bot = uep->ue_top + uep->ue_size + 1 + extra;
+    uep->ue_bot = uep->ue_top + (linenr_T)uep->ue_size + 1 + extra;
     if (uep->ue_bot < 1 || uep->ue_bot > buf->b_ml.ml_line_count) {
       iemsg(_("E440: undo line missing"));
       uep->ue_bot = uep->ue_top + 1;        // assume all lines deleted, will
@@ -3104,9 +3116,9 @@ void u_undoline(void)
   }
 
   oldp = u_save_line(curbuf->b_u_line_lnum);
-  ml_replace(curbuf->b_u_line_lnum, curbuf->b_u_line_ptr, true);
+  ml_replace(curbuf->b_u_line_lnum, (char *)curbuf->b_u_line_ptr, true);
   changed_bytes(curbuf->b_u_line_lnum, 0);
-  extmark_splice_cols(curbuf, (int)curbuf->b_u_line_lnum-1, 0, (colnr_T)STRLEN(oldp),
+  extmark_splice_cols(curbuf, (int)curbuf->b_u_line_lnum - 1, 0, (colnr_T)STRLEN(oldp),
                       (colnr_T)STRLEN(curbuf->b_u_line_ptr), kExtmarkUndo);
   xfree(curbuf->b_u_line_ptr);
   curbuf->b_u_line_ptr = oldp;

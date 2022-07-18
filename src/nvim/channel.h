@@ -44,6 +44,7 @@ typedef struct {
 
 typedef struct {
   LuaRef cb;
+  bool closed;
 } InternalState;
 
 typedef struct {
@@ -96,6 +97,8 @@ struct Channel {
 
 EXTERN PMap(uint64_t) channels INIT(= MAP_INIT);
 
+EXTERN Callback on_print INIT(= CALLBACK_INIT);
+
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "channel.h.generated.h"
 #endif
@@ -145,6 +148,5 @@ static inline Stream *channel_outstream(Channel *chan)
   }
   abort();
 }
-
 
 #endif  // NVIM_CHANNEL_H

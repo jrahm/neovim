@@ -1,19 +1,19 @@
 name: Coverity
 on:
   schedule:
-    - cron: '0 10 * * 1'  # Run every Monday at 00:10
+    - cron: '10 0 * * *'  # Run every day at 00:10
   workflow_dispatch:
 
 jobs:
   scan:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake build-essential cmake gettext gperf libtool-bin locales ninja-build pkg-config unzip
+          sudo apt-get install -y autoconf automake build-essential cmake gettext libtool-bin locales ninja-build pkg-config unzip
 
       - name: Download Coverity
         run: |

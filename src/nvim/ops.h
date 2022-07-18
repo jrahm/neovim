@@ -84,11 +84,11 @@ enum GRegFlags {
 
 /// Definition of one register
 typedef struct yankreg {
-  char_u **y_array;   ///< Pointer to an array of line pointers.
-  size_t y_size;      ///< Number of lines in y_array.
-  MotionType y_type;  ///< Register type
-  colnr_T y_width;    ///< Register width (only valid for y_type == kBlockWise).
-  Timestamp timestamp;  ///< Time when register was last modified.
+  char **y_array;           ///< Pointer to an array of line pointers.
+  size_t y_size;            ///< Number of lines in y_array.
+  MotionType y_type;        ///< Register type
+  colnr_T y_width;          ///< Register width (only valid for y_type == kBlockWise).
+  Timestamp timestamp;      ///< Time when register was last modified.
   dict_T *additional_data;  ///< Additional data from ShaDa file.
 } yankreg_T;
 
@@ -112,9 +112,9 @@ static inline int op_reg_index(const int regname)
   if (ascii_isdigit(regname)) {
     return regname - '0';
   } else if (ASCII_ISLOWER(regname)) {
-    return CharOrdLow(regname) + 10;
+    return CHAR_ORD_LOW(regname) + 10;
   } else if (ASCII_ISUPPER(regname)) {
-    return CharOrdUp(regname) + 10;
+    return CHAR_ORD_UP(regname) + 10;
   } else if (regname == '-') {
     return DELETION_REGISTER;
   } else if (regname == '*') {

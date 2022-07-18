@@ -30,6 +30,49 @@
 static linenr_T orig_topline = 0;
 static int orig_topfill = 0;
 
+/// Translate window coordinates to buffer position without any side effects
+int get_fpos_of_mouse(pos_T *mpos)
+{
+  int grid = mouse_grid;
+  int row = mouse_row;
+  int col = mouse_col;
+
+  if (row < 0 || col < 0) {  // check if it makes sense
+    return IN_UNKNOWN;
+  }
+
+  // find the window where the row is in
+  win_T *wp = mouse_find_win(&grid, &row, &col);
+  if (wp == NULL) {
+    return IN_UNKNOWN;
+  }
+
+  // winpos and height may change in win_enter()!
+  if (row + wp->w_winbar_height >= wp->w_height) {  // In (or below) status line
+    return IN_STATUS_LINE;
+  }
+  if (col >= wp->w_width) {  // In vertical separator line
+    return IN_SEP_LINE;
+  }
+
+  if (wp != curwin) {
+    return IN_UNKNOWN;
+  }
+
+  // compute the position in the buffer line from the posn on the screen
+  if (mouse_comp_pos(curwin, &row, &col, &mpos->lnum)) {
+    return IN_STATUS_LINE;  // past bottom
+  }
+
+  mpos->col = vcol2col(wp, mpos->lnum, col);
+
+  if (mpos->col > 0) {
+    mpos->col--;
+  }
+  mpos->coladd = 0;
+  return IN_BUFFER;
+}
+
 /// Return true if "c" is a mouse key.
 bool is_mouse_key(int c)
 {
@@ -68,12 +111,12 @@ bool is_mouse_key(int c)
 /// mouse was previously on a status line, then the status line may be dragged.
 ///
 /// If flags has MOUSE_MAY_VIS, then VIsual mode will be started before the
-/// cursor is moved unless the cursor was on a status line.
+/// cursor is moved unless the cursor was on a status line or window bar.
 /// This function returns one of IN_UNKNOWN, IN_BUFFER, IN_STATUS_LINE or
 /// IN_SEP_LINE depending on where the cursor was clicked.
 ///
 /// If flags has MOUSE_MAY_STOP_VIS, then Visual mode will be stopped, unless
-/// the mouse is on the status line of the same window.
+/// the mouse is on the status line or window bar of the same window.
 ///
 /// If flags has MOUSE_DID_MOVE, nothing is done if the mouse didn't move since
 /// the last call.
@@ -85,8 +128,11 @@ bool is_mouse_key(int c)
 /// @param which_button  MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE
 int jump_to_mouse(int flags, bool *inclusive, int which_button)
 {
-  static int on_status_line = 0;        // #lines below bottom of window
-  static int on_sep_line = 0;           // on separator right of window
+  static int status_line_offset = 0;        // #lines offset from status line
+  static int sep_line_offset = 0;           // #cols offset from sep line
+  static bool on_status_line = false;
+  static bool on_sep_line = false;
+  static bool on_winbar = false;
   static int prev_row = -1;
   static int prev_col = -1;
   static win_T *dragwin = NULL;         // window being dragged
@@ -100,6 +146,7 @@ int jump_to_mouse(int flags, bool *inclusive, int which_button)
   int col = mouse_col;
   int grid = mouse_grid;
   int fdc = 0;
+  bool keep_focus = flags & MOUSE_FOCUS;
 
   mouse_past_bottom = false;
   mouse_past_eol = false;
@@ -120,11 +167,14 @@ int jump_to_mouse(int flags, bool *inclusive, int which_button)
 retnomove:
     // before moving the cursor for a left click which is NOT in a status
     // line, stop Visual mode
-    if (on_status_line) {
+    if (status_line_offset) {
       return IN_STATUS_LINE;
     }
-    if (on_sep_line) {
+    if (sep_line_offset) {
       return IN_SEP_LINE;
+    }
+    if (on_winbar) {
+      return IN_OTHER_WIN | MOUSE_WINBAR;
     }
     if (flags & MOUSE_MAY_STOP_VIS) {
       end_visual_mode();
@@ -142,47 +192,78 @@ retnomove:
   old_curwin = curwin;
   old_cursor = curwin->w_cursor;
 
-  if (!(flags & MOUSE_FOCUS)) {
-    if (row < 0 || col < 0) {                   // check if it makes sense
-      return IN_UNKNOWN;
+  if (row < 0 || col < 0) {                   // check if it makes sense
+    return IN_UNKNOWN;
+  }
+
+  // find the window where the row is in
+  wp = mouse_find_win(&grid, &row, &col);
+  if (wp == NULL) {
+    return IN_UNKNOWN;
+  }
+
+  on_status_line = (grid == DEFAULT_GRID_HANDLE && row + wp->w_winbar_height >= wp->w_height)
+    ? row + wp->w_winbar_height - wp->w_height + 1 == 1
+    : false;
+
+  on_winbar = (row == -1)
+    ? wp->w_winbar_height != 0
+    : false;
+
+  on_sep_line = grid == DEFAULT_GRID_HANDLE && col >= wp->w_width
+    ? col - wp->w_width + 1 == 1
+    : false;
+
+  // The rightmost character of the status line might be a vertical
+  // separator character if there is no connecting window to the right.
+  if (on_status_line && on_sep_line) {
+    if (stl_connected(wp)) {
+      on_sep_line = false;
+    } else {
+      on_status_line = false;
+    }
+  }
+
+  if (keep_focus) {
+    // If we can't change focus, set the value of row, col and grid back to absolute values
+    // since the values relative to the window are only used when keep_focus is false
+    row = mouse_row;
+    col = mouse_col;
+    grid = mouse_grid;
+  }
+
+  if (!keep_focus) {
+    if (on_winbar) {
+      return IN_OTHER_WIN | MOUSE_WINBAR;
     }
 
-    // find the window where the row is in
-    wp = mouse_find_win(&grid, &row, &col);
-    if (wp == NULL) {
-      return IN_UNKNOWN;
-    }
     fdc = win_fdccol_count(wp);
     dragwin = NULL;
 
-    if (row == -1) {
-      return IN_OTHER_WIN;
-    }
-
     // winpos and height may change in win_enter()!
-    if (grid == DEFAULT_GRID_HANDLE && row >= wp->w_height) {
+    if (grid == DEFAULT_GRID_HANDLE && row + wp->w_winbar_height >= wp->w_height) {
       // In (or below) status line
-      on_status_line = row - wp->w_height + 1;
+      status_line_offset = row + wp->w_winbar_height - wp->w_height + 1;
       dragwin = wp;
     } else {
-      on_status_line = 0;
+      status_line_offset = 0;
     }
 
     if (grid == DEFAULT_GRID_HANDLE && col >= wp->w_width) {
       // In separator line
-      on_sep_line = col - wp->w_width + 1;
+      sep_line_offset = col - wp->w_width + 1;
       dragwin = wp;
     } else {
-      on_sep_line = 0;
+      sep_line_offset = 0;
     }
 
     // The rightmost character of the status line might be a vertical
     // separator character if there is no connecting window to the right.
-    if (on_status_line && on_sep_line) {
+    if (status_line_offset && sep_line_offset) {
       if (stl_connected(wp)) {
-        on_sep_line = 0;
+        sep_line_offset = 0;
       } else {
-        on_status_line = 0;
+        status_line_offset = 0;
       }
     }
 
@@ -190,8 +271,8 @@ retnomove:
     // click, stop Visual mode.
     if (VIsual_active
         && (wp->w_buffer != curwin->w_buffer
-            || (!on_status_line
-                && !on_sep_line
+            || (!status_line_offset
+                && !sep_line_offset
                 && (wp->w_p_rl
                     ? col < wp->w_width_inner - fdc
                     : col >= fdc + (cmdwin_type == 0 && wp == curwin ? 0 : 1))
@@ -202,7 +283,7 @@ retnomove:
     if (cmdwin_type != 0 && wp != curwin) {
       // A click outside the command-line window: Use modeless
       // selection if possible.  Allow dragging the status lines.
-      on_sep_line = 0;
+      sep_line_offset = 0;
       row = 0;
       col += wp->w_wincol;
       wp = curwin;
@@ -217,7 +298,7 @@ retnomove:
     if (curwin != old_curwin) {
       set_mouse_topline(curwin);
     }
-    if (on_status_line) {                       // In (or below) status line
+    if (status_line_offset) {                       // In (or below) status line
       // Don't use start_arrow() if we're in the same window
       if (curwin == old_curwin) {
         return IN_STATUS_LINE;
@@ -225,7 +306,7 @@ retnomove:
         return IN_STATUS_LINE | CURSOR_MOVED;
       }
     }
-    if (on_sep_line) {                          // In (or below) status line
+    if (sep_line_offset) {                          // In (or below) status line
       // Don't use start_arrow() if we're in the same window
       if (curwin == old_curwin) {
         return IN_SEP_LINE;
@@ -235,24 +316,29 @@ retnomove:
     }
 
     curwin->w_cursor.lnum = curwin->w_topline;
-  } else if (on_status_line && which_button == MOUSE_LEFT) {
-    if (dragwin != NULL) {
+  } else if (status_line_offset) {
+    if (which_button == MOUSE_LEFT && dragwin != NULL) {
       // Drag the status line
       count = row - dragwin->w_winrow - dragwin->w_height + 1
-              - on_status_line;
+              - status_line_offset;
       win_drag_status_line(dragwin, count);
       did_drag |= count;
     }
     return IN_STATUS_LINE;                      // Cursor didn't move
-  } else if (on_sep_line && which_button == MOUSE_LEFT) {
+  } else if (sep_line_offset && which_button == MOUSE_LEFT) {
     if (dragwin != NULL) {
       // Drag the separator column
       count = col - dragwin->w_wincol - dragwin->w_width + 1
-              - on_sep_line;
+              - sep_line_offset;
       win_drag_vsep_line(dragwin, count);
       did_drag |= count;
     }
     return IN_SEP_LINE;                         // Cursor didn't move
+  } else if (on_status_line && which_button == MOUSE_RIGHT) {
+    return IN_STATUS_LINE;
+  } else if (on_winbar && which_button == MOUSE_RIGHT) {
+    // After a click on the window bar don't start Visual mode.
+    return IN_OTHER_WIN | MOUSE_WINBAR;
   } else {
     // keep_window_focus must be true
     // before moving the cursor for a left click, stop Visual mode
@@ -262,8 +348,11 @@ retnomove:
     }
 
     if (grid == 0) {
-      row -= curwin->w_grid_alloc.comp_row+curwin->w_grid.row_offset;
-      col -= curwin->w_grid_alloc.comp_col+curwin->w_grid.col_offset;
+      row -= curwin->w_grid_alloc.comp_row + curwin->w_grid.row_offset;
+      col -= curwin->w_grid_alloc.comp_col + curwin->w_grid.col_offset;
+    } else if (grid != DEFAULT_GRID_HANDLE) {
+      row -= curwin->w_grid.row_offset;
+      col -= curwin->w_grid.col_offset;
     }
 
     // When clicking beyond the end of the window, scroll the screen.
@@ -468,7 +557,6 @@ win_T *mouse_find_win(int *gridp, int *rowp, int *colp)
     return NULL;
   }
 
-
   frame_T *fp;
 
   fp = topframe;
@@ -497,6 +585,7 @@ win_T *mouse_find_win(int *gridp, int *rowp, int *colp)
   // exist.
   FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
     if (wp == fp->fr_win) {
+      *rowp -= wp->w_winbar_height;
       return wp;
     }
   }
@@ -512,8 +601,8 @@ static win_T *mouse_find_grid_win(int *gridp, int *rowp, int *colp)
     win_T *wp = get_win_by_grid_handle(*gridp);
     if (wp && wp->w_grid_alloc.chars
         && !(wp->w_floating && !wp->w_float_config.focusable)) {
-      *rowp = MIN(*rowp-wp->w_grid.row_offset, wp->w_grid.Rows-1);
-      *colp = MIN(*colp-wp->w_grid.col_offset, wp->w_grid.Columns-1);
+      *rowp = MIN(*rowp - wp->w_grid.row_offset, wp->w_grid.rows - 1);
+      *colp = MIN(*colp - wp->w_grid.col_offset, wp->w_grid.cols - 1);
       return wp;
     }
   } else if (*gridp == 0) {
@@ -523,8 +612,8 @@ static win_T *mouse_find_grid_win(int *gridp, int *rowp, int *colp)
         continue;
       }
       *gridp = grid->handle;
-      *rowp -= grid->comp_row+wp->w_grid.row_offset;
-      *colp -= grid->comp_col+wp->w_grid.col_offset;
+      *rowp -= grid->comp_row + wp->w_grid.row_offset;
+      *colp -= grid->comp_col + wp->w_grid.col_offset;
       return wp;
     }
 
@@ -535,6 +624,22 @@ static win_T *mouse_find_grid_win(int *gridp, int *rowp, int *colp)
   return NULL;
 }
 
+/// Convert a virtual (screen) column to a character column.
+/// The first column is one.
+colnr_T vcol2col(win_T *const wp, const linenr_T lnum, const colnr_T vcol)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  // try to advance to the specified column
+  char_u *ptr = ml_get_buf(wp->w_buffer, lnum, false);
+  char_u *const line = ptr;
+  colnr_T count = 0;
+  while (count < vcol && *ptr != NUL) {
+    count += win_lbr_chartabsize(wp, line, ptr, count, NULL);
+    MB_PTR_ADV(ptr);
+  }
+  return (colnr_T)(ptr - line);
+}
+
 /// Set UI mouse depending on current mode and 'mouse'.
 ///
 /// Emits mouse_on/mouse_off UI event (unless 'mouse' is empty).
@@ -543,7 +648,6 @@ void setmouse(void)
   ui_cursor_shape();
   ui_check_mouse();
 }
-
 
 // Set orig_topline.  Used when jumping to another window, so that a double
 // click still works.
@@ -618,7 +722,7 @@ bool mouse_scroll_horiz(int dir)
     return false;
   }
 
-  int step = 6;
+  int step = (int)p_mousescroll_hor;
   if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL)) {
     step = curwin->w_width_inner;
   }
@@ -686,7 +790,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
     vcol = 0;
     while (vcol < offset && *ptr != NUL) {
       vcol += win_chartabsize(curwin, ptr, vcol);
-      ptr += utfc_ptr2len(ptr);
+      ptr += utfc_ptr2len((char *)ptr);
     }
 
     ptr_row_offset = ptr;
@@ -697,7 +801,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
   ptr_end = ptr_row_offset;
   while (vcol < col && *ptr_end != NUL) {
     vcol += win_chartabsize(curwin, ptr_end, vcol);
-    ptr_end += utfc_ptr2len(ptr_end);
+    ptr_end += utfc_ptr2len((char *)ptr_end);
   }
 
   int matchid;
@@ -707,8 +811,8 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
 
   vcol = offset;
 
-#define INCR() nudge++; ptr_end += utfc_ptr2len(ptr_end)
-#define DECR() nudge--; ptr_end -= utfc_ptr2len(ptr_end)
+#define INCR() nudge++; ptr_end += utfc_ptr2len((char *)ptr_end)
+#define DECR() nudge--; ptr_end -= utfc_ptr2len((char *)ptr_end)
 
   while (ptr < ptr_end && *ptr != NUL) {
     cwidth = win_chartabsize(curwin, ptr, vcol);
@@ -739,7 +843,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
 
         while (prev_matchid == matchid && *ptr != NUL) {
           INCR();
-          ptr += utfc_ptr2len(ptr);
+          ptr += utfc_ptr2len((char *)ptr);
           matchid = syn_get_concealed_id(wp, lnum, (colnr_T)(ptr - line));
         }
 
@@ -747,7 +851,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
       }
     }
 
-    ptr += utfc_ptr2len(ptr);
+    ptr += utfc_ptr2len((char *)ptr);
   }
 
   return col + nudge;
@@ -768,8 +872,8 @@ int mouse_check_fold(void)
 
   wp = mouse_find_win(&click_grid, &click_row, &click_col);
   if (wp && multigrid) {
-    max_row = wp->w_grid_alloc.Rows;
-    max_col = wp->w_grid_alloc.Columns;
+    max_row = wp->w_grid_alloc.rows;
+    max_col = wp->w_grid_alloc.cols;
   }
 
   if (wp && mouse_row >= 0 && mouse_row < max_row
@@ -782,8 +886,8 @@ int mouse_check_fold(void)
     // Remember the character under the mouse, might be one of foldclose or
     // foldopen fillchars in the fold column.
     if (gp->chars != NULL) {
-      mouse_char = utf_ptr2char(gp->chars[gp->line_offset[row]
-                                          + (unsigned)col]);
+      mouse_char = utf_ptr2char((char *)gp->chars[gp->line_offset[row]
+                                                  + (unsigned)col]);
     }
 
     // Check for position outside of the fold column.

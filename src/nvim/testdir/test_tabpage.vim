@@ -128,6 +128,8 @@ function Test_tabpage()
   1tabmove
   call assert_equal(2, tabpagenr())
 
+  call assert_fails('let t = tabpagenr("@")', 'E15:')
+  call assert_equal(0, tabpagewinnr(-1))
   call assert_fails("99tabmove", 'E16:')
   call assert_fails("+99tabmove", 'E16:')
   call assert_fails("-99tabmove", 'E16:')
@@ -137,7 +139,13 @@ function Test_tabpage()
   call assert_fails("tabmove -99", 'E474:')
   call assert_fails("tabmove -3+", 'E474:')
   call assert_fails("tabmove $3", 'E474:')
+  call assert_fails("%tabonly", 'E16:')
   1tabonly!
+  tabmove 1
+  call assert_equal(1, tabpagenr())
+  tabnew
+  call assert_fails("-2tabmove", 'E474:')
+  tabonly!
 endfunc
 
 " Test autocommands
@@ -605,6 +613,16 @@ func Test_tabpage_cmdheight()
   call delete('XTest_tabpage_cmdheight')
 endfunc
 
+" Test for closing the tab page from a command window
+func Test_tabpage_close_cmdwin()
+  tabnew
+  call feedkeys("q/:tabclose\<CR>\<Esc>", 'xt')
+  call assert_equal(2, tabpagenr('$'))
+  call feedkeys("q/:tabonly\<CR>\<Esc>", 'xt')
+  call assert_equal(2, tabpagenr('$'))
+  tabonly
+endfunc
+
 " Return the terminal key code for selecting a tab page from the tabline. This
 " sequence contains the following codes: a CSI (0x9b), KS_TABLINE (0xf0),
 " KS_FILLER (0x58) and then the tab page number.
@@ -681,6 +699,138 @@ func Test_tabline_tabmenu()
   call assert_equal(5, tabpagenr('$'))
 
   %bw!
+endfunc
+
+" Test for changing the current tab page from an autocmd when closing a tab
+" page.
+func Test_tabpage_switchtab_on_close()
+  only
+  tabnew
+  tabnew
+  " Test for BufLeave
+  augroup T1
+    au!
+    au BufLeave * tabfirst
+  augroup END
+  tabclose
+  call assert_equal(1, tabpagenr())
+  augroup T1
+    au!
+  augroup END
+
+  " Test for WinLeave
+  $tabnew
+  augroup T1
+    au!
+    au WinLeave * tabfirst
+  augroup END
+  tabclose
+  call assert_equal(1, tabpagenr())
+  augroup T1
+    au!
+  augroup END
+
+  " Test for TabLeave
+  $tabnew
+  augroup T1
+    au!
+    au TabLeave * tabfirst
+  augroup END
+  tabclose
+  call assert_equal(1, tabpagenr())
+  augroup T1
+    au!
+  augroup END
+  augroup! T1
+  tabonly
+endfunc
+
+" Test for closing the destination tabpage when jumping from one to another.
+func Test_tabpage_close_on_switch()
+  tabnew
+  tabnew
+  edit Xfile
+  augroup T2
+    au!
+    au BufLeave Xfile 1tabclose
+  augroup END
+  tabfirst
+  call assert_equal(2, tabpagenr())
+  call assert_equal('Xfile', @%)
+  augroup T2
+    au!
+  augroup END
+  augroup! T2
+  %bw!
+endfunc
+
+" Test for jumping to last accessed tabpage
+func Test_lastused_tabpage()
+  tabonly!
+  call assert_equal(0, tabpagenr('#'))
+  call assert_beeps('call feedkeys("g\<Tab>", "xt")')
+  call assert_beeps('call feedkeys("\<C-Tab>", "xt")')
+  call assert_beeps('call feedkeys("\<C-W>g\<Tab>", "xt")')
+  call assert_fails('tabnext #', 'E475:')
+
+  " open four tab pages
+  tabnew
+  tabnew
+  tabnew
+
+  2tabnext
+
+  " Test for g<Tab>
+  call assert_equal(4, tabpagenr('#'))
+  call feedkeys("g\<Tab>", "xt")
+  call assert_equal(4, tabpagenr())
+  call assert_equal(2, tabpagenr('#'))
+
+  " Test for <C-Tab>
+  call feedkeys("\<C-Tab>", "xt")
+  call assert_equal(2, tabpagenr())
+  call assert_equal(4, tabpagenr('#'))
+
+  " Test for <C-W>g<Tab>
+  call feedkeys("\<C-W>g\<Tab>", "xt")
+  call assert_equal(4, tabpagenr())
+  call assert_equal(2, tabpagenr('#'))
+
+  " Test for :tabnext #
+  tabnext #
+  call assert_equal(2, tabpagenr())
+  call assert_equal(4, tabpagenr('#'))
+
+  " Try to jump to a closed tab page
+  tabclose #
+  call assert_equal(0, tabpagenr('#'))
+  call feedkeys("g\<Tab>", "xt")
+  call assert_equal(2, tabpagenr())
+  call feedkeys("\<C-Tab>", "xt")
+  call assert_equal(2, tabpagenr())
+  call feedkeys("\<C-W>g\<Tab>", "xt")
+  call assert_equal(2, tabpagenr())
+  call assert_fails('tabnext #', 'E475:')
+  call assert_equal(2, tabpagenr())
+
+  " Test for :tabonly #
+  let wnum = win_getid()
+  $tabnew
+  tabonly #
+  call assert_equal(wnum, win_getid())
+  call assert_equal(1, tabpagenr('$'))
+
+  " Test for :tabmove #
+  tabnew
+  let wnum = win_getid()
+  tabnew
+  tabnew
+  tabnext 2
+  tabmove #
+  call assert_equal(4, tabpagenr())
+  call assert_equal(wnum, win_getid())
+
+  tabonly!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

@@ -4,63 +4,112 @@
 function Test_cmdmods()
   let g:mods = ''
 
-  command! -nargs=* MyCmd let g:mods .= '<mods> '
+  command! -nargs=* MyCmd let g:mods = '<mods>'
 
   MyCmd
+  call assert_equal('', g:mods)
   aboveleft MyCmd
+  call assert_equal('aboveleft', g:mods)
   abo MyCmd
+  call assert_equal('aboveleft', g:mods)
   belowright MyCmd
+  call assert_equal('belowright', g:mods)
   bel MyCmd
+  call assert_equal('belowright', g:mods)
   botright MyCmd
+  call assert_equal('botright', g:mods)
   bo MyCmd
+  call assert_equal('botright', g:mods)
   browse MyCmd
+  call assert_equal('browse', g:mods)
   bro MyCmd
+  call assert_equal('browse', g:mods)
   confirm MyCmd
+  call assert_equal('confirm', g:mods)
   conf MyCmd
+  call assert_equal('confirm', g:mods)
   hide MyCmd
+  call assert_equal('hide', g:mods)
   hid MyCmd
+  call assert_equal('hide', g:mods)
   keepalt MyCmd
+  call assert_equal('keepalt', g:mods)
   keepa MyCmd
+  call assert_equal('keepalt', g:mods)
   keepjumps MyCmd
+  call assert_equal('keepjumps', g:mods)
   keepj MyCmd
+  call assert_equal('keepjumps', g:mods)
   keepmarks MyCmd
+  call assert_equal('keepmarks', g:mods)
   kee MyCmd
+  call assert_equal('keepmarks', g:mods)
   keeppatterns MyCmd
+  call assert_equal('keeppatterns', g:mods)
   keepp MyCmd
+  call assert_equal('keeppatterns', g:mods)
   leftabove MyCmd  " results in :aboveleft
+  call assert_equal('aboveleft', g:mods)
   lefta MyCmd
+  call assert_equal('aboveleft', g:mods)
   lockmarks MyCmd
+  call assert_equal('lockmarks', g:mods)
   loc MyCmd
-  " noautocmd MyCmd
+  call assert_equal('lockmarks', g:mods)
+  noautocmd MyCmd
+  call assert_equal('noautocmd', g:mods)
+  noa MyCmd
+  call assert_equal('noautocmd', g:mods)
   noswapfile MyCmd
+  call assert_equal('noswapfile', g:mods)
   nos MyCmd
+  call assert_equal('noswapfile', g:mods)
   rightbelow MyCmd " results in :belowright
+  call assert_equal('belowright', g:mods)
   rightb MyCmd
+  call assert_equal('belowright', g:mods)
   " sandbox MyCmd
   silent MyCmd
+  call assert_equal('silent', g:mods)
   sil MyCmd
+  call assert_equal('silent', g:mods)
+  silent! MyCmd
+  call assert_equal('silent!', g:mods)
+  sil! MyCmd
+  call assert_equal('silent!', g:mods)
   tab MyCmd
+  call assert_equal('tab', g:mods)
   topleft MyCmd
+  call assert_equal('topleft', g:mods)
   to MyCmd
-  " unsilent MyCmd
+  call assert_equal('topleft', g:mods)
+  unsilent MyCmd
+  call assert_equal('unsilent', g:mods)
+  uns MyCmd
+  call assert_equal('unsilent', g:mods)
   verbose MyCmd
+  call assert_equal('verbose', g:mods)
   verb MyCmd
+  call assert_equal('verbose', g:mods)
+  0verbose MyCmd
+  call assert_equal('0verbose', g:mods)
+  3verbose MyCmd
+  call assert_equal('3verbose', g:mods)
+  999verbose MyCmd
+  call assert_equal('999verbose', g:mods)
   vertical MyCmd
+  call assert_equal('vertical', g:mods)
   vert MyCmd
+  call assert_equal('vertical', g:mods)
 
   aboveleft belowright botright browse confirm hide keepalt keepjumps
-        \ keepmarks keeppatterns lockmarks noswapfile silent tab
-        \ topleft verbose vertical MyCmd
+	      \ keepmarks keeppatterns lockmarks noautocmd noswapfile silent
+	      \ tab topleft unsilent verbose vertical MyCmd
 
-  call assert_equal(' aboveleft aboveleft belowright belowright botright ' .
-        \ 'botright browse browse confirm confirm hide hide ' .
-        \ 'keepalt keepalt keepjumps keepjumps keepmarks keepmarks ' .
-        \ 'keeppatterns keeppatterns aboveleft aboveleft lockmarks lockmarks noswapfile ' .
-        \ 'noswapfile belowright belowright silent silent tab topleft topleft verbose verbose ' .
-        \ 'vertical vertical ' .
-        \ 'aboveleft belowright botright browse confirm hide keepalt keepjumps ' .
-        \ 'keepmarks keeppatterns lockmarks noswapfile silent tab topleft ' .
-        \ 'verbose vertical ', g:mods)
+  call assert_equal('browse confirm hide keepalt keepjumps ' .
+      \ 'keepmarks keeppatterns lockmarks noswapfile unsilent noautocmd ' .
+      \ 'silent verbose aboveleft belowright botright tab topleft vertical',
+      \ g:mods)
 
   let g:mods = ''
   command! -nargs=* MyQCmd let g:mods .= '<q-mods> '
@@ -264,15 +313,15 @@ func CustomComplete(A, L, P)
 endfunc
 
 func CustomCompleteList(A, L, P)
-  return [ "Monday", "Tuesday", "Wednesday" ]
+  return [ "Monday", "Tuesday", "Wednesday", {}]
 endfunc
 
 func Test_CmdCompletion()
   call feedkeys(":com -\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_equal('"com -addr bang bar buffer complete count nargs range register', @:)
+  call assert_equal('"com -addr bang bar buffer complete count keepscript nargs range register', @:)
 
   call feedkeys(":com -nargs=0 -\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_equal('"com -nargs=0 -addr bang bar buffer complete count nargs range register', @:)
+  call assert_equal('"com -nargs=0 -addr bang bar buffer complete count keepscript nargs range register', @:)
 
   call feedkeys(":com -nargs=\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal('"com -nargs=* + 0 1 ?', @:)
@@ -350,7 +399,6 @@ func Test_use_execute_in_completion()
 endfunc
 
 func Test_addr_all()
-  throw 'skipped: requires patch v8.1.0341 to pass'
   command! -addr=lines DoSomething let g:a1 = <line1> | let g:a2 = <line2>
   %DoSomething
   call assert_equal(1, g:a1)
@@ -551,3 +599,46 @@ func Test_command_list()
   call assert_equal("\nNo user-defined commands found", execute(':command Xxx'))
   call assert_equal("\nNo user-defined commands found", execute('command'))
 endfunc
+
+func Test_delcommand_buffer()
+  command Global echo 'global'
+  command -buffer OneBuffer echo 'one'
+  new
+  command -buffer TwoBuffer echo 'two'
+  call assert_equal(0, exists(':OneBuffer'))
+  call assert_equal(2, exists(':Global'))
+  call assert_equal(2, exists(':TwoBuffer'))
+  delcommand -buffer TwoBuffer
+  call assert_equal(0, exists(':TwoBuffer'))
+  call assert_fails('delcommand -buffer Global', 'E1237:')
+  call assert_fails('delcommand -buffer OneBuffer', 'E1237:')
+  bwipe!
+  call assert_equal(2, exists(':OneBuffer'))
+  delcommand -buffer OneBuffer
+  call assert_equal(0, exists(':OneBuffer'))
+  call assert_fails('delcommand -buffer Global', 'E1237:')
+  delcommand Global
+  call assert_equal(0, exists(':Global'))
+endfunc
+
+func DefCmd(name)
+  if len(a:name) > 30
+    return
+  endif
+  exe 'command ' .. a:name .. ' call DefCmd("' .. a:name .. 'x")'
+  echo a:name
+  exe a:name
+endfunc
+
+func Test_recursive_define()
+  call DefCmd('Command')
+
+  let name = 'Command'
+  while len(name) < 30
+    exe 'delcommand ' .. name
+    let name ..= 'x'
+  endwhile
+endfunc
+
+
+" vim: shiftwidth=2 sts=2 expandtab

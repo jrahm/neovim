@@ -1,7 +1,7 @@
 " These commands create the option window.
 "
 " Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2021 Dec 12
+" Last Change:	2022 Apr 07
 
 " If there already is an option window, jump to that one.
 let buf = bufnr('option-window')
@@ -229,8 +229,6 @@ call append("$", "compatible\tbehave very Vi compatible (not advisable)")
 call <SID>BinOptionG("cp", &cp)
 call append("$", "cpoptions\tlist of flags to specify Vi compatibility")
 call <SID>OptionG("cpo", &cpo)
-call append("$", "insertmode\tuse Insert mode as the default mode")
-call <SID>BinOptionG("im", &im)
 call append("$", "paste\tpaste mode, insert typed text literally")
 call <SID>BinOptionG("paste", &paste)
 call append("$", "pastetoggle\tkey sequence to toggle paste mode")
@@ -471,7 +469,7 @@ endif
 
 
 call <SID>Header("multiple windows")
-call append("$", "laststatus\t0, 1 or 2; when to use a status line for the last window")
+call append("$", "laststatus\t0, 1, 2 or 3; when to use a status line for the last window")
 call append("$", " \tset ls=" . &ls)
 if has("statusline")
   call append("$", "statusline\talternate format to be used for a status line")
@@ -870,6 +868,9 @@ if has("cindent")
   call append("$", "cinwords\tlist of words that cause more C-indent")
   call append("$", "\t(local to buffer)")
   call <SID>OptionL("cinw")
+  call append("$", "cinscopedecls\tlist of scope declaration names used by cino-g")
+  call append("$", "\t(local to buffer)")
+  call <SID>OptionL("cinsd")
   call append("$", "indentexpr\texpression used to obtain the indent of a line")
   call append("$", "\t(local to buffer)")
   call <SID>OptionL("inde")
@@ -953,7 +954,6 @@ call <SID>Header("mapping")
 call append("$", "maxmapdepth\tmaximum depth of mapping")
 call append("$", " \tset mmd=" . &mmd)
 call append("$", "remap\trecognize mappings in mapped keys")
-call <SID>BinOptionG("remap", &remap)
 call append("$", "timeout\tallow timing out halfway into a mapping")
 call <SID>BinOptionG("to", &to)
 call append("$", "ttimeout\tallow timing out halfway into a key code")

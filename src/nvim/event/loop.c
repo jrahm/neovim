@@ -13,7 +13,6 @@
 # include "event/loop.c.generated.h"
 #endif
 
-
 void loop_init(Loop *loop, void *data)
 {
   uv_loop_init(&loop->uv);
@@ -28,6 +27,7 @@ void loop_init(Loop *loop, void *data)
   uv_signal_init(&loop->uv, &loop->children_watcher);
   uv_timer_init(&loop->uv, &loop->children_kill_timer);
   uv_timer_init(&loop->uv, &loop->poll_timer);
+  uv_timer_init(&loop->uv, &loop->exit_delay_timer);
   loop->poll_timer.data = xmalloc(sizeof(bool));  // "timeout expired" flag
 }
 
@@ -137,13 +137,14 @@ bool loop_close(Loop *loop, bool wait)
   uv_close((uv_handle_t *)&loop->children_watcher, NULL);
   uv_close((uv_handle_t *)&loop->children_kill_timer, NULL);
   uv_close((uv_handle_t *)&loop->poll_timer, timer_close_cb);
+  uv_close((uv_handle_t *)&loop->exit_delay_timer, NULL);
   uv_close((uv_handle_t *)&loop->async, NULL);
   uint64_t start = wait ? os_hrtime() : 0;
   bool didstop = false;
   while (true) {
     // Run the loop to tickle close-callbacks (which should then free memory).
     // Use UV_RUN_NOWAIT to avoid a hang. #11820
-    uv_run(&loop->uv, didstop ? UV_RUN_DEFAULT : UV_RUN_NOWAIT);
+    uv_run(&loop->uv, didstop ? UV_RUN_DEFAULT : UV_RUN_NOWAIT);  // -V547
     if ((uv_loop_close(&loop->uv) != UV_EBUSY) || !wait) {
       break;
     }

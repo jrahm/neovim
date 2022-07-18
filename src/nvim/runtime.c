@@ -24,12 +24,19 @@
 static bool runtime_search_path_valid = false;
 static int *runtime_search_path_ref = NULL;
 static RuntimeSearchPath runtime_search_path;
+static RuntimeSearchPath runtime_search_path_thread;
+static uv_mutex_t runtime_search_path_mutex;
+
+void runtime_init(void)
+{
+  uv_mutex_init(&runtime_search_path_mutex);
+}
 
 /// ":runtime [what] {name}"
 void ex_runtime(exarg_T *eap)
 {
-  char_u *arg = eap->arg;
-  char_u *p = skiptowhite(arg);
+  char *arg = eap->arg;
+  char *p = (char *)skiptowhite((char_u *)arg);
   ptrdiff_t len = p - arg;
   int flags = eap->forceit ? DIP_ALL : 0;
 
@@ -47,13 +54,12 @@ void ex_runtime(exarg_T *eap)
     arg = skipwhite(arg + len);
   }
 
-  source_runtime((char *)arg, flags);
+  source_runtime(arg, flags);
 }
 
-
-static void source_callback(char_u *fname, void *cookie)
+static void source_callback(char *fname, void *cookie)
 {
-  (void)do_source((char *)fname, false, DOSO_NONE);
+  (void)do_source(fname, false, DOSO_NONE);
 }
 
 /// Find the file "name" in all directories in "path" and invoke
@@ -87,7 +93,7 @@ int do_in_path(char_u *path, char *name, int flags, DoInRuntimepathCB callback, 
     char_u *rtp = rtp_copy;
     while (*rtp != NUL && ((flags & DIP_ALL) || !did_one)) {
       // Copy the path from 'runtimepath' to buf[].
-      copy_option_part(&rtp, buf, MAXPATHL, ",");
+      copy_option_part((char **)&rtp, (char *)buf, MAXPATHL, ",");
       size_t buflen = STRLEN(buf);
 
       // Skip after or non-after directories.
@@ -101,7 +107,7 @@ int do_in_path(char_u *path, char *name, int flags, DoInRuntimepathCB callback, 
       }
 
       if (name == NULL) {
-        (*callback)(buf, cookie);
+        (*callback)((char *)buf, cookie);
         did_one = true;
       } else if (buflen + STRLEN(name) + 2 < MAXPATHL) {
         add_pathsep((char *)buf);
@@ -112,8 +118,7 @@ int do_in_path(char_u *path, char *name, int flags, DoInRuntimepathCB callback, 
         while (*np != NUL && ((flags & DIP_ALL) || !did_one)) {
           // Append the pattern from "name" to buf[].
           assert(MAXPATHL >= (tail - buf));
-          copy_option_part(&np, tail, (size_t)(MAXPATHL - (tail - buf)),
-                           "\t ");
+          copy_option_part((char **)&np, (char *)tail, (size_t)(MAXPATHL - (tail - buf)), "\t ");
 
           if (p_verbose > 10) {
             verbose_enter();
@@ -127,7 +132,7 @@ int do_in_path(char_u *path, char *name, int flags, DoInRuntimepathCB callback, 
           // Expand wildcards, invoke the callback for each match.
           if (gen_expand_wildcards(1, &buf, &num_files, &files, ew_flags) == OK) {
             for (i = 0; i < num_files; i++) {
-              (*callback)(files[i], cookie);
+              (*callback)((char *)files[i], cookie);
               did_one = true;
               if (!(flags & DIP_ALL)) {
                 break;
@@ -146,13 +151,12 @@ int do_in_path(char_u *path, char *name, int flags, DoInRuntimepathCB callback, 
 
     if (flags & DIP_ERR) {
       semsg(_(e_dirnotf), basepath, name);
-    } else if (p_verbose > 0) {
+    } else if (p_verbose > 1) {
       verbose_enter();
       smsg(_("not found in '%s': \"%s\""), basepath, name);
       verbose_leave();
     }
   }
-
 
   return did_one ? OK : FAIL;
 }
@@ -172,6 +176,17 @@ RuntimeSearchPath runtime_search_path_get_cached(int *ref)
   return runtime_search_path;
 }
 
+RuntimeSearchPath copy_runtime_search_path(const RuntimeSearchPath src)
+{
+  RuntimeSearchPath dst = KV_INITIAL_VALUE;
+  for (size_t j = 0; j < kv_size(src); j++) {
+    SearchPathItem src_item = kv_A(src, j);
+    kv_push(dst, ((SearchPathItem){ xstrdup(src_item.path), src_item.after, src_item.has_lua }));
+  }
+
+  return dst;
+}
+
 void runtime_search_path_unref(RuntimeSearchPath path, int *ref)
   FUNC_ATTR_NONNULL_ALL
 {
@@ -183,7 +198,6 @@ void runtime_search_path_unref(RuntimeSearchPath path, int *ref)
     }
   }
 }
-
 
 /// Find the file "name" in all directories in "path" and invoke
 /// "callback(fname, cookie)".
@@ -226,7 +240,7 @@ int do_in_cached_path(char_u *name, int flags, DoInRuntimepathCB callback, void 
     }
 
     if (name == NULL) {
-      (*callback)((char_u *)item.path, cookie);
+      (*callback)(item.path, cookie);
     } else if (buflen + STRLEN(name) + 2 < MAXPATHL) {
       STRCPY(buf, item.path);
       add_pathsep((char *)buf);
@@ -237,8 +251,7 @@ int do_in_cached_path(char_u *name, int flags, DoInRuntimepathCB callback, void 
       while (*np != NUL && ((flags & DIP_ALL) || !did_one)) {
         // Append the pattern from "name" to buf[].
         assert(MAXPATHL >= (tail - buf));
-        copy_option_part(&np, tail, (size_t)(MAXPATHL - (tail - buf)),
-                         "\t ");
+        copy_option_part((char **)&np, (char *)tail, (size_t)(MAXPATHL - (tail - buf)), "\t ");
 
         if (p_verbose > 10) {
           verbose_enter();
@@ -253,7 +266,7 @@ int do_in_cached_path(char_u *name, int flags, DoInRuntimepathCB callback, void 
         char_u *(pat[]) = { buf };
         if (gen_expand_wildcards(1, pat, &num_files, &files, ew_flags) == OK) {
           for (i = 0; i < num_files; i++) {
-            (*callback)(files[i], cookie);
+            (*callback)((char *)files[i], cookie);
             did_one = true;
             if (!(flags & DIP_ALL)) {
               break;
@@ -268,7 +281,7 @@ int do_in_cached_path(char_u *name, int flags, DoInRuntimepathCB callback, void 
   if (!did_one && name != NULL) {
     if (flags & DIP_ERR) {
       semsg(_(e_dirnotf), "runtime path", name);
-    } else if (p_verbose > 0) {
+    } else if (p_verbose > 1) {
       verbose_enter();
       smsg(_("not found in runtime path: \"%s\""), name);
       verbose_leave();
@@ -302,15 +315,35 @@ ArrayOf(String) runtime_get_named(bool lua, Array pat, bool all)
 {
   int ref;
   RuntimeSearchPath path = runtime_search_path_get_cached(&ref);
-  ArrayOf(String) rv = ARRAY_DICT_INIT;
   static char buf[MAXPATHL];
 
+  ArrayOf(String) rv = runtime_get_named_common(lua, pat, all, path, buf, sizeof buf);
+
+  runtime_search_path_unref(path, &ref);
+  return rv;
+}
+
+ArrayOf(String) runtime_get_named_thread(bool lua, Array pat, bool all)
+{
+  // TODO(bfredl): avoid contention between multiple worker threads?
+  uv_mutex_lock(&runtime_search_path_mutex);
+  static char buf[MAXPATHL];
+  ArrayOf(String) rv = runtime_get_named_common(lua, pat, all, runtime_search_path_thread,
+                                                buf, sizeof buf);
+  uv_mutex_unlock(&runtime_search_path_mutex);
+  return rv;
+}
+
+ArrayOf(String) runtime_get_named_common(bool lua, Array pat, bool all,
+                                         RuntimeSearchPath path, char *buf, size_t buf_len)
+{
+  ArrayOf(String) rv = ARRAY_DICT_INIT;
   for (size_t i = 0; i < kv_size(path); i++) {
     SearchPathItem *item = &kv_A(path, i);
     if (lua) {
       if (item->has_lua == kNone) {
-        size_t size = (size_t)snprintf(buf, sizeof buf, "%s/lua/", item->path);
-        item->has_lua = (size < sizeof buf && os_isdir((char_u *)buf)) ? kTrue : kFalse;
+        size_t size = (size_t)snprintf(buf, buf_len, "%s/lua/", item->path);
+        item->has_lua = (size < buf_len && os_isdir((char_u *)buf));
       }
       if (item->has_lua == kFalse) {
         continue;
@@ -320,9 +353,9 @@ ArrayOf(String) runtime_get_named(bool lua, Array pat, bool all)
     for (size_t j = 0; j < pat.size; j++) {
       Object pat_item = pat.items[j];
       if (pat_item.type == kObjectTypeString) {
-        size_t size = (size_t)snprintf(buf, sizeof buf, "%s/%s",
+        size_t size = (size_t)snprintf(buf, buf_len, "%s/%s",
                                        item->path, pat_item.data.string.data);
-        if (size < sizeof buf) {
+        if (size < buf_len) {
           if (os_file_is_readable(buf)) {
             ADD(rv, STRING_OBJ(cstr_to_string(buf)));
             if (!all) {
@@ -333,9 +366,7 @@ ArrayOf(String) runtime_get_named(bool lua, Array pat, bool all)
       }
     }
   }
-
 done:
-  runtime_search_path_unref(path, &ref);
   return rv;
 }
 
@@ -449,7 +480,7 @@ static void expand_pack_entry(RuntimeSearchPath *search_path, Map(String, handle
     STRLCPY(buf, pack_entry, sizeof buf);
     STRLCPY(buf + pack_entry_len, start_pat[i], sizeof buf - pack_entry_len);
     expand_rtp_entry(search_path, rtp_used, buf, false);
-    size_t after_size = STRLEN(buf)+7;
+    size_t after_size = STRLEN(buf) + 7;
     char *after = xmallocz(after_size);
     xstrlcpy(after, buf, after_size);
     xstrlcat(after, "/after", after_size);
@@ -463,7 +494,7 @@ static bool path_is_after(char_u *buf, size_t buflen)
   // vim8 considers all dirs like "foo/bar_after", "Xafter" etc, as an
   // "after" dir in SOME codepaths not not in ALL codepaths.
   return buflen >= 5
-         && (!(buflen >= 6) || vim_ispathsep(buf[buflen-6]))
+         && (!(buflen >= 6) || vim_ispathsep(buf[buflen - 6]))
          && STRCMP(buf + buflen - 5, "after") == 0;
 }
 
@@ -480,7 +511,7 @@ RuntimeSearchPath runtime_search_path_build(void)
   static char_u buf[MAXPATHL];
   for (char *entry = (char *)p_pp; *entry != NUL;) {
     char *cur_entry = entry;
-    copy_option_part((char_u **)&entry, buf, MAXPATHL, ",");
+    copy_option_part(&entry, (char *)buf, MAXPATHL, ",");
 
     String the_entry = { .data = cur_entry, .size = STRLEN(buf) };
 
@@ -488,11 +519,10 @@ RuntimeSearchPath runtime_search_path_build(void)
     map_put(String, handle_T)(&pack_used, the_entry, 0);
   }
 
-
   char *rtp_entry;
   for (rtp_entry = (char *)p_rtp; *rtp_entry != NUL;) {
     char *cur_entry = rtp_entry;
-    copy_option_part((char_u **)&rtp_entry, buf, MAXPATHL, ",");
+    copy_option_part(&rtp_entry, (char *)buf, MAXPATHL, ",");
     size_t buflen = STRLEN(buf);
 
     if (path_is_after(buf, buflen)) {
@@ -526,7 +556,7 @@ RuntimeSearchPath runtime_search_path_build(void)
 
   // "after" dirs in rtp
   for (; *rtp_entry != NUL;) {
-    copy_option_part((char_u **)&rtp_entry, buf, MAXPATHL, ",");
+    copy_option_part(&rtp_entry, (char *)buf, MAXPATHL, ",");
     expand_rtp_entry(&search_path, &rtp_used, (char *)buf, path_is_after(buf, STRLEN(buf)));
   }
 
@@ -569,22 +599,25 @@ void runtime_search_path_validate(void)
     runtime_search_path = runtime_search_path_build();
     runtime_search_path_valid = true;
     runtime_search_path_ref = NULL;  // initially unowned
+    uv_mutex_lock(&runtime_search_path_mutex);
+    runtime_search_path_free(runtime_search_path_thread);
+    runtime_search_path_thread = copy_runtime_search_path(runtime_search_path);
+    uv_mutex_unlock(&runtime_search_path_mutex);
   }
 }
 
-
 /// Just like do_in_path_and_pp(), using 'runtimepath' for "path".
-int do_in_runtimepath(char_u *name, int flags, DoInRuntimepathCB callback, void *cookie)
+int do_in_runtimepath(char *name, int flags, DoInRuntimepathCB callback, void *cookie)
 {
   int success = FAIL;
   if (!(flags & DIP_NORTP)) {
-    success |= do_in_cached_path((name && !*name) ? NULL : name, flags, callback, cookie);
+    success |= do_in_cached_path((name && !*name) ? NULL : (char_u *)name, flags, callback, cookie);
     flags = (flags & ~DIP_START) | DIP_NORTP;
   }
   // TODO(bfredl): we could integrate disabled OPT dirs into the cached path
   // which would effectivize ":packadd myoptpack" as well
   if ((flags & (DIP_START|DIP_OPT)) && (success == FAIL || (flags & DIP_ALL))) {
-    success |= do_in_path_and_pp(p_rtp, name, flags, callback, cookie);
+    success |= do_in_path_and_pp(p_rtp, (char_u *)name, flags, callback, cookie);
   }
   return success;
 }
@@ -596,7 +629,7 @@ int do_in_runtimepath(char_u *name, int flags, DoInRuntimepathCB callback, void 
 /// return FAIL when no file could be sourced, OK otherwise.
 int source_runtime(char *name, int flags)
 {
-  return do_in_runtimepath((char_u *)name, flags, source_callback, NULL);
+  return do_in_runtimepath(name, flags, source_callback, NULL);
 }
 
 /// Just like source_runtime(), but use "path" instead of 'runtimepath'.
@@ -665,7 +698,7 @@ static int add_pack_dir_to_rtp(char_u *fname, bool is_pack)
   for (const char *entry = (const char *)p_rtp; *entry != NUL;) {
     const char *cur_entry = entry;
 
-    copy_option_part((char_u **)&entry, buf, MAXPATHL, ",");
+    copy_option_part((char **)&entry, (char *)buf, MAXPATHL, ",");
     if (insp == NULL) {
       add_pathsep((char *)buf);
       char *const rtp_ffname = fix_fname((char *)buf);
@@ -786,7 +819,7 @@ static int load_pack_plugin(bool opt, char_u *fname)
 
   // If runtime/filetype.vim wasn't loaded yet, the scripts will be
   // found when it loads.
-  if (opt && eval_to_number(cmd) > 0) {
+  if (opt && eval_to_number((char *)cmd) > 0) {
     do_cmdline_cmd("augroup filetypedetect");
     vim_snprintf((char *)pat, len, ftpat, ffname);
     source_all_matches(pat);
@@ -814,7 +847,7 @@ static void add_pack_plugin(bool opt, char_u *fname, void *cookie)
 
     const char *p = (const char *)p_rtp;
     while (*p != NUL) {
-      copy_option_part((char_u **)&p, (char_u *)buf, MAXPATHL, ",");
+      copy_option_part((char **)&p, buf, MAXPATHL, ",");
       if (path_fnamecmp(buf, (char *)fname) == 0) {
         found = true;
         break;
@@ -834,16 +867,15 @@ static void add_pack_plugin(bool opt, char_u *fname, void *cookie)
   }
 }
 
-static void add_start_pack_plugin(char_u *fname, void *cookie)
+static void add_start_pack_plugin(char *fname, void *cookie)
 {
-  add_pack_plugin(false, fname, cookie);
+  add_pack_plugin(false, (char_u *)fname, cookie);
 }
 
-static void add_opt_pack_plugin(char_u *fname, void *cookie)
+static void add_opt_pack_plugin(char *fname, void *cookie)
 {
-  add_pack_plugin(true, fname, cookie);
+  add_pack_plugin(true, (char_u *)fname, cookie);
 }
-
 
 /// Add all packages in the "start" directory to 'runtimepath'.
 void add_pack_start_dirs(void)
@@ -862,7 +894,7 @@ static bool pack_has_entries(char_u *buf)
   return num_files > 0;
 }
 
-static void add_pack_start_dir(char_u *fname, void *cookie)
+static void add_pack_start_dir(char *fname, void *cookie)
 {
   static char_u buf[MAXPATHL];
   char *(start_pat[]) = { "/start/*", "/pack/*/start/*" };  // NOLINT
@@ -877,7 +909,6 @@ static void add_pack_start_dir(char_u *fname, void *cookie)
     }
   }
 }
-
 
 /// Load plugins from all packages in the "start" directory.
 void load_start_packages(void)
@@ -1008,7 +1039,6 @@ static inline size_t compute_double_env_sep_len(const char *const val, const siz
   } while (iter != NULL);
   return ret;
 }
-
 
 #define NVIM_SIZE (sizeof("nvim") - 1)
 /// Add directories to a ENV_SEPCHAR-separated array from a colon-separated one
@@ -1211,10 +1241,11 @@ char *runtimepath_default(bool clean_arg)
                                          AFTER_SIZE + 1);
   rtp_size += compute_double_env_sep_len(config_dirs, NVIM_SIZE + 1,
                                          AFTER_SIZE + 1);
+  char *rtp = NULL;
   if (rtp_size == 0) {
-    return NULL;
+    goto freeall;
   }
-  char *const rtp = xmalloc(rtp_size);
+  rtp = xmalloc(rtp_size);
   char *rtp_cur = rtp;
   rtp_cur = add_dir(rtp_cur, config_home, config_len, kXDGConfigHome,
                     NULL, 0, NULL, 0);
@@ -1239,6 +1270,7 @@ char *runtimepath_default(bool clean_arg)
   assert((size_t)(rtp_cur - rtp) == rtp_size);
 #undef SITE_SIZE
 #undef AFTER_SIZE
+freeall:
   xfree(data_dirs);
   xfree(config_dirs);
   xfree(data_home);

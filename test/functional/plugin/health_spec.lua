@@ -5,7 +5,7 @@ local Screen = require('test.functional.ui.screen')
 local clear = helpers.clear
 local curbuf_contents = helpers.curbuf_contents
 local command = helpers.command
-local eq = helpers.eq
+local eq, neq = helpers.eq, helpers.neq
 local getcompletion = helpers.funcs.getcompletion
 
 describe(':checkhealth', function()
@@ -37,6 +37,7 @@ describe(':checkhealth', function()
     eq('nvim', getcompletion('nvim', 'checkhealth')[1])
     eq('provider', getcompletion('prov', 'checkhealth')[1])
     eq('vim.lsp', getcompletion('vim.ls', 'checkhealth')[1])
+    neq('vim', getcompletion('^vim', 'checkhealth')[1])  -- should not complete vim.health
   end)
 end)
 
@@ -153,6 +154,10 @@ describe('health.vim', function()
         ## report 2
           - OK: nothing to see here
 
+        test_plug.submodule_empty: require("test_plug.submodule_empty.health").check()
+        ========================================================================
+          - ERROR: The healthcheck report for "test_plug.submodule_empty" plugin is empty.
+
         test_plug.submodule_failed: require("test_plug.submodule_failed.health").check()
         ========================================================================
           - ERROR: Failed to run healthcheck for "test_plug.submodule_failed" plugin. Exception:
@@ -170,6 +175,16 @@ describe('health.vim', function()
             function health#check[20]..health#broken#check, line 1
             caused an error
         ]])
+    end)
+
+    it("... including empty reports", function()
+      command("checkhealth test_plug.submodule_empty")
+      helpers.expect([[
+
+      test_plug.submodule_empty: require("test_plug.submodule_empty.health").check()
+      ========================================================================
+        - ERROR: The healthcheck report for "test_plug.submodule_empty" plugin is empty.
+      ]])
     end)
 
     it("gracefully handles broken lua healthcheck", function()
@@ -228,5 +243,23 @@ describe('health.vim', function()
           - ERROR: No healthcheck found for "non_existent_healthcheck" plugin.
         ]])
     end)
+
+    it("does not use vim.health as a healtcheck", function()
+      -- vim.health is not a healthcheck
+      command("checkhealth vim")
+      helpers.expect([[
+      ERROR: No healthchecks found.]])
+    end)
+  end)
+end)
+
+describe(':checkhealth provider', function()
+  it("works correctly with a wrongly configured 'shell'", function()
+    clear()
+    command([[set shell=echo\ WRONG!!!]])
+    command('let g:loaded_perl_provider = 0')
+    command('let g:loaded_python3_provider = 0')
+    command('checkhealth provider')
+    eq(nil, string.match(curbuf_contents(), 'WRONG!!!'))
   end)
 end)

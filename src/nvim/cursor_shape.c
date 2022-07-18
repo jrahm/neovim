@@ -9,8 +9,8 @@
 #include "nvim/charset.h"
 #include "nvim/cursor_shape.h"
 #include "nvim/ex_getln.h"
+#include "nvim/highlight_group.h"
 #include "nvim/strings.h"
-#include "nvim/syntax.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
 
@@ -23,15 +23,15 @@ cursorentry_T shape_table[SHAPE_IDX_COUNT] =
 {
   // Values are set by 'guicursor' and 'mouseshape'.
   // Adjust the SHAPE_IDX_ defines when changing this!
-  { "normal", 0, 0, 0, 700L, 400L, 250L, 0, 0, "n", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "visual", 0, 0, 0, 700L, 400L, 250L, 0, 0, "v", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "insert", 0, 0, 0, 700L, 400L, 250L, 0, 0, "i", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "replace", 0, 0, 0, 700L, 400L, 250L, 0, 0, "r", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "cmdline_normal", 0, 0, 0, 700L, 400L, 250L, 0, 0, "c", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "cmdline_insert", 0, 0, 0, 700L, 400L, 250L, 0, 0, "ci", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "cmdline_replace", 0, 0, 0, 700L, 400L, 250L, 0, 0, "cr", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "operator", 0, 0, 0, 700L, 400L, 250L, 0, 0, "o", SHAPE_CURSOR+SHAPE_MOUSE },
-  { "visual_select", 0, 0, 0, 700L, 400L, 250L, 0, 0, "ve", SHAPE_CURSOR+SHAPE_MOUSE },
+  { "normal", 0, 0, 0, 700L, 400L, 250L, 0, 0, "n", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "visual", 0, 0, 0, 700L, 400L, 250L, 0, 0, "v", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "insert", 0, 0, 0, 700L, 400L, 250L, 0, 0, "i", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "replace", 0, 0, 0, 700L, 400L, 250L, 0, 0, "r", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "cmdline_normal", 0, 0, 0, 700L, 400L, 250L, 0, 0, "c", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "cmdline_insert", 0, 0, 0, 700L, 400L, 250L, 0, 0, "ci", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "cmdline_replace", 0, 0, 0, 700L, 400L, 250L, 0, 0, "cr", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "operator", 0, 0, 0, 700L, 400L, 250L, 0, 0, "o", SHAPE_CURSOR + SHAPE_MOUSE },
+  { "visual_select", 0, 0, 0, 700L, 400L, 250L, 0, 0, "ve", SHAPE_CURSOR + SHAPE_MOUSE },
   { "cmdline_hover", 0, 0, 0,   0L,   0L,   0L, 0, 0, "e", SHAPE_MOUSE },
   { "statusline_hover", 0, 0, 0,   0L,   0L,   0L, 0, 0, "s", SHAPE_MOUSE },
   { "statusline_drag", 0, 0, 0,   0L,   0L,   0L, 0, 0, "sd", SHAPE_MOUSE },
@@ -43,44 +43,45 @@ cursorentry_T shape_table[SHAPE_IDX_COUNT] =
 };
 
 /// Converts cursor_shapes into an Array of Dictionaries
+/// @param arena initialized arena where memory will be alocated
+///
 /// @return Array of the form {[ "cursor_shape": ... ], ...}
-Array mode_style_array(void)
+Array mode_style_array(Arena *arena)
 {
-  Array all = ARRAY_DICT_INIT;
+  Array all = arena_array(arena, SHAPE_IDX_COUNT);
 
   for (int i = 0; i < SHAPE_IDX_COUNT; i++) {
-    Dictionary dic = ARRAY_DICT_INIT;
     cursorentry_T *cur = &shape_table[i];
+    Dictionary dic = arena_dict(arena, 3 + ((cur->used_for & SHAPE_CURSOR) ? 9 : 0));
+    PUT_C(dic, "name", STRING_OBJ(cstr_as_string(cur->full_name)));
+    PUT_C(dic, "short_name", STRING_OBJ(cstr_as_string(cur->name)));
     if (cur->used_for & SHAPE_MOUSE) {
-      PUT(dic, "mouse_shape", INTEGER_OBJ(cur->mshape));
+      PUT_C(dic, "mouse_shape", INTEGER_OBJ(cur->mshape));
     }
     if (cur->used_for & SHAPE_CURSOR) {
       String shape_str;
       switch (cur->shape) {
       case SHAPE_BLOCK:
-        shape_str = cstr_to_string("block"); break;
+        shape_str = cstr_as_string("block"); break;
       case SHAPE_VER:
-        shape_str = cstr_to_string("vertical"); break;
+        shape_str = cstr_as_string("vertical"); break;
       case SHAPE_HOR:
-        shape_str = cstr_to_string("horizontal"); break;
+        shape_str = cstr_as_string("horizontal"); break;
       default:
-        shape_str = cstr_to_string("unknown");
+        shape_str = cstr_as_string("unknown");
       }
-      PUT(dic, "cursor_shape", STRING_OBJ(shape_str));
-      PUT(dic, "cell_percentage", INTEGER_OBJ(cur->percentage));
-      PUT(dic, "blinkwait", INTEGER_OBJ(cur->blinkwait));
-      PUT(dic, "blinkon", INTEGER_OBJ(cur->blinkon));
-      PUT(dic, "blinkoff", INTEGER_OBJ(cur->blinkoff));
-      PUT(dic, "hl_id", INTEGER_OBJ(cur->id));
-      PUT(dic, "id_lm", INTEGER_OBJ(cur->id_lm));
-      PUT(dic, "attr_id", INTEGER_OBJ(cur->id ? syn_id2attr(cur->id) : 0));
-      PUT(dic, "attr_id_lm", INTEGER_OBJ(cur->id_lm ? syn_id2attr(cur->id_lm)
-                                                    : 0));
+      PUT_C(dic, "cursor_shape", STRING_OBJ(shape_str));
+      PUT_C(dic, "cell_percentage", INTEGER_OBJ(cur->percentage));
+      PUT_C(dic, "blinkwait", INTEGER_OBJ(cur->blinkwait));
+      PUT_C(dic, "blinkon", INTEGER_OBJ(cur->blinkon));
+      PUT_C(dic, "blinkoff", INTEGER_OBJ(cur->blinkoff));
+      PUT_C(dic, "hl_id", INTEGER_OBJ(cur->id));
+      PUT_C(dic, "id_lm", INTEGER_OBJ(cur->id_lm));
+      PUT_C(dic, "attr_id", INTEGER_OBJ(cur->id ? syn_id2attr(cur->id) : 0));
+      PUT_C(dic, "attr_id_lm", INTEGER_OBJ(cur->id_lm ? syn_id2attr(cur->id_lm) : 0));
     }
-    PUT(dic, "name", STRING_OBJ(cstr_to_string(cur->full_name)));
-    PUT(dic, "short_name", STRING_OBJ(cstr_to_string(cur->name)));
 
-    ADD(all, DICTIONARY_OBJ(dic));
+    ADD_C(all, DICTIONARY_OBJ(dic));
   }
 
   return all;
@@ -95,12 +96,11 @@ Array mode_style_array(void)
 /// @returns error message for an illegal option, NULL otherwise.
 char *parse_shape_opt(int what)
 {
-  char_u *modep;
-  char_u *colonp;
-  char_u *commap;
-  char_u *slashp;
-  char_u *p = NULL;
-  char_u *endp;
+  char *colonp;
+  char *commap;
+  char *slashp;
+  char *p = NULL;
+  char *endp;
   int idx = 0;                          // init for GCC
   int all_idx;
   int len;
@@ -120,7 +120,7 @@ char *parse_shape_opt(int what)
       }
     }
     // Repeat for all comma separated parts.
-    modep = p_guicursor;
+    char *modep = (char *)p_guicursor;
     while (modep != NULL && *modep != NUL) {
       colonp = vim_strchr(modep, ':');
       commap = vim_strchr(modep, ',');
@@ -147,7 +147,7 @@ char *parse_shape_opt(int what)
           if (len == 1 && TOLOWER_ASC(modep[0]) == 'a') {
             all_idx = SHAPE_IDX_COUNT - 1;
           } else {
-            for (idx = 0; idx < SHAPE_IDX_COUNT; ++idx) {
+            for (idx = 0; idx < SHAPE_IDX_COUNT; idx++) {
               if (STRNICMP(modep, shape_table[idx].name, len) == 0) {
                 break;
               }
@@ -170,10 +170,8 @@ char *parse_shape_opt(int what)
         // Parse the part after the colon
         for (p = colonp + 1; *p && *p != ',';) {
           {
-            /*
-             * First handle the ones with a number argument.
-             */
-            i = *p;
+            // First handle the ones with a number argument.
+            i = (uint8_t)(*p);
             len = 0;
             if (STRNICMP(p, "ver", 3) == 0) {
               len = 3;
@@ -230,11 +228,11 @@ char *parse_shape_opt(int what)
               slashp = vim_strchr(p, '/');
               if (slashp != NULL && slashp < endp) {
                 // "group/langmap_group"
-                i = syn_check_group((char *)p, (int)(slashp - p));
+                i = syn_check_group(p, (size_t)(slashp - p));
                 p = slashp + 1;
               }
               if (round == 2) {
-                shape_table[idx].id = syn_check_group((char *)p, (int)(endp - p));
+                shape_table[idx].id = syn_check_group(p, (size_t)(endp - p));
                 shape_table[idx].id_lm = shape_table[idx].id;
                 if (slashp != NULL && slashp < endp) {
                   shape_table[idx].id = i;
@@ -245,7 +243,7 @@ char *parse_shape_opt(int what)
           }           // if (what != SHAPE_MOUSE)
 
           if (*p == '-') {
-            ++p;
+            p++;
           }
         }
       }
@@ -281,6 +279,7 @@ char *parse_shape_opt(int what)
 ///
 /// @param exclusive If 'selection' option is "exclusive".
 bool cursor_is_block_during_visual(bool exclusive)
+  FUNC_ATTR_PURE
 {
   int mode_idx = exclusive ? SHAPE_IDX_VE : SHAPE_IDX_V;
   return (SHAPE_BLOCK == shape_table[mode_idx].shape
@@ -304,6 +303,7 @@ int cursor_mode_str2int(const char *mode)
 
 /// Check if a syntax id is used as a cursor style.
 bool cursor_mode_uses_syn_id(int syn_id)
+  FUNC_ATTR_PURE
 {
   if (*p_guicursor == NUL) {
     return false;
@@ -317,19 +317,19 @@ bool cursor_mode_uses_syn_id(int syn_id)
   return false;
 }
 
-
 /// Return the index into shape_table[] for the current mode.
 int cursor_get_mode_idx(void)
+  FUNC_ATTR_PURE
 {
-  if (State == SHOWMATCH) {
+  if (State == MODE_SHOWMATCH) {
     return SHAPE_IDX_SM;
   } else if (State & VREPLACE_FLAG) {
     return SHAPE_IDX_R;
   } else if (State & REPLACE_FLAG) {
     return SHAPE_IDX_R;
-  } else if (State & INSERT) {
+  } else if (State & MODE_INSERT) {
     return SHAPE_IDX_I;
-  } else if (State & CMDLINE) {
+  } else if (State & MODE_CMDLINE) {
     if (cmdline_at_end()) {
       return SHAPE_IDX_C;
     } else if (cmdline_overstrike()) {

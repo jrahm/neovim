@@ -10,34 +10,40 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/vimscript.h"
 #include "nvim/ascii.h"
+#include "nvim/autocmd.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/ex_cmds2.h"
+#include "nvim/ops.h"
+#include "nvim/strings.h"
+#include "nvim/vim.h"
 #include "nvim/viml/parser/expressions.h"
 #include "nvim/viml/parser/parser.h"
+#include "nvim/window.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/vimscript.c.generated.h"
 #endif
 
-/// Executes Vimscript (multiline block of Ex-commands), like anonymous
+/// Executes Vimscript (multiline block of Ex commands), like anonymous
 /// |:source|.
 ///
 /// Unlike |nvim_command()| this function supports heredocs, script-scope (s:),
 /// etc.
 ///
-/// On execution error: fails with VimL error, does not update v:errmsg.
+/// On execution error: fails with VimL error, updates v:errmsg.
 ///
 /// @see |execute()|
 /// @see |nvim_command()|
+/// @see |nvim_cmd()|
 ///
 /// @param src      Vimscript code
 /// @param output   Capture and return all (non-error, non-shell |:!|) output
 /// @param[out] err Error details (Vim error), if any
 /// @return Output (non-error, non-shell |:!|) if `output` is true,
 ///         else empty string.
-String nvim_exec(String src, Boolean output, Error *err)
+String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
   FUNC_API_SINCE(7)
 {
   const int save_msg_silent = msg_silent;
@@ -52,11 +58,16 @@ String nvim_exec(String src, Boolean output, Error *err)
   if (output) {
     msg_silent++;
   }
+
+  const sctx_T save_current_sctx = api_set_sctx(channel_id);
+
   do_source_str(src.data, "nvim_exec()");
   if (output) {
     capture_ga = save_capture_ga;
     msg_silent = save_msg_silent;
   }
+
+  current_sctx = save_current_sctx;
   try_end(err);
 
   if (ERROR_SET(err)) {
@@ -83,13 +94,16 @@ theend:
   return (String)STRING_INIT;
 }
 
-/// Executes an ex-command.
+/// Executes an Ex command.
 ///
-/// On execution error: fails with VimL error, does not update v:errmsg.
+/// On execution error: fails with VimL error, updates v:errmsg.
 ///
-/// @see |nvim_exec()|
+/// Prefer using |nvim_cmd()| or |nvim_exec()| over this. To evaluate multiple lines of Vim script
+/// or an Ex command directly, use |nvim_exec()|. To construct an Ex command using a structured
+/// format and then execute it, use |nvim_cmd()|. To modify an Ex command before evaluating it, use
+/// |nvim_parse_cmd()| in conjunction with |nvim_cmd()|.
 ///
-/// @param command  Ex-command string
+/// @param command  Ex command string
 /// @param[out] err Error details (Vim error), if any
 void nvim_command(String command, Error *err)
   FUNC_API_SINCE(1)
@@ -102,7 +116,7 @@ void nvim_command(String command, Error *err)
 /// Evaluates a VimL |expression|.
 /// Dictionaries and Lists are recursively expanded.
 ///
-/// On execution error: fails with VimL error, does not update v:errmsg.
+/// On execution error: fails with VimL error, updates v:errmsg.
 ///
 /// @param expr     VimL expression string
 /// @param[out] err Error details, if any
@@ -126,7 +140,7 @@ Object nvim_eval(String expr, Error *err)
     try_start();
 
     typval_T rettv;
-    int ok = eval0((char_u *)expr.data, &rettv, NULL, true);
+    int ok = eval0(expr.data, &rettv, NULL, true);
 
     if (!try_end(err)) {
       if (ok == FAIL) {
@@ -191,7 +205,7 @@ static Object _call_function(String fn, Array args, dict_T *self, Error *err)
     funcexe.selfdict = self;
     // call_func() retval is deceptive, ignore it.  Instead we set `msg_list`
     // (see above) to capture abort-causing non-exception errors.
-    (void)call_func((char_u *)fn.data, (int)fn.size, &rettv, (int)args.size,
+    (void)call_func(fn.data, (int)fn.size, &rettv, (int)args.size,
                     vim_args, &funcexe);
     if (!try_end(err)) {
       rv = vim_to_object(&rettv);
@@ -210,7 +224,7 @@ free_vim_args:
 
 /// Calls a VimL function with the given arguments.
 ///
-/// On execution error: fails with VimL error, does not update v:errmsg.
+/// On execution error: fails with VimL error, updates v:errmsg.
 ///
 /// @param fn       Function to call
 /// @param args     Function arguments packed in an Array
@@ -224,7 +238,7 @@ Object nvim_call_function(String fn, Array args, Error *err)
 
 /// Calls a VimL |Dictionary-function| with the given arguments.
 ///
-/// On execution error: fails with VimL error, does not update v:errmsg.
+/// On execution error: fails with VimL error, updates v:errmsg.
 ///
 /// @param dict Dictionary, or String evaluating to a VimL |self| dict
 /// @param fn Name of the function defined on the VimL dict
@@ -241,7 +255,7 @@ Object nvim_call_dict_function(Object dict, String fn, Array args, Error *err)
   switch (dict.type) {
   case kObjectTypeString:
     try_start();
-    if (eval0((char_u *)dict.data.string.data, &rettv, NULL, true) == FAIL) {
+    if (eval0(dict.data.string.data, &rettv, NULL, true) == FAIL) {
       api_set_error(err, kErrorTypeException,
                     "Failed to evaluate dict expression");
     }
@@ -284,7 +298,7 @@ Object nvim_call_dict_function(Object dict, String fn, Array args, Error *err)
       goto end;
     }
     fn = (String) {
-      .data = (char *)di->di_tv.vval.v_string,
+      .data = di->di_tv.vval.v_string,
       .size = STRLEN(di->di_tv.vval.v_string),
     };
   }

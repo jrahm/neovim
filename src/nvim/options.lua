@@ -351,6 +351,15 @@ return {
       defaults={if_true="if,else,while,do,for,switch"}
     },
     {
+      full_name='cinscopedecls', abbreviation='cinsd',
+      short_desc=N_("words that are recognized by 'cino-g'"),
+      type='string', list='onecomma', scope={'buffer'},
+      deny_duplicates=true,
+      alloced=true,
+      varname='p_cinsd',
+      defaults={if_true="public,protected,private"}
+    },
+    {
       full_name='clipboard', abbreviation='cb',
       short_desc=N_("use the clipboard as the unnamed register"),
       type='string', list='onecomma', scope={'global'},
@@ -1241,9 +1250,9 @@ return {
     },
     {
       full_name='insertmode', abbreviation='im',
-      short_desc=N_("start the edit of a file in Insert mode"),
+      short_desc=N_("No description"),
       type='bool', scope={'global'},
-      varname='p_im',
+      varname='p_force_off',
       defaults={if_true=false}
     },
     {
@@ -1588,7 +1597,7 @@ return {
       short_desc=N_("the use of mouse clicks"),
       type='string', list='flags', scope={'global'},
       varname='p_mouse',
-      defaults={if_true=""}
+      defaults={if_true="nvi"}
     },
     {
       full_name='mousefocus', abbreviation='mousef',
@@ -1610,7 +1619,15 @@ return {
       short_desc=N_("changes meaning of mouse buttons"),
       type='string', scope={'global'},
       varname='p_mousem',
-      defaults={if_true="extend"}
+      defaults={if_true="popup_setpos"}
+    },
+    {
+      full_name='mousescroll',
+      short_desc=N_("amount to scroll by when scrolling with a mouse"),
+      type='string', list='comma', scope={'global'},
+      vi_def=true,
+      varname='p_mousescroll',
+      defaults={if_true="ver:3,hor:6"}
     },
     {
       full_name='mouseshape', abbreviation='mouses',
@@ -1846,7 +1863,7 @@ return {
       type='number', scope={'global'},
       secure=true,
       varname='p_pyx',
-      defaults={if_true=0}
+      defaults={if_true=3}
     },
     {
       full_name='quickfixtextfunc', abbreviation='qftf',
@@ -1902,9 +1919,9 @@ return {
     },
     {
       full_name='remap',
-      short_desc=N_("mappings to work recursively"),
+      short_desc=N_("No description"),
       type='bool', scope={'global'},
-      varname='p_remap',
+      varname='p_force_on',
       defaults={if_true=true}
     },
     {
@@ -2520,9 +2537,9 @@ return {
     },
     {
       full_name='terse',
-      short_desc=N_("hides notification of search wrap"),
+      short_desc=N_("No description"),
       type='bool', scope={'global'},
-      varname='p_terse',
+      varname='p_force_off',
       defaults={if_true=false}
     },
     {
@@ -2745,7 +2762,7 @@ return {
     {
       full_name='virtualedit', abbreviation='ve',
       short_desc=N_("when to use virtual editing"),
-      type='string', list='onecomma', scope={'global'},
+      type='string', list='onecomma', scope={'global', 'window'},
       deny_duplicates=true,
       redraw={'curswant'},
       varname='p_ve',
@@ -2830,6 +2847,16 @@ return {
       type='string', scope={'global'},
       varname='p_wak',
       defaults={if_true="menu"}
+    },
+    {
+      full_name='winbar', abbreviation='wbr',
+      short_desc=N_("custom format for the window bar"),
+      type='string', scope={'global', 'window'},
+      alloced=true,
+      modelineexpr=true,
+      redraw={'statuslines'},
+      varname='p_wbr',
+      defaults={if_true=""}
     },
     {
       full_name='winblend', abbreviation='winbl',

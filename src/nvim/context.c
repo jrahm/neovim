@@ -33,6 +33,7 @@ void ctx_free_all(void)
 
 /// Returns the size of the context stack.
 size_t ctx_size(void)
+  FUNC_ATTR_PURE
 {
   return kv_size(ctx_stack);
 }
@@ -40,6 +41,7 @@ size_t ctx_size(void)
 /// Returns pointer to Context object with given zero-based index from the top
 /// of context stack or NULL if index is out of bounds.
 Context *ctx_get(size_t index)
+  FUNC_ATTR_PURE
 {
   if (index < kv_size(ctx_stack)) {
     return &kv_Z(ctx_stack, index);
@@ -127,7 +129,7 @@ bool ctx_restore(Context *ctx, const int flags)
     free_ctx = true;
   }
 
-  char_u *op_shada;
+  char *op_shada;
   get_option_value("shada", NULL, &op_shada, OPT_GLOBAL);
   set_option_value("shada", 0L, "!,'100,%", OPT_GLOBAL);
 
@@ -155,7 +157,7 @@ bool ctx_restore(Context *ctx, const int flags)
     ctx_free(ctx);
   }
 
-  set_option_value("shada", 0L, (char *)op_shada, OPT_GLOBAL);
+  set_option_value("shada", 0L, op_shada, OPT_GLOBAL);
   xfree(op_shada);
 
   return true;
@@ -256,7 +258,8 @@ static inline void ctx_save_funcs(Context *ctx, bool scriptonly)
       size_t cmd_len = sizeof("func! ") + STRLEN(name);
       char *cmd = xmalloc(cmd_len);
       snprintf(cmd, cmd_len, "func! %s", name);
-      String func_body = nvim_exec(cstr_as_string(cmd), true, &err);
+      String func_body = nvim_exec(VIML_INTERNAL_CALL, cstr_as_string(cmd),
+                                   true, &err);
       xfree(cmd);
       if (!ERROR_SET(&err)) {
         ADD(ctx->funcs, STRING_OBJ(func_body));

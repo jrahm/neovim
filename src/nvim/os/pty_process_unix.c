@@ -16,11 +16,11 @@
 #elif defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
 # include <util.h>
 #elif defined(__sun)
-#  include <sys/stream.h>
-#  include <sys/syscall.h>
-#  include <fcntl.h>
-#  include <unistd.h>
-#  include <signal.h>
+# include <fcntl.h>
+# include <signal.h>
+# include <sys/stream.h>
+# include <sys/syscall.h>
+# include <unistd.h>
 #else
 # include <pty.h>
 #endif
@@ -49,10 +49,10 @@
 // this header defines STR, just as nvim.h, but it is defined as ('S'<<8),
 // to avoid #undef STR, #undef STR, #define STR ('S'<<8) just delay the
 // inclusion of the header even though it gets include out of order.
-#include <sys/stropts.h>
+# include <sys/stropts.h>
 
-static int openpty(int *amaster, int *aslave, char *name,
-                   struct termios *termp, struct winsize *winp)
+static int openpty(int *amaster, int *aslave, char *name, struct termios *termp,
+                   struct winsize *winp)
 {
   int slave = -1;
   int master = open("/dev/ptmx", O_RDWR);
@@ -63,7 +63,7 @@ static int openpty(int *amaster, int *aslave, char *name,
   // grantpt will invoke a setuid program to change permissions
   // and might fail if SIGCHLD handler is set, temporarily reset
   // while running
-  void(*sig_saved)(int) = signal(SIGCHLD, SIG_DFL);
+  void (*sig_saved)(int) = signal(SIGCHLD, SIG_DFL);
   int res = grantpt(master);
   signal(SIGCHLD, sig_saved);
 
@@ -86,7 +86,7 @@ static int openpty(int *amaster, int *aslave, char *name,
   ioctl(slave, I_PUSH, "ptem");
   // ldterm provides most of the termio terminal interface
   ioctl(slave, I_PUSH, "ldterm");
-  // ttcompat compatability with older terminal ioctls
+  // ttcompat compatibility with older terminal ioctls
   ioctl(slave, I_PUSH, "ttcompat");
 
   if (termp) {
@@ -129,8 +129,7 @@ static int login_tty(int fd)
   return 0;
 }
 
-static pid_t forkpty(int *amaster, char *name,
-                     struct termios *termp, struct winsize *winp)
+static pid_t forkpty(int *amaster, char *name, struct termios *termp, struct winsize *winp)
 {
   int master, slave;
   if (openpty(&master, &slave, name, termp, winp) == -1) {
@@ -164,9 +163,14 @@ static struct termios termios_default;
 /// @param tty_fd   TTY file descriptor, or -1 if not in a terminal.
 void pty_process_save_termios(int tty_fd)
 {
-  DLOG("tty_fd=%d", tty_fd);
-  if (tty_fd == -1 || tcgetattr(tty_fd, &termios_default) != 0) {
+  if (tty_fd == -1) {
     return;
+  }
+  int rv = tcgetattr(tty_fd, &termios_default);
+  if (rv != 0) {
+    ELOG("tcgetattr failed (tty_fd=%d): %s", tty_fd, strerror(errno));
+  } else {
+    DLOG("tty_fd=%d", tty_fd);
   }
 }
 

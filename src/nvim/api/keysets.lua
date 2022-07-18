@@ -21,6 +21,14 @@ return {
     "virt_lines";
     "virt_lines_above";
     "virt_lines_leftcol";
+    "strict";
+    "sign_text";
+    "sign_hl_group";
+    "number_hl_group";
+    "line_hl_group";
+    "cursorline_hl_group";
+    "conceal";
+    "ui_watched";
   };
   keymap = {
     "noremap";
@@ -43,7 +51,9 @@ return {
     "count";
     "desc";
     "force";
+    "keepscript";
     "nargs";
+    "preview";
     "range";
     "register";
   };
@@ -67,16 +77,136 @@ return {
   };
   runtime = {
     "is_lua";
+    "do_source";
   };
   eval_statusline = {
     "winid";
     "maxwidth";
     "fillchar";
     "highlights";
+    "use_winbar";
     "use_tabline";
   };
   option = {
     "scope";
+    "win";
+    "buf";
+  };
+  highlight = {
+    "bold";
+    "standout";
+    "strikethrough";
+    "underline";
+    "undercurl";
+    "underdouble";
+    "underdotted";
+    "underdashed";
+    "italic";
+    "reverse";
+    "nocombine";
+    "default";
+    "global";
+    "cterm";
+    "foreground"; "fg";
+    "background"; "bg";
+    "ctermfg";
+    "ctermbg";
+    "special"; "sp";
+    "link";
+    "fallback";
+    "blend";
+    "temp";
+  };
+  highlight_cterm = {
+    "bold";
+    "standout";
+    "strikethrough";
+    "underline";
+    "undercurl";
+    "underdouble";
+    "underdotted";
+    "underdashed";
+    "italic";
+    "reverse";
+    "nocombine";
+  };
+  -- Autocmds
+  clear_autocmds = {
+    "buffer";
+    "event";
+    "group";
+    "pattern";
+  };
+  create_autocmd = {
+    "buffer";
+    "callback";
+    "command";
+    "desc";
+    "group";
+    "nested";
+    "once";
+    "pattern";
+  };
+  exec_autocmds = {
+    "buffer";
+    "group";
+    "modeline";
+    "pattern";
+    "data";
+  };
+  get_autocmds = {
+    "event";
+    "group";
+    "pattern";
+    "buffer";
+  };
+  create_augroup = {
+    "clear";
+  };
+  cmd = {
+    "cmd";
+    "range";
+    "count";
+    "reg";
+    "bang";
+    "args";
+    "magic";
+    "mods";
+    "nargs";
+    "addr";
+    "nextcmd";
+  };
+  cmd_magic = {
+    "file";
+    "bar";
+  };
+  cmd_mods = {
+    "silent";
+    "emsg_silent";
+    "unsilent";
+    "filter";
+    "sandbox";
+    "noautocmd";
+    "browse";
+    "confirm";
+    "hide";
+    "keepalt";
+    "keepjumps";
+    "keepmarks";
+    "keeppatterns";
+    "lockmarks";
+    "noswapfile";
+    "tab";
+    "verbose";
+    "vertical";
+    "split";
+  };
+  cmd_mods_filter = {
+    "pattern";
+    "force";
+  };
+  cmd_opts = {
+    "output";
   };
 }
 

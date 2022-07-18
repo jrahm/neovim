@@ -37,6 +37,24 @@ extern MemRealloc mem_realloc;
 extern bool entered_free_all_mem;
 #endif
 
+typedef struct consumed_blk {
+  struct consumed_blk *prev;
+} *ArenaMem;
+
+#define ARENA_ALIGN sizeof(void *)
+
+typedef struct {
+  char *cur_blk;
+  size_t pos, size;
+} Arena;
+
+// inits an empty arena. use arena_start() to actually allocate space!
+#define ARENA_EMPTY { .cur_blk = NULL, .pos = 0, .size = 0 }
+
+#define kv_fixsize_arena(a, v, s) \
+  ((v).capacity = (s), \
+   (v).items = (void *)arena_alloc(a, sizeof((v).items[0]) * (v).capacity, true))
+
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "memory.h.generated.h"
 #endif

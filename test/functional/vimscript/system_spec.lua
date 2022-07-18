@@ -1,11 +1,13 @@
 local helpers = require('test.functional.helpers')(after_each)
 
 local assert_alive = helpers.assert_alive
-local nvim_dir = helpers.nvim_dir
+local testprg = helpers.testprg
 local eq, call, clear, eval, feed_command, feed, nvim =
   helpers.eq, helpers.call, helpers.clear, helpers.eval, helpers.feed_command,
   helpers.feed, helpers.nvim
 local command = helpers.command
+local insert = helpers.insert
+local expect = helpers.expect
 local exc_exec = helpers.exc_exec
 local iswin = helpers.iswin
 local os_kill = helpers.os_kill
@@ -30,10 +32,6 @@ describe('system()', function()
   before_each(clear)
 
   describe('command passed as a List', function()
-    local function printargs_path()
-      return nvim_dir..'/printargs-test' .. (iswin() and '.exe' or '')
-    end
-
     it('throws error if cmd[0] is not executable', function()
       eq("Vim:E475: Invalid value for argument cmd: 'this-should-not-exist' is not executable",
         pcall_err(call, 'system', { 'this-should-not-exist' }))
@@ -66,23 +64,23 @@ describe('system()', function()
 
     it('quotes arguments correctly #5280', function()
       local out = call('system',
-        { printargs_path(), [[1]], [[2 "3]], [[4 ' 5]], [[6 ' 7']] })
+        { testprg('printargs-test'), [[1]], [[2 "3]], [[4 ' 5]], [[6 ' 7']] })
 
       eq(0, eval('v:shell_error'))
       eq([[arg1=1;arg2=2 "3;arg3=4 ' 5;arg4=6 ' 7';]], out)
 
-      out = call('system', { printargs_path(), [['1]], [[2 "3]] })
+      out = call('system', { testprg('printargs-test'), [['1]], [[2 "3]] })
       eq(0, eval('v:shell_error'))
       eq([[arg1='1;arg2=2 "3;]], out)
 
-      out = call('system', { printargs_path(), "A\nB" })
+      out = call('system', { testprg('printargs-test'), "A\nB" })
       eq(0, eval('v:shell_error'))
       eq("arg1=A\nB;", out)
     end)
 
     it('calls executable in $PATH', function()
-      if 0 == eval("executable('python')") then pending("missing `python`") end
-      eq("foo\n", eval([[system(['python', '-c', 'print("foo")'])]]))
+      if 0 == eval("executable('python3')") then pending("missing `python3`") end
+      eq("foo\n", eval([[system(['python3', '-c', 'print("foo")'])]]))
       eq(0, eval('v:shell_error'))
     end)
 
@@ -167,7 +165,7 @@ describe('system()', function()
         end
       end)
 
-      it('works with powershell', function()
+      it('with powershell', function()
         helpers.set_shell_powershell()
         eq('a\nb\n', eval([[system('Write-Output a b')]]))
         eq('C:\\\n', eval([[system('cd c:\; (Get-Location).Path')]]))
@@ -175,12 +173,11 @@ describe('system()', function()
       end)
     end
 
-    it('works with powershell w/ UTF-8 text (#13713)', function()
+    it('powershell w/ UTF-8 text #13713', function()
       if not helpers.has_powershell() then
-        pending("not tested; powershell was not found", function() end)
+        pending("powershell not found", function() end)
         return
       end
-      -- Should work with recommended config used in helper
       helpers.set_shell_powershell()
       eq('ああ\n', eval([[system('Write-Output "ああ"')]]))
       -- Sanity test w/ default encoding
@@ -268,7 +265,7 @@ describe('system()', function()
         :call system("for /L %I in (1,0,2) do @echo y")      |]]
         or  [[
         :call system("yes")                                  |]]))
-      feed('<c-c>')
+      feed('foo<c-c>')
       screen:expect([[
         ^                                                     |
         ~                                                    |
@@ -284,6 +281,49 @@ describe('system()', function()
         ~                                                    |
         ~                                                    |
         Type  :qa  and press <Enter> to exit Nvim            |
+      ]])
+    end)
+
+    it('`yes` interrupted with mapped CTRL-C', function()
+      command('nnoremap <C-C> i')
+      feed(':call system("' .. (iswin()
+        and 'for /L %I in (1,0,2) do @echo y'
+        or  'yes') .. '")<cr>')
+      screen:expect([[
+                                                             |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+]] .. (iswin()
+        and [[
+        :call system("for /L %I in (1,0,2) do @echo y")      |]]
+        or  [[
+        :call system("yes")                                  |]]))
+      feed('foo<c-c>')
+      screen:expect([[
+        ^                                                     |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        ~                                                    |
+        -- INSERT --                                         |
       ]])
     end)
   end)
@@ -387,7 +427,7 @@ describe('system()', function()
   end)
 
   it("with a program that doesn't close stdout will exit properly after passing input", function()
-    local out = eval(string.format("system('%s', 'clip-data')", nvim_dir..'/streams-test'))
+    local out = eval(string.format("system('%s', 'clip-data')", testprg('streams-test')))
     assert(out:sub(0, 5) == 'pid: ', out)
     os_kill(out:match("%d+"))
   end)
@@ -527,7 +567,7 @@ describe('systemlist()', function()
     end)
 
     -- Unlike `system()` which uses SOH to represent NULs, with `systemlist()`
-    -- input and ouput are the same.
+    -- input and output are the same.
     describe('with linefeed characters inside list items', function()
       it('converts linefeed characters to NULs', function()
         eq({'l1\np2', 'line2\na\nb', 'l3'},
@@ -566,17 +606,16 @@ describe('systemlist()', function()
   end)
 
   it("with a program that doesn't close stdout will exit properly after passing input", function()
-    local out = eval(string.format("systemlist('%s', 'clip-data')", nvim_dir..'/streams-test'))
+    local out = eval(string.format("systemlist('%s', 'clip-data')", testprg('streams-test')))
     assert(out[1]:sub(0, 5) == 'pid: ', out)
     os_kill(out[1]:match("%d+"))
   end)
 
-  it('works with powershell w/ UTF-8 text (#13713)', function()
+  it('powershell w/ UTF-8 text #13713', function()
     if not helpers.has_powershell() then
-      pending("not tested; powershell was not found", function() end)
+      pending("powershell not found", function() end)
       return
     end
-    -- Should work with recommended config used in helper
     helpers.set_shell_powershell()
     eq({iswin() and 'あ\r' or 'あ'}, eval([[systemlist('Write-Output あ')]]))
     -- Sanity test w/ default encoding
@@ -586,4 +625,32 @@ describe('systemlist()', function()
     eq({iswin() and '?\r' or 'あ'}, eval([[systemlist('Write-Output あ')]]))
   end)
 
+end)
+
+describe('shell :!', function()
+  before_each(clear)
+
+  it(':{range}! with powershell filter/redirect #16271', function()
+    local screen = Screen.new(500, 8)
+    screen:attach()
+    local found = helpers.set_shell_powershell(true)
+    insert([[
+      3
+      1
+      4
+      2]])
+    feed(':4verbose %!sort<cr>')
+    screen:expect{
+      any=[[Executing command: .?Start%-Process sort %-RedirectStandardInput .* %-RedirectStandardOutput .* %-NoNewWindow %-Wait]]
+    }
+    feed('<CR>')
+    if found then
+      -- Not using fake powershell, so we can test the result.
+      expect([[
+        1
+        2
+        3
+        4]])
+    end
+  end)
 end)

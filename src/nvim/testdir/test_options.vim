@@ -22,16 +22,36 @@ func Test_whichwrap()
   call assert_equal('h', &whichwrap)
 
   set whichwrap&
-endfunction
+endfunc
 
-function! Test_isfname()
+func Test_isfname()
   " This used to cause Vim to access uninitialized memory.
   set isfname=
   call assert_equal("~X", expand("~X"))
   set isfname&
-endfunction
+endfunc
 
-function Test_wildchar()
+" Test for getting the value of 'pastetoggle'
+func Test_pastetoggle()
+  " character with K_SPECIAL byte
+  let &pastetoggle = '…'
+  call assert_equal('…', &pastetoggle)
+  call assert_equal("\n  pastetoggle=…", execute('set pastetoggle?'))
+
+  " modified character with K_SPECIAL byte
+  let &pastetoggle = '<M-…>'
+  call assert_equal('<M-…>', &pastetoggle)
+  call assert_equal("\n  pastetoggle=<M-…>", execute('set pastetoggle?'))
+
+  " illegal bytes
+  let str = ":\x7f:\x80:\x90:\xd0:"
+  let &pastetoggle = str
+  call assert_equal(str, &pastetoggle)
+  call assert_equal("\n  pastetoggle=" .. strtrans(str), execute('set pastetoggle?'))
+  unlet str
+endfunc
+
+func Test_wildchar()
   " Empty 'wildchar' used to access invalid memory.
   call assert_fails('set wildchar=', 'E521:')
   call assert_fails('set wildchar=abc', 'E521:')
@@ -42,7 +62,7 @@ function Test_wildchar()
   let a=execute('set wildchar?')
   call assert_equal("\n  wildchar=<Esc>", a)
   set wildchar&
-endfunction
+endfunc
 
 func Test_wildoptions()
   set wildoptions=
@@ -51,7 +71,7 @@ func Test_wildoptions()
   call assert_equal('tagfile', &wildoptions)
 endfunc
 
-function! Test_options()
+func Test_options_command()
   let caught = 'ok'
   try
     options
@@ -78,6 +98,19 @@ function! Test_options()
   " close option-window
   close
 
+  " Open the option-window at the top.
+  set splitbelow
+  topleft options
+  call assert_equal(1, winnr())
+  close
+
+  " Open the option-window at the bottom.
+  set nosplitbelow
+  botright options
+  call assert_equal(winnr('$'), winnr())
+  close
+  set splitbelow&
+
   " Open the option-window in a new tab.
   tab options
   " Check if the option-window is opened in a tab.
@@ -85,12 +118,18 @@ function! Test_options()
   call assert_notequal('option-window', bufname(''))
   normal gt
   call assert_equal('option-window', bufname(''))
-
   " close option-window
   close
-endfunction
 
-function! Test_path_keep_commas()
+  " Open the options window browse
+  if has('browse')
+    browse set
+    call assert_equal('option-window', bufname(''))
+    close
+  endif
+endfunc
+
+func Test_path_keep_commas()
   " Test that changing 'path' keeps two commas.
   set path=foo,,bar
   set path-=bar
@@ -98,7 +137,7 @@ function! Test_path_keep_commas()
   call assert_equal('foo,,bar', &path)
 
   set path&
-endfunction
+endfunc
 
 func Test_filetype_valid()
   set ft=valid_name
@@ -199,6 +238,12 @@ func Test_set_completion()
   call feedkeys(":set di\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal('"set dictionary diff diffexpr diffopt digraph directory display', @:)
 
+  call feedkeys(":setlocal di\<C-A>\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"setlocal dictionary diff diffexpr diffopt digraph directory display', @:)
+
+  call feedkeys(":setglobal di\<C-A>\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"setglobal dictionary diff diffexpr diffopt digraph directory display', @:)
+
   " Expand boolan options. When doing :set no<Tab>
   " vim displays the options names without "no" but completion uses "no...".
   call feedkeys(":set nodi\<C-A>\<C-B>\"\<CR>", 'tx')
@@ -229,6 +274,7 @@ func Test_set_completion()
 
   call feedkeys(":set tags=./\\\\ dif\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal('"set tags=./\\ diff diffexpr diffopt', @:)
+
   set tags&
 
   " Expand values for 'filetype'
@@ -244,9 +290,10 @@ func Test_set_errors()
   call assert_fails('set regexpengine=3', 'E474:')
   call assert_fails('set history=10001', 'E474:')
   call assert_fails('set numberwidth=21', 'E474:')
-  call assert_fails('set colorcolumn=-a')
-  call assert_fails('set colorcolumn=a')
-  call assert_fails('set colorcolumn=1,')
+  call assert_fails('set colorcolumn=-a', 'E474:')
+  call assert_fails('set colorcolumn=a', 'E474:')
+  call assert_fails('set colorcolumn=1,', 'E474:')
+  call assert_fails('set colorcolumn=1;', 'E474:')
   call assert_fails('set cmdheight=-1', 'E487:')
   call assert_fails('set cmdwinheight=-1', 'E487:')
   if has('conceal')
@@ -259,6 +306,8 @@ func Test_set_errors()
   call assert_fails('set shiftwidth=-1', 'E487:')
   call assert_fails('set sidescroll=-1', 'E487:')
   call assert_fails('set tabstop=-1', 'E487:')
+  call assert_fails('set tabstop=10000', 'E474:')
+  call assert_fails('set tabstop=5500000000', 'E474:')
   call assert_fails('set textwidth=-1', 'E487:')
   call assert_fails('set timeoutlen=-1', 'E487:')
   call assert_fails('set updatecount=-1', 'E487:')
@@ -279,16 +328,28 @@ func Test_set_errors()
   call assert_fails('set rulerformat=%15(%%', 'E542:')
   call assert_fails('set statusline=%$', 'E539:')
   call assert_fails('set statusline=%{', 'E540:')
+  call assert_fails('set statusline=%{%', 'E540:')
+  call assert_fails('set statusline=%{%}', 'E539:')
   call assert_fails('set statusline=%(', 'E542:')
   call assert_fails('set statusline=%)', 'E542:')
+  call assert_fails('set tabline=%$', 'E539:')
+  call assert_fails('set tabline=%{', 'E540:')
+  call assert_fails('set tabline=%{%', 'E540:')
+  call assert_fails('set tabline=%{%}', 'E539:')
+  call assert_fails('set tabline=%(', 'E542:')
+  call assert_fails('set tabline=%)', 'E542:')
 
   if has('cursorshape')
     " This invalid value for 'guicursor' used to cause Vim to crash.
     call assert_fails('set guicursor=i-ci,r-cr:h', 'E545:')
     call assert_fails('set guicursor=i-ci', 'E545:')
     call assert_fails('set guicursor=x', 'E545:')
+    call assert_fails('set guicursor=x:', 'E546:')
     call assert_fails('set guicursor=r-cr:horx', 'E548:')
     call assert_fails('set guicursor=r-cr:hor0', 'E549:')
+  endif
+  if has('mouseshape')
+    call assert_fails('se mouseshape=i-r:x', 'E547:')
   endif
   call assert_fails('set backupext=~ patchmode=~', 'E589:')
   call assert_fails('set winminheight=10 winheight=9', 'E591:')
@@ -312,19 +373,48 @@ func Test_set_errors()
   set modifiable&
 endfunc
 
+func CheckWasSet(name)
+  let verb_cm = execute('verbose set ' .. a:name .. '?')
+  call assert_match('Last set from.*test_options.vim', verb_cm)
+endfunc
+func CheckWasNotSet(name)
+  let verb_cm = execute('verbose set ' .. a:name .. '?')
+  call assert_notmatch('Last set from', verb_cm)
+endfunc
+
 " Must be executed before other tests that set 'term'.
 func Test_000_term_option_verbose()
   if has('nvim') || has('gui_running')
     return
   endif
-  let verb_cm = execute('verbose set t_cm')
-  call assert_notmatch('Last set from', verb_cm)
+
+  call CheckWasNotSet('t_cm')
 
   let term_save = &term
   set term=ansi
-  let verb_cm = execute('verbose set t_cm')
-  call assert_match('Last set from.*test_options.vim', verb_cm)
+  call CheckWasSet('t_cm')
   let &term = term_save
+endfunc
+
+func Test_copy_context()
+  setlocal list
+  call CheckWasSet('list')
+  split
+  call CheckWasSet('list')
+  quit
+  setlocal nolist
+
+  set ai
+  call CheckWasSet('ai')
+  set filetype=perl
+  call CheckWasSet('filetype')
+  set fo=tcroq
+  call CheckWasSet('fo')
+
+  split Xsomebuf
+  call CheckWasSet('ai')
+  call CheckWasNotSet('filetype')
+  call CheckWasSet('fo')
 endfunc
 
 func Test_set_ttytype()
@@ -368,10 +458,19 @@ func Test_set_all()
   set tw& iskeyword& splitbelow&
 endfunc
 
+func Test_set_one_column()
+  let out_mult = execute('set all')->split("\n")
+  let out_one = execute('set! all')->split("\n")
+  " one column should be two to four times as many lines
+  call assert_inrange(len(out_mult) * 2, len(out_mult) * 4, len(out_one))
+endfunc
+
 func Test_set_values()
-  " The file is only generated when running "make test" in the src directory.
+  " opt_test.vim is generated from ../optiondefs.h using gen_opt_test.vim
   if filereadable('opt_test.vim')
     source opt_test.vim
+  else
+    throw 'Skipped: opt_test.vim does not exist'
   endif
 endfunc
 
@@ -538,7 +637,7 @@ func Test_copy_winopt()
   call assert_equal(4,&numberwidth)
   bw!
 
-  set nohidden
+  set hidden&
 endfunc
 
 func Test_shortmess_F()
@@ -644,7 +743,62 @@ func Test_buftype()
   call setline(1, ['L1'])
   set buftype=nowrite
   call assert_fails('write', 'E382:')
-  close!
+
+  " for val in ['', 'nofile', 'nowrite', 'acwrite', 'quickfix', 'help', 'terminal', 'prompt', 'popup']
+  for val in ['', 'nofile', 'nowrite', 'acwrite', 'quickfix', 'help', 'prompt']
+    exe 'set buftype=' .. val
+    call writefile(['something'], 'XBuftype')
+    call assert_fails('write XBuftype', 'E13:', 'with buftype=' .. val)
+  endfor
+
+  call delete('XBuftype')
+  bwipe!
+endfunc
+
+" Test for the 'shell' option
+func Test_shell()
+  throw 'Skipped: Nvim does not have :shell'
+  CheckUnix
+  let save_shell = &shell
+  set shell=
+  call assert_fails('shell', 'E91:')
+  let &shell = save_shell
+endfunc
+
+" Test for the 'shellquote' option
+func Test_shellquote()
+  CheckUnix
+  set shellquote=#
+  set verbose=20
+  redir => v
+  silent! !echo Hello
+  redir END
+  set verbose&
+  set shellquote&
+  call assert_match(': "#echo Hello#"', v)
+endfunc
+
+" Test for the 'rightleftcmd' option
+func Test_rightleftcmd()
+  CheckFeature rightleft
+  set rightleft
+  set rightleftcmd
+
+  let g:l = []
+  func AddPos()
+    call add(g:l, screencol())
+    return ''
+  endfunc
+  cmap <expr> <F2> AddPos()
+
+  call feedkeys("/\<F2>abc\<Left>\<F2>\<Right>\<Right>\<F2>" ..
+        \ "\<Left>\<F2>\<Esc>", 'xt')
+  call assert_equal([&co - 1, &co - 4, &co - 2, &co - 3], g:l)
+
+  cunmap <F2>
+  unlet g:l
+  set rightleftcmd&
+  set rightleft&
 endfunc
 
 " Test for setting option values using v:false and v:true
@@ -659,6 +813,47 @@ func Test_opt_boolean()
   let &nu = v:false
   call assert_equal(0, &nu)
   set number&
+endfunc
+
+" Test for the 'window' option
+func Test_window_opt()
+  " Needs only one open widow
+  %bw!
+  call setline(1, range(1, 8))
+  set window=5
+  exe "normal \<C-F>"
+  call assert_equal(4, line('w0'))
+  exe "normal \<C-F>"
+  call assert_equal(7, line('w0'))
+  exe "normal \<C-F>"
+  call assert_equal(8, line('w0'))
+  exe "normal \<C-B>"
+  call assert_equal(5, line('w0'))
+  exe "normal \<C-B>"
+  call assert_equal(2, line('w0'))
+  exe "normal \<C-B>"
+  call assert_equal(1, line('w0'))
+  set window=1
+  exe "normal gg\<C-F>"
+  call assert_equal(2, line('w0'))
+  exe "normal \<C-F>"
+  call assert_equal(3, line('w0'))
+  exe "normal \<C-B>"
+  call assert_equal(2, line('w0'))
+  exe "normal \<C-B>"
+  call assert_equal(1, line('w0'))
+  enew!
+  set window&
+endfunc
+
+" Test for the 'winminheight' option
+func Test_opt_winminheight()
+  only!
+  let &winheight = &lines + 4
+  call assert_fails('let &winminheight = &lines + 2', 'E36:')
+  call assert_true(&winminheight <= &lines)
+  set winminheight&
+  set winheight&
 endfunc
 
 func Test_opt_winminheight_term()
@@ -702,6 +897,16 @@ func Test_opt_winminheight_term_tabs()
 
   call StopVimInTerminal(buf)
   call delete('Xwinminheight')
+endfunc
+
+" Test for the 'winminwidth' option
+func Test_opt_winminwidth()
+  only!
+  let &winwidth = &columns + 4
+  call assert_fails('let &winminwidth = &columns + 2', 'E36:')
+  call assert_true(&winminwidth <= &columns)
+  set winminwidth&
+  set winwidth&
 endfunc
 
 " Test for setting option value containing spaces with isfname+=32
@@ -751,6 +956,19 @@ func Test_opt_cdhome()
   call assert_equal(path, getcwd())
 
   set cdhome&
+endfunc
+
+func Test_switchbuf_reset()
+  set switchbuf=useopen
+  sblast
+  call assert_equal(1, winnr('$'))
+  set all&
+  " Nvim has a different default for 'switchbuf'
+  " call assert_equal('', &switchbuf)
+  call assert_equal('uselast', &switchbuf)
+  sblast
+  call assert_equal(2, winnr('$'))
+  only!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

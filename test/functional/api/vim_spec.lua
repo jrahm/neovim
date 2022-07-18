@@ -1,11 +1,13 @@
 local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
+local lfs = require('lfs')
 
 local fmt = string.format
 local assert_alive = helpers.assert_alive
 local NIL = helpers.NIL
 local clear, nvim, eq, neq = helpers.clear, helpers.nvim, helpers.eq, helpers.neq
 local command = helpers.command
+local exec = helpers.exec
 local eval = helpers.eval
 local expect = helpers.expect
 local funcs = helpers.funcs
@@ -23,6 +25,9 @@ local next_msg = helpers.next_msg
 local tmpname = helpers.tmpname
 local write_file = helpers.write_file
 local exec_lua = helpers.exec_lua
+local exc_exec = helpers.exc_exec
+local insert = helpers.insert
+local expect_exit = helpers.expect_exit
 
 local pcall_err = helpers.pcall_err
 local format_string = helpers.format_string
@@ -120,9 +125,9 @@ describe('API', function()
 
       -- Functions
       nvim('exec', 'function Foo()\ncall setline(1,["xxx"])\nendfunction', false)
-      eq(nvim('get_current_line'), '')
+      eq('', nvim('get_current_line'))
       nvim('exec', 'call Foo()', false)
-      eq(nvim('get_current_line'), 'xxx')
+      eq('xxx', nvim('get_current_line'))
 
       -- Autocmds
       nvim('exec','autocmd BufAdd * :let x1 = "Hello"', false)
@@ -333,6 +338,7 @@ describe('API', function()
 
   describe('nvim_command_output', function()
     it('does not induce hit-enter prompt', function()
+      nvim("ui_attach", 80, 20, {})
       -- Induce a hit-enter prompt use nvim_input (non-blocking).
       nvim('command', 'set cmdheight=1')
       nvim('input', [[:echo "hi\nhi2"<CR>]])
@@ -535,6 +541,31 @@ describe('API', function()
     end)
   end)
 
+  describe('nvim_set_current_dir', function()
+    local start_dir
+
+    before_each(function()
+      clear()
+      funcs.mkdir("Xtestdir")
+      start_dir = funcs.getcwd()
+    end)
+
+    after_each(function()
+      helpers.rmdir("Xtestdir")
+    end)
+
+    it('works', function()
+      meths.set_current_dir("Xtestdir")
+      eq(funcs.getcwd(), start_dir .. helpers.get_pathsep() .. "Xtestdir")
+    end)
+
+    it('sets previous directory', function()
+      meths.set_current_dir("Xtestdir")
+      meths.exec('cd -', false)
+      eq(funcs.getcwd(), start_dir)
+    end)
+  end)
+
   describe('nvim_exec_lua', function()
     it('works', function()
       meths.exec_lua('vim.api.nvim_set_var("test", 3)', {})
@@ -609,34 +640,374 @@ describe('API', function()
       eq('Invalid phase: 4',
         pcall_err(request, 'nvim_paste', 'foo', true, 4))
     end)
-    it('stream: multiple chunks form one undo-block', function()
-      nvim('paste', '1/chunk 1 (start)\n', true, 1)
-      nvim('paste', '1/chunk 2 (end)\n', true, 3)
-      local expected1 = [[
-        1/chunk 1 (start)
-        1/chunk 2 (end)
-        ]]
-      expect(expected1)
-      nvim('paste', '2/chunk 1 (start)\n', true, 1)
-      nvim('paste', '2/chunk 2\n', true, 2)
-      expect([[
-        1/chunk 1 (start)
-        1/chunk 2 (end)
-        2/chunk 1 (start)
-        2/chunk 2
-        ]])
-      nvim('paste', '2/chunk 3\n', true, 2)
-      nvim('paste', '2/chunk 4 (end)\n', true, 3)
-      expect([[
-        1/chunk 1 (start)
-        1/chunk 2 (end)
-        2/chunk 1 (start)
-        2/chunk 2
-        2/chunk 3
-        2/chunk 4 (end)
-        ]])
-      feed('u')  -- Undo.
-      expect(expected1)
+    local function run_streamed_paste_tests()
+      it('stream: multiple chunks form one undo-block', function()
+        nvim('paste', '1/chunk 1 (start)\n', true, 1)
+        nvim('paste', '1/chunk 2 (end)\n', true, 3)
+        local expected1 = [[
+          1/chunk 1 (start)
+          1/chunk 2 (end)
+          ]]
+        expect(expected1)
+        nvim('paste', '2/chunk 1 (start)\n', true, 1)
+        nvim('paste', '2/chunk 2\n', true, 2)
+        expect([[
+          1/chunk 1 (start)
+          1/chunk 2 (end)
+          2/chunk 1 (start)
+          2/chunk 2
+          ]])
+        nvim('paste', '2/chunk 3\n', true, 2)
+        nvim('paste', '2/chunk 4 (end)\n', true, 3)
+        expect([[
+          1/chunk 1 (start)
+          1/chunk 2 (end)
+          2/chunk 1 (start)
+          2/chunk 2
+          2/chunk 3
+          2/chunk 4 (end)
+          ]])
+        feed('u')  -- Undo.
+        expect(expected1)
+      end)
+      it('stream: Insert mode', function()
+        -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+        feed('afoo<Esc>u')
+        feed('i')
+        nvim('paste', 'aaaaaa', false, 1)
+        nvim('paste', 'bbbbbb', false, 2)
+        nvim('paste', 'cccccc', false, 2)
+        nvim('paste', 'dddddd', false, 3)
+        expect('aaaaaabbbbbbccccccdddddd')
+        feed('<Esc>u')
+        expect('')
+      end)
+      describe('stream: Normal mode', function()
+        describe('on empty line', function()
+          before_each(function()
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+          end)
+          after_each(function()
+            feed('u')
+            expect('')
+          end)
+          it('pasting one line', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('aaaaaabbbbbbccccccdddddd')
+          end)
+          it('pasting multiple lines', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+            aaaaaa
+            bbbbbb
+            cccccc
+            dddddd]])
+          end)
+        end)
+        describe('not at the end of a line', function()
+          before_each(function()
+            feed('i||<Esc>')
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+            feed('0')
+          end)
+          after_each(function()
+            feed('u')
+            expect('||')
+          end)
+          it('pasting one line', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('|aaaaaabbbbbbccccccdddddd|')
+          end)
+          it('pasting multiple lines', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+            |aaaaaa
+            bbbbbb
+            cccccc
+            dddddd|]])
+          end)
+        end)
+        describe('at the end of a line', function()
+          before_each(function()
+            feed('i||<Esc>')
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+            feed('2|')
+          end)
+          after_each(function()
+            feed('u')
+            expect('||')
+          end)
+          it('pasting one line', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('||aaaaaabbbbbbccccccdddddd')
+          end)
+          it('pasting multiple lines', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+              ||aaaaaa
+              bbbbbb
+              cccccc
+              dddddd]])
+          end)
+        end)
+      end)
+      describe('stream: Visual mode', function()
+        describe('neither end at the end of a line', function()
+          before_each(function()
+            feed('i|xxx<CR>xxx|<Esc>')
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+            feed('3|vhk')
+          end)
+          after_each(function()
+            feed('u')
+            expect([[
+            |xxx
+            xxx|]])
+          end)
+          it('with non-empty chunks', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('|aaaaaabbbbbbccccccdddddd|')
+          end)
+          it('with empty first chunk', function()
+            nvim('paste', '', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('|bbbbbbccccccdddddd|')
+          end)
+          it('with all chunks empty', function()
+            nvim('paste', '', false, 1)
+            nvim('paste', '', false, 2)
+            nvim('paste', '', false, 2)
+            nvim('paste', '', false, 3)
+            expect('||')
+          end)
+        end)
+        describe('cursor at the end of a line', function()
+          before_each(function()
+            feed('i||xxx<CR>xxx<Esc>')
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+            feed('3|vko')
+          end)
+          after_each(function()
+            feed('u')
+            expect([[
+              ||xxx
+              xxx]])
+          end)
+          it('with non-empty chunks', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('||aaaaaabbbbbbccccccdddddd')
+          end)
+          it('with empty first chunk', function()
+            nvim('paste', '', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('||bbbbbbccccccdddddd')
+          end)
+        end)
+        describe('other end at the end of a line', function()
+          before_each(function()
+            feed('i||xxx<CR>xxx<Esc>')
+            -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+            feed('afoo<Esc>u')
+            feed('3|vk')
+          end)
+          after_each(function()
+            feed('u')
+            expect([[
+              ||xxx
+              xxx]])
+          end)
+          it('with non-empty chunks', function()
+            nvim('paste', 'aaaaaa', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('||aaaaaabbbbbbccccccdddddd')
+          end)
+          it('with empty first chunk', function()
+            nvim('paste', '', false, 1)
+            nvim('paste', 'bbbbbb', false, 2)
+            nvim('paste', 'cccccc', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect('||bbbbbbccccccdddddd')
+          end)
+        end)
+      end)
+      describe('stream: linewise Visual mode', function()
+        before_each(function()
+          feed('i123456789<CR>987654321<CR>123456789<Esc>')
+          -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
+          feed('afoo<Esc>u')
+        end)
+        after_each(function()
+          feed('u')
+          expect([[
+            123456789
+            987654321
+            123456789]])
+        end)
+        describe('selecting the start of a file', function()
+          before_each(function()
+            feed('ggV')
+          end)
+          it('pasting text without final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd987654321
+              123456789]])
+          end)
+          it('pasting text with final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd\n', false, 3)
+            expect([[
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd
+              987654321
+              123456789]])
+          end)
+        end)
+        describe('selecting the middle of a file', function()
+          before_each(function()
+            feed('2ggV')
+          end)
+          it('pasting text without final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+              123456789
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd123456789]])
+          end)
+          it('pasting text with final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd\n', false, 3)
+            expect([[
+              123456789
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd
+              123456789]])
+          end)
+        end)
+        describe('selecting the end of a file', function()
+          before_each(function()
+            feed('3ggV')
+          end)
+          it('pasting text without final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+              123456789
+              987654321
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd]])
+          end)
+          it('pasting text with final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd\n', false, 3)
+            expect([[
+              123456789
+              987654321
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd
+              ]])
+          end)
+        end)
+        describe('selecting the whole file', function()
+          before_each(function()
+            feed('ggVG')
+          end)
+          it('pasting text without final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd', false, 3)
+            expect([[
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd]])
+          end)
+          it('pasting text with final new line', function()
+            nvim('paste', 'aaaaaa\n', false, 1)
+            nvim('paste', 'bbbbbb\n', false, 2)
+            nvim('paste', 'cccccc\n', false, 2)
+            nvim('paste', 'dddddd\n', false, 3)
+            expect([[
+              aaaaaa
+              bbbbbb
+              cccccc
+              dddddd
+              ]])
+          end)
+        end)
+      end)
+    end
+    describe('without virtualedit,', function()
+      run_streamed_paste_tests()
+    end)
+    describe('with virtualedit=onemore,', function()
+      before_each(function()
+        command('set virtualedit=onemore')
+      end)
+      run_streamed_paste_tests()
     end)
     it('non-streaming', function()
       -- With final "\n".
@@ -710,6 +1081,43 @@ describe('API', function()
       456d
       eeffgghh
       iijjkkll]])
+    end)
+    it('when searching in Visual mode', function()
+      feed('v/')
+      nvim('paste', 'aabbccdd', true, -1)
+      eq('aabbccdd', funcs.getcmdline())
+      expect('')
+    end)
+    it('mappings are disabled in Cmdline mode', function()
+      command('cnoremap a b')
+      feed(':')
+      nvim('paste', 'a', true, -1)
+      eq('a', funcs.getcmdline())
+    end)
+    it('pasting with empty last chunk in Cmdline mode', function()
+      local screen = Screen.new(20, 4)
+      screen:attach()
+      feed(':')
+      nvim('paste', 'Foo', true, 1)
+      nvim('paste', '', true, 3)
+      screen:expect([[
+                            |
+        ~                   |
+        ~                   |
+        :Foo^                |
+      ]])
+    end)
+    it('pasting text with control characters in Cmdline mode', function()
+      local screen = Screen.new(20, 4)
+      screen:attach()
+      feed(':')
+      nvim('paste', 'normal! \023\022\006\027', true, -1)
+      screen:expect([[
+                            |
+        ~                   |
+        ~                   |
+        :normal! ^W^V^F^[^   |
+      ]])
     end)
     it('crlf=false does not break lines at CR, CRLF', function()
       nvim('paste', 'line 1\r\n\r\rline 2\nline 3\rline 4\r', false, -1)
@@ -872,6 +1280,30 @@ describe('API', function()
       command('lockvar lua')
       eq('Key is locked: lua', pcall_err(meths.del_var, 'lua'))
       eq('Key is locked: lua', pcall_err(meths.set_var, 'lua', 1))
+
+      exec([[
+        function Test()
+        endfunction
+        function s:Test()
+        endfunction
+        let g:Unknown_func = function('Test')
+        let g:Unknown_script_func = function('s:Test')
+      ]])
+      eq(NIL, meths.get_var('Unknown_func'))
+      eq(NIL, meths.get_var('Unknown_script_func'))
+
+      -- Check if autoload works properly
+      local pathsep = helpers.get_pathsep()
+      local xconfig = 'Xhome' .. pathsep .. 'Xconfig'
+      local xdata = 'Xhome' .. pathsep .. 'Xdata'
+      local autoload_folder = table.concat({xconfig, 'nvim', 'autoload'}, pathsep)
+      local autoload_file = table.concat({autoload_folder , 'testload.vim'}, pathsep)
+      mkdir_p(autoload_folder)
+      write_file(autoload_file , [[let testload#value = 2]])
+
+      clear{ args_rm={'-u'}, env={ XDG_CONFIG_HOME=xconfig, XDG_DATA_HOME=xdata } }
+      eq(2, meths.get_var('testload#value'))
+      rmdir('Xhome')
     end)
 
     it('nvim_get_vvar, nvim_set_vvar', function()
@@ -1008,6 +1440,46 @@ describe('API', function()
       nvim('set_option_value', 'autoread', NIL, {scope = 'local'})
       eq(NIL, nvim('get_option_value', 'autoread', {scope = 'local'}))
     end)
+
+    it('set window options', function()
+      -- Same as to nvim_win_set_option
+      nvim('set_option_value', 'colorcolumn', '4,3', {win=0})
+      eq('4,3', nvim('get_option_value', 'colorcolumn', {scope = 'local'}))
+      command("set modified hidden")
+      command("enew") -- edit new buffer, window option is preserved
+      eq('4,3', nvim('get_option_value', 'colorcolumn', {scope = 'local'}))
+    end)
+
+    it('set local window options', function()
+      -- Different to nvim_win_set_option
+      nvim('set_option_value', 'colorcolumn', '4,3', {win=0, scope='local'})
+      eq('4,3', nvim('get_option_value', 'colorcolumn', {win = 0, scope = 'local'}))
+      command("set modified hidden")
+      command("enew") -- edit new buffer, window option is reset
+      eq('', nvim('get_option_value', 'colorcolumn', {win = 0, scope = 'local'}))
+    end)
+
+    it('get buffer or window-local options', function()
+      nvim('command', 'new')
+      local buf = nvim('get_current_buf').id
+      nvim('buf_set_option', buf, 'tagfunc', 'foobar')
+      eq('foobar', nvim('get_option_value', 'tagfunc', {buf = buf}))
+
+      local win = nvim('get_current_win').id
+      nvim('win_set_option', win, 'number', true)
+      eq(true, nvim('get_option_value', 'number', {win = win}))
+    end)
+
+    it('getting current buffer option does not adjust cursor #19381', function()
+      nvim('command', 'new')
+      local buf = nvim('get_current_buf').id
+      local win = nvim('get_current_win').id
+      insert('some text')
+      feed('0v$')
+      eq({1, 9}, nvim('win_get_cursor', win))
+      nvim('get_option_value', 'filetype', {buf = buf})
+      eq({1, 9}, nvim('win_get_cursor', win))
+    end)
   end)
 
   describe('nvim_{get,set}_current_buf, nvim_list_bufs', function()
@@ -1093,7 +1565,20 @@ describe('API', function()
       eq({mode='n', blocking=false}, nvim("get_mode"))
     end)
 
+    it("during press-enter prompt without UI returns blocking=false", function()
+      eq({mode='n', blocking=false}, nvim("get_mode"))
+      command("echom 'msg1'")
+      command("echom 'msg2'")
+      command("echom 'msg3'")
+      command("echom 'msg4'")
+      command("echom 'msg5'")
+      eq({mode='n', blocking=false}, nvim("get_mode"))
+      nvim("input", ":messages<CR>")
+      eq({mode='n', blocking=false}, nvim("get_mode"))
+    end)
+
     it("during press-enter prompt returns blocking=true", function()
+      nvim("ui_attach", 80, 20, {})
       eq({mode='n', blocking=false}, nvim("get_mode"))
       command("echom 'msg1'")
       command("echom 'msg2'")
@@ -1117,6 +1602,7 @@ describe('API', function()
 
     -- TODO: bug #6247#issuecomment-286403810
     it("batched with input", function()
+      nvim("ui_attach", 80, 20, {})
       eq({mode='n', blocking=false}, nvim("get_mode"))
       command("echom 'msg1'")
       command("echom 'msg2'")
@@ -1151,6 +1637,18 @@ describe('API', function()
       command('set more')
       feed(':digraphs<cr>')
       eq({mode='rm', blocking=true}, nvim("get_mode"))
+    end)
+
+    it('after <Nop> mapping returns blocking=false #17257', function()
+      command('nnoremap <F2> <Nop>')
+      feed('<F2>')
+      eq({mode='n', blocking=false}, nvim("get_mode"))
+    end)
+
+    it('after empty string <expr> mapping returns blocking=false #17257', function()
+      command('nnoremap <expr> <F2> ""')
+      feed('<F2>')
+      eq({mode='n', blocking=false}, nvim("get_mode"))
     end)
   end)
 
@@ -1367,18 +1865,18 @@ describe('API', function()
   end)
 
   describe('nvim_feedkeys', function()
-    it('CSI escaping', function()
+    it('K_SPECIAL escaping', function()
       local function on_setup()
         -- notice the special char(…) \xe2\80\xa6
         nvim('feedkeys', ':let x1="…"\n', '', true)
 
         -- Both nvim_replace_termcodes and nvim_feedkeys escape \x80
         local inp = helpers.nvim('replace_termcodes', ':let x2="…"<CR>', true, true, true)
-        nvim('feedkeys', inp, '', true)   -- escape_csi=true
+        nvim('feedkeys', inp, '', true)   -- escape_ks=true
 
-        -- nvim_feedkeys with CSI escaping disabled
+        -- nvim_feedkeys with K_SPECIAL escaping disabled
         inp = helpers.nvim('replace_termcodes', ':let x3="…"<CR>', true, true, true)
-        nvim('feedkeys', inp, '', false)  -- escape_csi=false
+        nvim('feedkeys', inp, '', false)  -- escape_ks=false
 
         helpers.stop()
       end
@@ -1386,10 +1884,10 @@ describe('API', function()
       -- spin the loop a bit
       helpers.run(nil, nil, on_setup)
 
-      eq(nvim('get_var', 'x1'), '…')
+      eq('…', nvim('get_var', 'x1'))
       -- Because of the double escaping this is neq
-      neq(nvim('get_var', 'x2'), '…')
-      eq(nvim('get_var', 'x3'), '…')
+      neq('…', nvim('get_var', 'x2'))
+      eq('…', nvim('get_var', 'x3'))
     end)
   end)
 
@@ -2142,7 +2640,7 @@ describe('API', function()
 
     it('does not cause heap-use-after-free on exit while setting options', function()
       command('au OptionSet * q')
-      command('silent! call nvim_create_buf(0, 1)')
+      expect_exit(command, 'silent! call nvim_create_buf(0, 1)')
     end)
   end)
 
@@ -2186,6 +2684,14 @@ describe('API', function()
       ok(endswith(val[1], p"lua/vim/"))
 
       eq({}, meths.get_runtime_file("foobarlang/", true))
+    end)
+    it('can handle bad patterns', function()
+      if helpers.pending_win32(pending) then return end
+
+      eq("Vim:E220: Missing }.", pcall_err(meths.get_runtime_file, "{", false))
+
+      eq('Vim(echo):E5555: API call: Vim:E220: Missing }.',
+        exc_exec("echo nvim_get_runtime_file('{', v:false)"))
     end)
   end)
 
@@ -2551,6 +3057,38 @@ describe('API', function()
           'Should be truncated%<',
           { maxwidth = 15 }))
     end)
+    it('supports ASCII fillchar', function()
+      eq({ str = 'a~~~b', width = 5 },
+         meths.eval_statusline('a%=b', { fillchar = '~', maxwidth = 5 }))
+    end)
+    it('supports single-width multibyte fillchar', function()
+      eq({ str = 'a━━━b', width = 5 },
+         meths.eval_statusline('a%=b', { fillchar = '━', maxwidth = 5 }))
+    end)
+    it('treats double-width fillchar as single-width', function()
+      eq({ str = 'a哦哦哦b', width = 5 },
+         meths.eval_statusline('a%=b', { fillchar = '哦', maxwidth = 5 }))
+    end)
+    it('treats control character fillchar as single-width', function()
+      eq({ str = 'a\031\031\031b', width = 5 },
+         meths.eval_statusline('a%=b', { fillchar = '\031', maxwidth = 5 }))
+    end)
+    it('rejects multiple-character fillchar', function()
+      eq('fillchar must be a single character',
+         pcall_err(meths.eval_statusline, '', { fillchar = 'aa' }))
+    end)
+    it('rejects empty string fillchar', function()
+      eq('fillchar must be a single character',
+         pcall_err(meths.eval_statusline, '', { fillchar = '' }))
+    end)
+    it('rejects non-string fillchar', function()
+      eq('fillchar must be a single character',
+         pcall_err(meths.eval_statusline, '', { fillchar = 1 }))
+    end)
+    it('rejects invalid string', function()
+      eq('E539: Illegal character <}>',
+         pcall_err(meths.eval_statusline, '%{%}', {}))
+    end)
     describe('highlight parsing', function()
       it('works', function()
         eq({
@@ -2605,6 +3143,678 @@ describe('API', function()
             'TextWithNoHighlight%#WarningMsg#TextWithWarningHighlight',
             { use_tabline = true, highlights = true }))
       end)
+      it('works with winbar', function()
+        eq({
+            str = 'TextWithNoHighlightTextWithWarningHighlight',
+            width = 43,
+            highlights = {
+              { start = 0, group = 'WinBar' },
+              { start = 19, group = 'WarningMsg' }
+            }
+          },
+          meths.eval_statusline(
+            'TextWithNoHighlight%#WarningMsg#TextWithWarningHighlight',
+            { use_winbar = true, highlights = true }))
+      end)
+    end)
+  end)
+  describe('nvim_parse_cmd', function()
+    it('works', function()
+      eq({
+        cmd = 'echo',
+        args = { 'foo' },
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = 'none',
+        magic = {
+            file = false,
+            bar = false
+        },
+        nargs = '*',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('echo foo', {}))
+    end)
+    it('works with ranges', function()
+      eq({
+        cmd = 'substitute',
+        args = { '/math.random/math.max/' },
+        bang = false,
+        range = { 4, 6 },
+        count = -1,
+        reg = '',
+        addr = 'line',
+        magic = {
+            file = false,
+            bar = false
+        },
+        nargs = '*',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('4,6s/math.random/math.max/', {}))
+    end)
+    it('works with count', function()
+      eq({
+        cmd = 'buffer',
+        args = {},
+        bang = false,
+        range = { 1 },
+        count = 1,
+        reg = '',
+        addr = 'buf',
+        magic = {
+            file = false,
+            bar = true
+        },
+        nargs = '*',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('buffer 1', {}))
+    end)
+    it('works with register', function()
+      eq({
+        cmd = 'put',
+        args = {},
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '+',
+        addr = 'line',
+        magic = {
+            file = false,
+            bar = true
+        },
+        nargs = '0',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('put +', {}))
+    end)
+    it('works with range, count and register', function()
+      eq({
+        cmd = 'delete',
+        args = {},
+        bang = false,
+        range = { 3, 7 },
+        count = 7,
+        reg = '*',
+        addr = 'line',
+        magic = {
+            file = false,
+            bar = true
+        },
+        nargs = '0',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('1,3delete * 5', {}))
+    end)
+    it('works with bang', function()
+      eq({
+        cmd = 'write',
+        args = {},
+        bang = true,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = 'line',
+        magic = {
+            file = true,
+            bar = true
+        },
+        nargs = '?',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        },
+      }, meths.parse_cmd('w!', {}))
+    end)
+    it('works with modifiers', function()
+      eq({
+        cmd = 'split',
+        args = { 'foo.txt' },
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = '?',
+        magic = {
+            file = true,
+            bar = true
+        },
+        nargs = '?',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = true,
+          filter = {
+              pattern = "foo",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = true,
+          split = "topleft",
+          tab = 2,
+          unsilent = false,
+          verbose = 15,
+          vertical = false,
+        },
+      }, meths.parse_cmd('15verbose silent! aboveleft topleft tab filter /foo/ split foo.txt', {}))
+      eq({
+        cmd = 'split',
+        args = { 'foo.txt' },
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = '?',
+        magic = {
+            file = true,
+            bar = true
+        },
+        nargs = '?',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = true,
+          emsg_silent = false,
+          filter = {
+              pattern = "foo",
+              force = true
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "botright",
+          tab = 0,
+          unsilent = true,
+          verbose = 0,
+          vertical = false,
+        },
+      }, meths.parse_cmd('0verbose unsilent botright confirm filter! /foo/ split foo.txt', {}))
+    end)
+    it('works with user commands', function()
+      command('command -bang -nargs=+ -range -addr=lines MyCommand echo foo')
+      eq({
+        cmd = 'MyCommand',
+        args = { 'test', 'it' },
+        bang = true,
+        range = { 4, 6 },
+        count = -1,
+        reg = '',
+        addr = 'line',
+        magic = {
+            file = false,
+            bar = false
+        },
+        nargs = '+',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('4,6MyCommand! test it', {}))
+    end)
+    it('works for commands separated by bar', function()
+      eq({
+        cmd = 'argadd',
+        args = { 'a.txt' },
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = 'arg',
+        magic = {
+            file = true,
+            bar = true
+        },
+        nargs = '*',
+        nextcmd = 'argadd b.txt',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('argadd a.txt | argadd b.txt', {}))
+    end)
+    it('works for nargs=1', function()
+      command('command -nargs=1 MyCommand echo <q-args>')
+      eq({
+        cmd = 'MyCommand',
+        args = { 'test it' },
+        bang = false,
+        range = {},
+        count = -1,
+        reg = '',
+        addr = 'none',
+        magic = {
+            file = false,
+            bar = false
+        },
+        nargs = '1',
+        nextcmd = '',
+        mods = {
+          browse = false,
+          confirm = false,
+          emsg_silent = false,
+          filter = {
+              pattern = "",
+              force = false
+          },
+          hide = false,
+          keepalt = false,
+          keepjumps = false,
+          keepmarks = false,
+          keeppatterns = false,
+          lockmarks = false,
+          noautocmd = false,
+          noswapfile = false,
+          sandbox = false,
+          silent = false,
+          split = "",
+          tab = 0,
+          unsilent = false,
+          verbose = -1,
+          vertical = false,
+        }
+      }, meths.parse_cmd('MyCommand test it', {}))
+    end)
+    it('errors for invalid command', function()
+      eq('Error while parsing command line', pcall_err(meths.parse_cmd, '', {}))
+      eq('Error while parsing command line', pcall_err(meths.parse_cmd, '" foo', {}))
+      eq('Error while parsing command line: E492: Not an editor command: Fubar',
+         pcall_err(meths.parse_cmd, 'Fubar', {}))
+      command('command! Fubar echo foo')
+      eq('Error while parsing command line: E477: No ! allowed',
+         pcall_err(meths.parse_cmd, 'Fubar!', {}))
+      eq('Error while parsing command line: E481: No range allowed',
+         pcall_err(meths.parse_cmd, '4,6Fubar', {}))
+      command('command! Foobar echo foo')
+      eq('Error while parsing command line: E464: Ambiguous use of user-defined command',
+         pcall_err(meths.parse_cmd, 'F', {}))
+    end)
+    it('does not interfere with printing line in Ex mode #19400', function()
+      local screen = Screen.new(60, 7)
+      screen:set_default_attr_ids({
+        [0] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
+        [1] = {bold = true, reverse = true},  -- MsgSeparator
+      })
+      screen:attach()
+      insert([[
+        foo
+        bar]])
+      feed('gQ1')
+      screen:expect([[
+        foo                                                         |
+        bar                                                         |
+        {0:~                                                           }|
+        {0:~                                                           }|
+        {1:                                                            }|
+        Entering Ex mode.  Type "visual" to go to Normal mode.      |
+        :1^                                                          |
+      ]])
+      eq('Error while parsing command line', pcall_err(meths.parse_cmd, '', {}))
+      feed('<CR>')
+      screen:expect([[
+        foo                                                         |
+        bar                                                         |
+        {1:                                                            }|
+        Entering Ex mode.  Type "visual" to go to Normal mode.      |
+        :1                                                          |
+        foo                                                         |
+        :^                                                           |
+      ]])
+    end)
+  end)
+  describe('nvim_cmd', function()
+    it('works', function ()
+      meths.cmd({ cmd = "set", args = { "cursorline" } }, {})
+      eq(true, meths.get_option_value("cursorline", {}))
+    end)
+    it('captures output', function()
+      eq("foo", meths.cmd({ cmd = "echo", args = { '"foo"' } }, { output = true }))
+    end)
+    it('sets correct script context', function()
+      meths.cmd({ cmd = "set", args = { "cursorline" } }, {})
+      local str = meths.exec([[verbose set cursorline?]], true)
+      neq(nil, str:find("cursorline\n\tLast set from API client %(channel id %d+%)"))
+    end)
+    it('works with range', function()
+      insert [[
+        line1
+        line2
+        line3
+        line4
+        you didn't expect this
+        line5
+        line6
+      ]]
+      meths.cmd({ cmd = "del", range = {2, 4} }, {})
+      expect [[
+        line1
+        you didn't expect this
+        line5
+        line6
+      ]]
+    end)
+    it('works with count', function()
+      insert [[
+        line1
+        line2
+        line3
+        line4
+        you didn't expect this
+        line5
+        line6
+      ]]
+      meths.cmd({ cmd = "del", range = { 2 }, count = 4 }, {})
+      expect [[
+        line1
+        line5
+        line6
+      ]]
+    end)
+    it('works with register', function()
+      insert [[
+        line1
+        line2
+        line3
+        line4
+        you didn't expect this
+        line5
+        line6
+      ]]
+      meths.cmd({ cmd = "del", range = { 2, 4 }, reg = 'a' }, {})
+      meths.exec("1put a", false)
+      expect [[
+        line1
+        line2
+        line3
+        line4
+        you didn't expect this
+        line5
+        line6
+      ]]
+    end)
+    it('works with bang', function ()
+      meths.create_user_command("Foo", 'echo "<bang>"', { bang = true })
+      eq("!", meths.cmd({ cmd = "Foo", bang = true }, { output = true }))
+      eq("", meths.cmd({ cmd = "Foo", bang = false }, { output = true }))
+    end)
+    it('works with modifiers', function()
+      meths.create_user_command("Foo", 'set verbose', {})
+      eq("  verbose=1", meths.cmd({ cmd = "Foo", mods = { verbose = 1 } }, { output = true }))
+      eq(0, meths.get_option_value("verbose", {}))
+      command('edit foo.txt | edit bar.txt')
+      eq('  1 #h   "foo.txt"                      line 1',
+         meths.cmd({ cmd = "buffers", mods = { filter = { pattern = "foo", force = false } } },
+                   { output = true }))
+      eq('  2 %a   "bar.txt"                      line 1',
+         meths.cmd({ cmd = "buffers", mods = { filter = { pattern = "foo", force = true } } },
+                   { output = true }))
+    end)
+    it('works with magic.file', function()
+      exec_lua([[
+        vim.api.nvim_create_user_command("Foo", function(opts)
+          vim.api.nvim_echo({{ opts.fargs[1] }}, false, {})
+        end, { nargs = 1 })
+      ]])
+      eq(lfs.currentdir(),
+         meths.cmd({ cmd = "Foo", args = { '%:p:h' }, magic = { file = true } },
+                   { output = true }))
+    end)
+    it('splits arguments correctly', function()
+      meths.exec([[
+        function! FooFunc(...)
+          echo a:000
+        endfunction
+      ]], false)
+      meths.create_user_command("Foo", "call FooFunc(<f-args>)", { nargs = '+' })
+      eq([=[['a quick', 'brown fox', 'jumps over the', 'lazy dog']]=],
+         meths.cmd({ cmd = "Foo", args = { "a quick", "brown fox", "jumps over the", "lazy dog"}},
+                   { output = true }))
+      eq([=[['test \ \\ \"""\', 'more\ tests\"  ']]=],
+         meths.cmd({ cmd = "Foo", args = { [[test \ \\ \"""\]], [[more\ tests\"  ]] } },
+                   { output = true }))
+    end)
+    it('splits arguments correctly for Lua callback', function()
+      meths.exec_lua([[
+        local function FooFunc(opts)
+          vim.pretty_print(opts.fargs)
+        end
+
+        vim.api.nvim_create_user_command("Foo", FooFunc, { nargs = '+' })
+      ]], {})
+      eq([[{ "a quick", "brown fox", "jumps over the", "lazy dog" }]],
+         meths.cmd({ cmd = "Foo", args = { "a quick", "brown fox", "jumps over the", "lazy dog"}},
+                   { output = true }))
+      eq([[{ 'test \\ \\\\ \\"""\\', 'more\\ tests\\"  ' }]],
+         meths.cmd({ cmd = "Foo", args = { [[test \ \\ \"""\]], [[more\ tests\"  ]] } },
+                   { output = true }))
+    end)
+    it('works with buffer names', function()
+      command("edit foo.txt | edit bar.txt")
+      meths.cmd({ cmd = "buffer", args = { "foo.txt" } }, {})
+      eq("foo.txt", funcs.fnamemodify(meths.buf_get_name(0), ":t"))
+      meths.cmd({ cmd = "buffer", args = { "bar.txt" } }, {})
+      eq("bar.txt", funcs.fnamemodify(meths.buf_get_name(0), ":t"))
+    end)
+    it('triggers CmdUndefined event if command is not found', function()
+      meths.exec_lua([[
+        vim.api.nvim_create_autocmd("CmdUndefined",
+                                    { pattern = "Foo",
+                                      callback = function()
+                                        vim.api.nvim_create_user_command("Foo", "echo 'foo'", {})
+                                      end
+                                    })
+      ]], {})
+      eq("foo", meths.cmd({ cmd = "Foo" }, { output = true }))
+    end)
+    it('errors if command is not implemented', function()
+      eq("Command not implemented: winpos", pcall_err(meths.cmd, { cmd = "winpos" }, {}))
+    end)
+    it('works with empty arguments list', function()
+      meths.cmd({ cmd = "update" }, {})
+      meths.cmd({ cmd = "buffer", count = 0 }, {})
+    end)
+    it('doesn\'t suppress errors when used in keymapping', function()
+      meths.exec_lua([[
+        vim.keymap.set("n", "[l",
+                       function() vim.api.nvim_cmd({ cmd = "echo", args = {"foo"} }, {}) end)
+      ]], {})
+      feed("[l")
+      neq(nil, string.find(eval("v:errmsg"), "E5108:"))
     end)
   end)
 end)

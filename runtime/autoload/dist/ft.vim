@@ -1,7 +1,7 @@
 " Vim functions for file type detection
 "
 " Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2021 Dec 17
+" Last Change:	2022 Apr 13
 
 " These functions are moved here from runtime/filetype.vim to make startup
 " faster.
@@ -67,14 +67,41 @@ func dist#ft#FTasmsyntax()
   endif
 endfunc
 
-" Check if one of the first five lines contains "VB_Name".  In that case it is
-" probably a Visual Basic file.  Otherwise it's assumed to be "alt" filetype.
-func dist#ft#FTVB(alt)
-  if getline(1).getline(2).getline(3).getline(4).getline(5) =~? 'VB_Name\|Begin VB\.\(Form\|MDIForm\|UserControl\)'
-    setf vb
-  else
-    exe "setf " . a:alt
+let s:ft_visual_basic_content = '\cVB_Name\|Begin VB\.\(Form\|MDIForm\|UserControl\)'
+
+" See FTfrm() for Visual Basic form file detection
+func dist#ft#FTbas()
+  if exists("g:filetype_bas")
+    exe "setf " . g:filetype_bas
+    return
   endif
+
+  " most frequent FreeBASIC-specific keywords in distro files
+  let fb_keywords = '\c^\s*\%(extern\|var\|enum\|private\|scope\|union\|byref\|operator\|constructor\|delete\|namespace\|public\|property\|with\|destructor\|using\)\>\%(\s*[:=(]\)\@!'
+  let fb_preproc  = '\c^\s*\%(' ..
+        \ '#\s*\a\+\|' ..
+        \ 'option\s\+\%(byval\|dynamic\|escape\|\%(no\)\=gosub\|nokeyword\|private\|static\)\>\|' ..
+        \ '\%(''\|rem\)\s*\$lang\>\|' ..
+        \ 'def\%(byte\|longint\|short\|ubyte\|uint\|ulongint\|ushort\)\>' ..
+        \ '\)'
+  let fb_comment  = "^\\s*/'"
+  " OPTION EXPLICIT, without the leading underscore, is common to many dialects
+  let qb64_preproc = '\c^\s*\%($\a\+\|option\s\+\%(_explicit\|_\=explicitarray\)\>\)'
+
+  for lnum in range(1, min([line("$"), 100]))
+    let line = getline(lnum)
+    if line =~ s:ft_visual_basic_content
+      setf vb
+      return
+    elseif line =~ fb_preproc || line =~ fb_comment || line =~ fb_keywords
+      setf freebasic
+      return
+    elseif line =~ qb64_preproc
+      setf qb64
+      return
+    endif
+  endfor
+  setf basic
 endfunc
 
 func dist#ft#FTbtm()
@@ -90,6 +117,42 @@ func dist#ft#BindzoneCheck(default)
     setf bindzone
   elseif a:default != ''
     exe 'setf ' . a:default
+  endif
+endfunc
+
+" Returns true if file content looks like RAPID
+func IsRapid(sChkExt = "")
+  if a:sChkExt == "cfg"
+    return getline(1) =~? '\v^%(EIO|MMC|MOC|PROC|SIO|SYS):CFG'
+  endif
+  " called from FTmod, FTprg or FTsys
+  return getline(nextnonblank(1)) =~? '\v^\s*%(\%{3}|module\s+\k+\s*%(\(|$))'
+endfunc
+
+func dist#ft#FTcfg()
+  if exists("g:filetype_cfg")
+    exe "setf " .. g:filetype_cfg
+  elseif IsRapid("cfg")
+    setf rapid
+  else
+    setf cfg
+  endif
+endfunc
+
+func dist#ft#FTcls()
+  if exists("g:filetype_cls")
+    exe "setf " .. g:filetype_cls
+    return
+  endif
+
+  if getline(1) =~ '^%'
+    setf tex
+  elseif getline(1)[0] == '#' && getline(1) =~ 'rexx'
+    setf rexx
+  elseif getline(1) == 'VERSION 1.0 CLASS'
+    setf vb
+  else
+    setf st
   endif
 endfunc
 
@@ -154,7 +217,7 @@ endfunc
 
 func dist#ft#FTent()
   " This function checks for valid cl syntax in the first five lines.
-  " Look for either an opening comment, '#', or a block start, '{".
+  " Look for either an opening comment, '#', or a block start, '{'.
   " If not found, assume SGML.
   let lnum = 1
   while lnum < 6
@@ -192,6 +255,10 @@ func dist#ft#EuphoriaCheck()
 endfunc
 
 func dist#ft#DtraceCheck()
+  if did_filetype()
+    " Filetype was already detected
+    return
+  endif
   let lines = getline(1, min([line("$"), 100]))
   if match(lines, '^module\>\|^import\>') > -1
     " D files often start with a module and/or import statement.
@@ -216,6 +283,21 @@ func dist#ft#FTe()
       let n = n + 1
     endwhile
     setf eiffel
+  endif
+endfunc
+
+func dist#ft#FTfrm()
+  if exists("g:filetype_frm")
+    exe "setf " . g:filetype_frm
+    return
+  endif
+
+  let lines = getline(1, min([line("$"), 5]))
+
+  if match(lines, s:ft_visual_basic_content) > -1
+    setf vb
+  else
+    setf form
   endif
 endfunc
 
@@ -377,6 +459,36 @@ func dist#ft#FTmm()
   setf nroff
 endfunc
 
+" Returns true if file content looks like LambdaProlog module
+func IsLProlog()
+  " skip apparent comments and blank lines, what looks like 
+  " LambdaProlog comment may be RAPID header
+  let l = nextnonblank(1)
+  while l > 0 && l < line('$') && getline(l) =~ '^\s*%' " LambdaProlog comment
+    let l = nextnonblank(l + 1)
+  endwhile
+  " this pattern must not catch a go.mod file
+  return getline(l) =~ '\<module\s\+\w\+\s*\.\s*\(%\|$\)'
+endfunc
+
+" Determine if *.mod is ABB RAPID, LambdaProlog, Modula-2, Modsim III or go.mod
+func dist#ft#FTmod()
+  if exists("g:filetype_mod")
+    exe "setf " .. g:filetype_mod
+  elseif IsLProlog()
+    setf lprolog
+  elseif getline(nextnonblank(1)) =~ '\%(\<MODULE\s\+\w\+\s*;\|^\s*(\*\)'
+    setf modula2
+  elseif IsRapid()
+    setf rapid
+  elseif expand("<afile>") =~ '\<go.mod$'
+    setf gomod
+  else
+    " Nothing recognized, assume modsim3
+    setf modsim3
+  endif
+endfunc
+
 func dist#ft#FTpl()
   if exists("g:filetype_pl")
     exe "setf " . g:filetype_pl
@@ -407,12 +519,14 @@ func dist#ft#FTinc()
     " headers so assume POV-Ray
     elseif lines =~ '^\s*\%({\|(\*\)' || lines =~? s:ft_pascal_keywords
       setf pascal
+    elseif lines =~# '\<\%(require\|inherit\)\>' || lines =~# '\w\+ = '
+      setf bitbake
     else
       call dist#ft#FTasmsyntax()
       if exists("b:asmsyntax")
-	exe "setf " . fnameescape(b:asmsyntax)
+        exe "setf " . fnameescape(b:asmsyntax)
       else
-	setf pov
+        setf pov
       endif
     endif
   endif
@@ -490,6 +604,18 @@ func dist#ft#FTpp()
     else
       setf puppet
     endif
+  endif
+endfunc
+
+" Determine if *.prg is ABB RAPID. Can also be Clipper, FoxPro or eviews
+func dist#ft#FTprg()
+  if exists("g:filetype_prg")
+    exe "setf " .. g:filetype_prg
+  elseif IsRapid()
+    setf rapid
+  else
+    " Nothing recognized, assume Clipper
+    setf clipper
   endif
 endfunc
 
@@ -674,6 +800,28 @@ func dist#ft#SQL()
   endif
 endfunc
 
+" This function checks the first 25 lines of file extension "sc" to resolve
+" detection between scala and SuperCollider
+func dist#ft#FTsc()
+  for lnum in range(1, min([line("$"), 25]))
+    if getline(lnum) =~# '[A-Za-z0-9]*\s:\s[A-Za-z0-9]\|var\s<\|classvar\s<\|\^this.*\||\w*|\|+\s\w*\s{\|\*ar\s'
+      setf supercollider
+      return
+    endif
+  endfor
+  setf scala
+endfunc
+
+" This function checks the first line of file extension "scd" to resolve
+" detection between scdoc and SuperCollider
+func dist#ft#FTscd()
+  if getline(1) =~# '\%^\S\+(\d[0-9A-Za-z]*)\%(\s\+\"[^"]*\"\%(\s\+\"[^"]*\"\)\=\)\=$'
+    setf scdoc
+  else
+    setf supercollider
+  endif
+endfunc
+
 " If the file has an extension of 't' and is in a directory 't' or 'xt' then
 " it is almost certainly a Perl test file.
 " If the first line starts with '#' and contains 'perl' it's probably a Perl
@@ -692,13 +840,44 @@ func dist#ft#FTperl()
   endif
   let save_cursor = getpos('.')
   call cursor(1,1)
-  let has_use = search('^use\s\s*\k', 'c', 30)
+  let has_use = search('^use\s\s*\k', 'c', 30) > 0
   call setpos('.', save_cursor)
   if has_use
     setf perl
     return 1
   endif
   return 0
+endfunc
+
+" LambdaProlog and Standard ML signature files
+func dist#ft#FTsig()
+  if exists("g:filetype_sig")
+    exe "setf " .. g:filetype_sig
+    return
+  endif
+
+  let lprolog_comment = '^\s*\%(/\*\|%\)'
+  let lprolog_keyword = '^\s*sig\s\+\a'
+  let sml_comment = '^\s*(\*'
+  let sml_keyword = '^\s*\%(signature\|structure\)\s\+\a'
+
+  let line = getline(nextnonblank(1))
+
+  if line =~ lprolog_comment || line =~# lprolog_keyword
+    setf lprolog
+  elseif line =~ sml_comment || line =~# sml_keyword
+    setf sml
+  endif
+endfunc
+
+func dist#ft#FTsys()
+  if exists("g:filetype_sys")
+    exe "setf " .. g:filetype_sys
+  elseif IsRapid()
+    setf rapid
+  else
+    setf bat
+  endif
 endfunc
 
 " Choose context, plaintex, or tex (LaTeX) based on these rules:
@@ -724,7 +903,8 @@ func dist#ft#FTtex()
     let save_cursor = getpos('.')
     call cursor(1,1)
     let firstNC = search('^\s*[^[:space:]%]', 'c', 1000)
-    if firstNC " Check the next thousand lines for a LaTeX or ConTeXt keyword.
+    if firstNC > 0
+      " Check the next thousand lines for a LaTeX or ConTeXt keyword.
       let lpat = 'documentclass\>\|usepackage\>\|begin{\|newcommand\>\|renewcommand\>'
       let cpat = 'start\a\+\|setup\a\+\|usemodule\|enablemode\|enableregime\|setvariables\|useencoding\|usesymbols\|stelle\a\+\|verwende\a\+\|stel\a\+\|gebruik\a\+\|usa\a\+\|imposta\a\+\|regle\a\+\|utilisemodule\>'
       let kwline = search('^\s*\\\%(' . lpat . '\)\|^\s*\\\(' . cpat . '\)',
@@ -844,6 +1024,41 @@ func dist#ft#FTfoam()
       endif
       let lnum = lnum + 1
     endwhile
+endfunc
+
+" Determine if a *.tf file is TF mud client or terraform
+func dist#ft#FTtf()
+  let numberOfLines = line('$')
+  for i in range(1, numberOfLines)
+    let currentLine = trim(getline(i))
+    let firstCharacter = currentLine[0]
+    if firstCharacter !=? ";" && firstCharacter !=? "/" && firstCharacter !=? ""
+      setf terraform
+      return
+    endif
+  endfor
+  setf tf
+endfunc
+
+let s:ft_krl_header = '\&\w+'
+" Determine if a *.src file is Kuka Robot Language
+func dist#ft#FTsrc()
+  let ft_krl_def_or_deffct = '%(global\s+)?def%(fct)?>'
+  if exists("g:filetype_src")
+    exe "setf " .. g:filetype_src
+  elseif getline(nextnonblank(1)) =~? '\v^\s*%(' .. s:ft_krl_header .. '|' .. ft_krl_def_or_deffct .. ')'
+    setf krl
+  endif
+endfunc
+
+" Determine if a *.dat file is Kuka Robot Language
+func dist#ft#FTdat()
+  let ft_krl_defdat = 'defdat>'
+  if exists("g:filetype_dat")
+    exe "setf " .. g:filetype_dat
+  elseif getline(nextnonblank(1)) =~? '\v^\s*%(' .. s:ft_krl_header .. '|' .. ft_krl_defdat .. ')'
+    setf krl
+  endif
 endfunc
 
 " Restore 'cpoptions'

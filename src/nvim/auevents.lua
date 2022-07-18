@@ -40,6 +40,7 @@ return {
     'DiagnosticChanged',      -- diagnostics in a buffer were modified
     'DiffUpdated',            -- diffs have been updated
     'DirChanged',             -- directory changed
+    'DirChangedPre',          -- directory is going to change
     'EncodingChanged',        -- after changing the 'encoding' option
     'ExitPre',                -- before exiting
     'FileAppendCmd',          -- append to a file using command
@@ -69,6 +70,8 @@ return {
     'InsertEnter',            -- when entering Insert mode
     'InsertLeave',            -- just after leaving Insert mode
     'InsertLeavePre',         -- just before leaving Insert mode
+    'LspAttach',              -- after an LSP client attaches to a buffer
+    'LspDetach',              -- after an LSP client detaches from a buffer
     'MenuPopup',              -- just before popup menu is displayed
     'ModeChanged',            -- after changing the mode
     'OptionSet',              -- after setting any option
@@ -132,18 +135,15 @@ return {
   nvim_specific = {
     BufModifiedSet=true,
     DiagnosticChanged=true,
-    DirChanged=true,
+    LspAttach=true,
+    LspDetach=true,
     RecordingEnter=true,
     RecordingLeave=true,
     Signal=true,
-    TabClosed=true,
-    TabNew=true,
     TabNewEntered=true,
     TermClose=true,
     TermOpen=true,
     UIEnter=true,
     UILeave=true,
-    WinClosed=true,
-    WinScrolled=true,
   },
 }

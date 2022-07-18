@@ -22,6 +22,7 @@
 #include "nvim/fileio.h"
 #include "nvim/garray.h"
 #include "nvim/hardcopy.h"
+#include "nvim/highlight_group.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -114,7 +115,6 @@ static option_table_T printer_opts[OPT_PRINT_NUM_OPTIONS]
   { "formfeed", FALSE, 0, NULL, 0, FALSE },
   }
 ;
-
 
 static const uint32_t cterm_color_8[8] = {
   0x000000, 0xff0000, 0x00ff00, 0xffff00,
@@ -310,12 +310,12 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
    */
   stringp = option_str;
   while (*stringp) {
-    colonp = vim_strchr(stringp, ':');
+    colonp = (char_u *)vim_strchr((char *)stringp, ':');
     if (colonp == NULL) {
       ret = N_("E550: Missing colon");
       break;
     }
-    commap = vim_strchr(stringp, ',');
+    commap = (char_u *)vim_strchr((char *)stringp, ',');
     if (commap == NULL) {
       commap = option_str + STRLEN(option_str);
     }
@@ -342,7 +342,7 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
         break;
       }
 
-      table[idx].number = getdigits_int(&p, false, 0);
+      table[idx].number = getdigits_int((char **)&p, false, 0);
     }
 
     table[idx].string = p;
@@ -365,7 +365,6 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
   return ret;
 }
 
-
 /*
  * If using a dark background, the colors will probably be too bright to show
  * up well on white paper, so reduce their brightness.
@@ -373,8 +372,8 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
 static uint32_t darken_rgb(uint32_t rgb)
 {
   return ((rgb >> 17) << 16)
-         +   (((rgb & 0xff00) >> 9) << 8)
-         +   ((rgb & 0xff) >> 1);
+         + (((rgb & 0xff00) >> 9) << 8)
+         + ((rgb & 0xff) >> 1);
 }
 
 static uint32_t prt_get_term_color(int colorindex)
@@ -386,30 +385,46 @@ static uint32_t prt_get_term_color(int colorindex)
   return cterm_color_8[colorindex % 8];
 }
 
-static void prt_get_attr(int hl_id, prt_text_attr_T *pattr, int modec)
+static uint32_t prt_get_color(int hl_id, int modec)
 {
   int colorindex;
   uint32_t fg_color;
 
+  const char *color = highlight_color(hl_id, "fg#", 'g');
+  if (color != NULL) {
+    RgbValue rgb = name_to_color(color, &colorindex);
+    if (rgb != -1) {
+      return (uint32_t)rgb;
+    }
+  }
+
+  color = highlight_color(hl_id, "fg", modec);
+  if (color == NULL) {
+    colorindex = 0;
+  } else {
+    colorindex = atoi(color);
+  }
+
+  if (colorindex >= 0 && colorindex < t_colors) {
+    fg_color = prt_get_term_color(colorindex);
+  } else {
+    fg_color = PRCOLOR_BLACK;
+  }
+
+  return fg_color;
+}
+
+static void prt_get_attr(int hl_id, prt_text_attr_T *pattr, int modec)
+{
   pattr->bold = (highlight_has_attr(hl_id, HL_BOLD, modec) != NULL);
   pattr->italic = (highlight_has_attr(hl_id, HL_ITALIC, modec) != NULL);
   pattr->underline = (highlight_has_attr(hl_id, HL_UNDERLINE, modec) != NULL);
   pattr->undercurl = (highlight_has_attr(hl_id, HL_UNDERCURL, modec) != NULL);
+  pattr->underdouble = (highlight_has_attr(hl_id, HL_UNDERDOUBLE, modec) != NULL);
+  pattr->underdotted = (highlight_has_attr(hl_id, HL_UNDERDOTTED, modec) != NULL);
+  pattr->underdashed = (highlight_has_attr(hl_id, HL_UNDERDASHED, modec) != NULL);
 
-  {
-    const char *color = highlight_color(hl_id, "fg", modec);
-    if (color == NULL) {
-      colorindex = 0;
-    } else {
-      colorindex = atoi(color);
-    }
-
-    if (colorindex >= 0 && colorindex < t_colors) {
-      fg_color = prt_get_term_color(colorindex);
-    } else {
-      fg_color = PRCOLOR_BLACK;
-    }
-  }
+  uint32_t fg_color = prt_get_color(hl_id, modec);
 
   if (fg_color == PRCOLOR_WHITE) {
     fg_color = PRCOLOR_BLACK;
@@ -552,8 +567,8 @@ static void prt_header(prt_settings_T *const psettings, const int pagenum, const
     printer_page_num = pagenum;
 
     use_sandbox = was_set_insecurely(curwin, "printheader", 0);
-    build_stl_str_hl(curwin, tbuf, (size_t)width + IOSIZE,
-                     p_header, use_sandbox,
+    build_stl_str_hl(curwin, (char *)tbuf, (size_t)width + IOSIZE,
+                     (char *)p_header, use_sandbox,
                      ' ', width, NULL, NULL);
 
     // Reset line numbers
@@ -572,7 +587,7 @@ static void prt_header(prt_settings_T *const psettings, const int pagenum, const
   int page_line = 0 - prt_header_height();
   mch_print_start_line(true, page_line);
   for (char_u *p = tbuf; *p != NUL;) {
-    const int l = utfc_ptr2len(p);
+    const int l = utfc_ptr2len((char *)p);
     assert(l >= 0);
     if (mch_print_text_out(p, (size_t)l)) {
       page_line++;
@@ -624,15 +639,15 @@ void ex_hardcopy(exarg_T *eap)
     char *errormsg = NULL;
 
     // Expand things like "%.ps".
-    if (expand_filename(eap, eap->cmdlinep, &errormsg) == FAIL) {
+    if (expand_filename(eap, (char_u **)eap->cmdlinep, &errormsg) == FAIL) {
       if (errormsg != NULL) {
         emsg(errormsg);
       }
       return;
     }
-    settings.outfile = skipwhite(eap->arg + 1);
+    settings.outfile = (char_u *)skipwhite(eap->arg + 1);
   } else if (*eap->arg != NUL) {
-    settings.arguments = eap->arg;
+    settings.arguments = (char_u *)eap->arg;
   }
 
   /*
@@ -643,8 +658,9 @@ void ex_hardcopy(exarg_T *eap)
    * PS.)
    */
   if (mch_print_init(&settings,
-                     curbuf->b_fname == NULL ? buf_spname(curbuf) : curbuf->b_sfname ==
-                     NULL ? curbuf->b_fname : curbuf->b_sfname, eap->forceit) == FAIL) {
+                     curbuf->b_fname == NULL ? (char_u *)buf_spname(curbuf) : curbuf->b_sfname ==
+                     NULL ? (char_u *)curbuf->b_fname : (char_u *)curbuf->b_sfname,
+                     eap->forceit) == FAIL) {
     return;
   }
 
@@ -681,7 +697,7 @@ void ex_hardcopy(exarg_T *eap)
    * Estimate the total lines to be printed
    */
   for (lnum = eap->line1; lnum <= eap->line2; lnum++) {
-    bytes_to_print += STRLEN(skipwhite(ml_get(lnum)));
+    bytes_to_print += STRLEN(skipwhite((char *)ml_get(lnum)));
   }
   if (bytes_to_print == 0) {
     msg(_("No text to be printed"));
@@ -789,7 +805,7 @@ void ex_hardcopy(exarg_T *eap)
             if (prtpos.column == 0) {
               // finished a file line
               prtpos.bytes_printed +=
-                STRLEN(skipwhite(ml_get(prtpos.file_line)));
+                STRLEN(skipwhite((char *)ml_get(prtpos.file_line)));
               if (++prtpos.file_line > eap->line2) {
                 break;                 // reached the end
               }
@@ -879,7 +895,7 @@ static colnr_T hardcopy_line(prt_settings_T *psettings, int page_line, prt_pos_T
    * Loop over the columns until the end of the file line or right margin.
    */
   for (col = ppos->column; line[col] != NUL && !need_break; col += outputlen) {
-    if ((outputlen = utfc_ptr2len(line + col)) < 1) {
+    if ((outputlen = utfc_ptr2len((char *)line + col)) < 1) {
       outputlen = 1;
     }
     // syntax highlighting stuff.
@@ -932,7 +948,7 @@ static colnr_T hardcopy_line(prt_settings_T *psettings, int page_line, prt_pos_T
       need_break = 1;
     } else {
       need_break = mch_print_text_out(line + col, (size_t)outputlen);
-      print_pos += utf_ptr2cells(line + col);
+      print_pos += utf_ptr2cells((char *)line + col);
     }
   }
 
@@ -952,7 +968,6 @@ static colnr_T hardcopy_line(prt_settings_T *psettings, int page_line, prt_pos_T
   }
   return col;
 }
-
 
 /*
  * PS printer stuff.
@@ -1225,7 +1240,6 @@ static struct prt_ps_mbfont_S prt_ps_mbfonts[] =
 #define PRT_RESOURCE_ENCODING       "Encoding"
 #define PRT_RESOURCE_CMAP           "CMap"
 
-
 /* Data for table based DSC comment recognition, easy to extend if VIM needs to
  * read more comments. */
 #define PRT_DSC_MISC_TYPE           (-1)
@@ -1237,7 +1251,6 @@ static struct prt_ps_mbfont_S prt_ps_mbfonts[] =
 #define PRT_DSC_VERSION             "%%Version:"
 #define PRT_DSC_ENDCOMMENTS         "%%EndComments:"
 
-
 #define SIZEOF_CSTR(s)      (sizeof(s) - 1)
 static struct prt_dsc_comment_S prt_dsc_table[] =
 {
@@ -1247,7 +1260,6 @@ static struct prt_dsc_comment_S prt_dsc_table[] =
   { PRT_DSC_ENDCOMMENTS, SIZEOF_CSTR(PRT_DSC_ENDCOMMENTS),
     PRT_DSC_ENDCOMMENTS_TYPE }
 };
-
 
 /*
  * Variables for the output PostScript file.
@@ -1546,7 +1558,7 @@ static void prt_flush_buffer(void)
   }
 }
 
-static void prt_resource_name(char_u *filename, void *cookie)
+static void prt_resource_name(char *filename, void *cookie)
 {
   char_u *resource_filename = cookie;
 
@@ -1559,7 +1571,7 @@ static void prt_resource_name(char_u *filename, void *cookie)
 
 static int prt_find_resource(char *name, struct prt_ps_resource_S *resource)
 {
-  char_u *buffer;
+  char *buffer;
   int retval;
 
   buffer = xmallocz(MAXPATHL);
@@ -1567,7 +1579,7 @@ static int prt_find_resource(char *name, struct prt_ps_resource_S *resource)
   STRLCPY(resource->name, name, 64);
   // Look for named resource file in runtimepath
   STRCPY(buffer, "print");
-  add_pathsep((char *)buffer);
+  add_pathsep(buffer);
   STRLCAT(buffer, name, MAXPATHL);
   STRLCAT(buffer, ".ps", MAXPATHL);
   resource->filename[0] = NUL;
@@ -1852,8 +1864,6 @@ static void prt_dsc_text(char *comment, char *text)
   prt_write_file(prt_line_buffer);
 }
 
-#define prt_dsc_atend(c)        prt_dsc_text((c), "atend")
-
 static void prt_dsc_ints(char *comment, int count, int *ints)
 {
   int i;
@@ -2038,7 +2048,6 @@ static void prt_font_metrics(int font_scale)
   prt_char_width = PRT_PS_FONT_TO_USER(font_scale, prt_ps_font->wx);
 }
 
-
 static int prt_get_cpl(void)
 {
   if (prt_use_number()) {
@@ -2152,7 +2161,6 @@ int mch_print_init(prt_settings_T *psettings, char_u *jobname, int forceit)
   struct prt_ps_encoding_S *p_mbenc;
   struct prt_ps_encoding_S *p_mbenc_first;
   struct prt_ps_charset_S *p_mbchar = NULL;
-
 
   /*
    * Set up font and encoding.
@@ -2329,7 +2337,7 @@ int mch_print_init(prt_settings_T *psettings, char_u *jobname, int forceit)
    * Set up the font size.
    */
   fontsize = PRT_PS_DEFAULT_FONTSIZE;
-  for (p = p_pfn; (p = vim_strchr(p, ':')) != NULL; ++p) {
+  for (p = p_pfn; (p = (char_u *)vim_strchr((char *)p, ':')) != NULL; p++) {
     if (p[1] == 'h' && ascii_isdigit(p[2])) {
       fontsize = atoi((char *)p + 2);
     }
@@ -2398,7 +2406,7 @@ int mch_print_init(prt_settings_T *psettings, char_u *jobname, int forceit)
     }
     prt_ps_fd = os_fopen((char *)prt_ps_file_name, WRITEBIN);
   } else {
-    p = expand_env_save(psettings->outfile);
+    p = (char_u *)expand_env_save((char *)psettings->outfile);
     if (p != NULL) {
       prt_ps_fd = os_fopen((char *)p, WRITEBIN);
       xfree(p);
@@ -2501,7 +2509,7 @@ bool mch_print_begin(prt_settings_T *psettings)
    */
   prt_dsc_start();
   prt_dsc_textline("Title", (char *)psettings->jobname);
-  if (os_get_user_name(buffer, 256) == FAIL) {
+  if (os_get_username(buffer, 256) == FAIL) {
     STRCPY(buffer, "Unknown");
   }
   prt_dsc_textline("For", buffer);
@@ -2510,14 +2518,14 @@ bool mch_print_begin(prt_settings_T *psettings)
   char ctime_buf[50];
   char *p_time = os_ctime(ctime_buf, sizeof(ctime_buf));
   // Note: os_ctime() adds a \n so we have to remove it :-(
-  p = vim_strchr((char_u *)p_time, '\n');
+  p = (char_u *)vim_strchr(p_time, '\n');
   if (p != NULL) {
     *p = NUL;
   }
   prt_dsc_textline("CreationDate", p_time);
   prt_dsc_textline("DocumentData", "Clean8Bit");
   prt_dsc_textline("Orientation", "Portrait");
-  prt_dsc_atend("Pages");
+  prt_dsc_text(("Pages"), "atend");
   prt_dsc_textline("PageOrder", "Ascend");
   // The bbox does not change with orientation - it is always in the default
   // user coordinate system!  We have to recalculate right and bottom
@@ -2987,7 +2995,7 @@ int mch_print_text_out(char_u *const textp, size_t len)
     }
   }
   if (prt_out_mbyte) {
-    const bool half_width = (utf_ptr2cells(p) == 1);
+    const bool half_width = (utf_ptr2cells((char *)p) == 1);
     if (half_width) {
       char_width /= 2;
     }
@@ -3180,4 +3188,3 @@ void mch_print_set_fg(uint32_t fgcol)
     prt_need_fgcol = true;
   }
 }
-

@@ -14,12 +14,13 @@ local feed_command = helpers.feed_command
 local feed_data = thelpers.feed_data
 local clear = helpers.clear
 local command = helpers.command
-local nvim_dir = helpers.nvim_dir
+local testprg = helpers.testprg
 local retry = helpers.retry
 local nvim_prog = helpers.nvim_prog
 local nvim_set = helpers.nvim_set
 local ok = helpers.ok
 local read_file = helpers.read_file
+local funcs = helpers.funcs
 
 if helpers.pending_win32(pending) then return end
 
@@ -83,6 +84,24 @@ describe('TUI', function()
     screen:try_resize(57, 17)
     command('call jobresize(b:terminal_job_id, 57, 17)')
     assert_alive()
+  end)
+
+  it('resize at startup', function()
+    -- Issues: #17285 #15044 #11330
+    screen:try_resize(50, 10)
+    feed_command([[call termopen([v:progpath, '--clean', '--cmd', 'let start = reltime() | while v:true | if reltimefloat(reltime(start)) > 2 | break | endif | endwhile']) | sleep 500m | vs new]])
+    screen:expect([[
+      {1: }                        │                        |
+      {4:~                        }│{4:~                       }|
+      {4:~                        }│{4:~                       }|
+      {4:~                        }│{4:~                       }|
+      {4:~                        }│{4:~                       }|
+      {4:~                        }│{5:[No Name]   0,0-1    All}|
+      {4:~                        }│                        |
+      {5:new                       }{MATCH:<.*[/\]nvim }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
   end)
 
   it('accepts resize while pager is active', function()
@@ -214,12 +233,44 @@ describe('TUI', function()
     ]])
   end)
 
-  it('interprets ESC+key as ALT chord', function()
+  it('interprets ESC+key as ALT chord in i_CTRL-V', function()
     -- Vim represents ALT/META by setting the "high bit" of the modified key:
     -- ALT+j inserts "ê". Nvim does not (#3982).
     feed_data('i\022\027j')
     screen:expect([[
       <M-j>{1: }                                            |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+  end)
+
+  it('interprets <Esc>[27u as <Esc>', function()
+    feed_command('nnoremap <M-;> <Nop>')
+    feed_command('nnoremap <Esc> AESC<Esc>')
+    feed_command('nnoremap ; Asemicolon<Esc>')
+    feed_data('\027[27u;')
+    screen:expect([[
+      ESCsemicolo{1:n}                                      |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    -- <Esc>; should be recognized as <M-;> when <M-;> is mapped
+    feed_data('\027;')
+    screen:expect_unchanged()
+  end)
+
+  it('interprets <Esc><Nul> as <M-C-Space> #17198', function()
+    feed_data('i\022\027\000')
+    screen:expect([[
+      <M-C-Space>{1: }                                      |
       {4:~                                                 }|
       {4:~                                                 }|
       {4:~                                                 }|
@@ -247,6 +298,179 @@ describe('TUI', function()
     ]], attrs)
   end)
 
+  it('accepts keypad keys from kitty keyboard protocol #19180', function()
+    feed_data('i')
+    feed_data(funcs.nr2char(57399)) -- KP_0
+    feed_data(funcs.nr2char(57400)) -- KP_1
+    feed_data(funcs.nr2char(57401)) -- KP_2
+    feed_data(funcs.nr2char(57402)) -- KP_3
+    feed_data(funcs.nr2char(57403)) -- KP_4
+    feed_data(funcs.nr2char(57404)) -- KP_5
+    feed_data(funcs.nr2char(57405)) -- KP_6
+    feed_data(funcs.nr2char(57406)) -- KP_7
+    feed_data(funcs.nr2char(57407)) -- KP_8
+    feed_data(funcs.nr2char(57408)) -- KP_9
+    feed_data(funcs.nr2char(57409)) -- KP_DECIMAL
+    feed_data(funcs.nr2char(57410)) -- KP_DIVIDE
+    feed_data(funcs.nr2char(57411)) -- KP_MULTIPLY
+    feed_data(funcs.nr2char(57412)) -- KP_SUBTRACT
+    feed_data(funcs.nr2char(57413)) -- KP_ADD
+    feed_data(funcs.nr2char(57414)) -- KP_ENTER
+    feed_data(funcs.nr2char(57415)) -- KP_EQUAL
+    screen:expect([[
+      0123456789./*-+                                   |
+      ={1: }                                                |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57417)) -- KP_LEFT
+    screen:expect([[
+      0123456789./*-+                                   |
+      {1:=}                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57418)) -- KP_RIGHT
+    screen:expect([[
+      0123456789./*-+                                   |
+      ={1: }                                                |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57419)) -- KP_UP
+    screen:expect([[
+      0{1:1}23456789./*-+                                   |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57420)) -- KP_DOWN
+    screen:expect([[
+      0123456789./*-+                                   |
+      ={1: }                                                |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57425)) -- KP_INSERT
+    screen:expect([[
+      0123456789./*-+                                   |
+      ={1: }                                                |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- REPLACE --}                                     |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data('\027[27u') -- ESC
+    screen:expect([[
+      0123456789./*-+                                   |
+      {1:=}                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data('\027[57417;5u') -- CTRL + KP_LEFT
+    screen:expect([[
+      {1:0}123456789./*-+                                   |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data('\027[57418;2u') -- SHIFT + KP_RIGHT
+    screen:expect([[
+      0123456789{1:.}/*-+                                   |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57426)) -- KP_DELETE
+    screen:expect([[
+      0123456789{1:/}*-+                                    |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57423)) -- KP_HOME
+    screen:expect([[
+      {1:0}123456789/*-+                                    |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(funcs.nr2char(57424)) -- KP_END
+    screen:expect([[
+      0123456789/*-{1:+}                                    |
+      =                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    feed_data(':tab split\r:tabnew\r')
+    feed_data(':highlight Tabline ctermbg=NONE ctermfg=NONE cterm=underline\r')
+    local attrs = screen:get_default_attr_ids()
+    attrs[11] = {underline = true}
+    screen:expect([[
+      {11: + [No Name]  + [No Name] }{3: [No Name] }{1:            }{11:X}|
+      {1: }                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name]                                         }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]], attrs)
+    feed_data('\027[57421;5u') -- CTRL + KP_PAGE_UP
+    screen:expect([[
+      {11: + [No Name] }{3: + [No Name] }{11: [No Name] }{1:            }{11:X}|
+      0123456789/*-{1:+}                                    |
+      =                                                 |
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]], attrs)
+    feed_data('\027[57422;5u') -- CTRL + KP_PAGE_DOWN
+    screen:expect([[
+      {11: + [No Name]  + [No Name] }{3: [No Name] }{1:            }{11:X}|
+      {1: }                                                 |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name]                                         }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]], attrs)
+  end)
+
   it('paste: Insert mode', function()
     -- "bracketed paste"
     feed_data('i""\027i\027[200~')
@@ -271,7 +495,7 @@ describe('TUI', function()
       {3:-- TERMINAL --}                                    |
     ]])
     feed_data('\027[201~')  -- End paste.
-    feed_data('\027\000')   -- ESC: go to Normal mode.
+    feed_data('\027[27u')   -- ESC: go to Normal mode.
     wait_for_mode('n')
     screen:expect([[
       "pasted from termina{1:l}"                            |
@@ -323,7 +547,7 @@ describe('TUI', function()
     feed_data('just paste it™')
     feed_data('\027[201~')
     screen:expect{grid=[[
-      thisjust paste it™{1:3} is here                       |
+      thisjust paste it{1:™}3 is here                       |
                                                         |
       {4:~                                                 }|
       {4:~                                                 }|
@@ -353,7 +577,7 @@ describe('TUI', function()
         return
     end
     feed_data(':set statusline=^^^^^^^\n')
-    feed_data(':terminal '..nvim_dir..'/tty-test\n')
+    feed_data(':terminal '..testprg('tty-test')..'\n')
     feed_data('i')
     screen:expect{grid=[[
       tty ready                                         |
@@ -379,7 +603,7 @@ describe('TUI', function()
   end)
 
   it('paste: normal-mode (+CRLF #10872)', function()
-    feed_data(':set ruler')
+    feed_data(':set ruler | echo')
     wait_for_mode('c')
     feed_data('\n')
     wait_for_mode('n')
@@ -423,13 +647,13 @@ describe('TUI', function()
     expect_child_buf_lines(expected_crlf)
     feed_data('u')
     expect_child_buf_lines({''})
+    feed_data(':echo')
+    wait_for_mode('c')
+    feed_data('\n')
+    wait_for_mode('n')
     -- CRLF input
     feed_data('\027[200~'..table.concat(expected_lf,'\r\n')..'\027[201~')
-    screen:expect{
-      grid=expected_grid1:gsub(
-        ':set ruler *',
-        '3 fewer lines; before #1  0 seconds ago           '),
-      attr_ids=expected_attr}
+    screen:expect{grid=expected_grid1, attr_ids=expected_attr}
     expect_child_buf_lines(expected_crlf)
   end)
 
@@ -453,7 +677,7 @@ describe('TUI', function()
       {3:-- TERMINAL --}                                    |
     ]]}
     -- Dot-repeat/redo.
-    feed_data('\027\000')
+    feed_data('\027[27u')
     wait_for_mode('n')
     feed_data('.')
     screen:expect{grid=[[
@@ -499,7 +723,7 @@ describe('TUI', function()
       vim.paste = function(lines, phase) error("fake fail") end
     ]], {})
     -- Prepare something for dot-repeat/redo.
-    feed_data('ifoo\n\027\000')
+    feed_data('ifoo\n\027[27u')
     wait_for_mode('n')
     screen:expect{grid=[[
       foo                                               |
@@ -541,7 +765,7 @@ describe('TUI', function()
       {3:-- TERMINAL --}                                    |
     ]]}
     -- Editor should still work after failed/drained paste.
-    feed_data('ityped input...\027\000')
+    feed_data('ityped input...\027[27u')
     screen:expect{grid=[[
       foo                                               |
       foo                                               |
@@ -575,7 +799,7 @@ describe('TUI', function()
       vim.paste = function(lines, phase) return false end
     ]], {})
     feed_data('\027[200~line A\nline B\n\027[201~')
-    feed_data('ifoo\n\027\000')
+    feed_data('ifoo\n\027[27u')
     expect_child_buf_lines({'foo',''})
   end)
 
@@ -669,7 +893,7 @@ describe('TUI', function()
       {3:-- INSERT --}                                      |
       {3:-- TERMINAL --}                                    |
     ]])
-    feed_data('\027\000')  -- ESC: go to Normal mode.
+    feed_data('\027[27u')  -- ESC: go to Normal mode.
     wait_for_mode('n')
     -- Dot-repeat/redo.
     feed_data('.')
@@ -871,7 +1095,7 @@ describe('TUI', function()
 
     feed_data(':set statusline=^^^^^^^\n')
     feed_data(':set termguicolors\n')
-    feed_data(':terminal '..nvim_dir..'/tty-test\n')
+    feed_data(':terminal '..testprg('tty-test')..'\n')
     -- Depending on platform the above might or might not fit in the cmdline
     -- so clear it for consistent behavior.
     feed_data(':\027')
@@ -1098,7 +1322,7 @@ describe('TUI FocusGained/FocusLost', function()
   end)
 
   it('in terminal-mode', function()
-    feed_data(':set shell='..nvim_dir..'/shell-test\n')
+    feed_data(':set shell='..testprg('shell-test')..'\n')
     feed_data(':set noshowmode laststatus=0\n')
 
     feed_data(':terminal\n')
