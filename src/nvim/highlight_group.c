@@ -9,6 +9,7 @@
 #include "nvim/autocmd.h"
 #include "nvim/charset.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/eval/vars.h"
 #include "nvim/fold.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
@@ -955,8 +956,8 @@ void do_highlight(const char *line, const bool forceit, const bool init)
         linep++;
       }
       size_t key_len = (size_t)(linep - key_start);
-      if (key_len > sizeof key - 1) {
-        semsg(_("E423: Illegal argument"));
+      if (key_len > sizeof(key) - 1) {
+        emsg(_("E423: Illegal argument"));
         error = true;
         break;
       }
@@ -1003,8 +1004,8 @@ void do_highlight(const char *line, const bool forceit, const bool init)
         break;
       }
       size_t arg_len = (size_t)(linep - arg_start);
-      if (arg_len > sizeof arg - 1) {
-        semsg(_("E423: Illegal argument"));
+      if (arg_len > sizeof(arg) - 1) {
+        emsg(_("E423: Illegal argument"));
         error = true;
         break;
       }
@@ -1409,7 +1410,7 @@ Dictionary get_global_hl_defs(void)
     Dictionary attrs = ARRAY_DICT_INIT;
     HlGroup *h = &hl_table[i - 1];
     if (h->sg_attr > 0) {
-      attrs = hlattrs2dict(syn_attr2entry(h->sg_attr), true);
+      attrs = hlattrs2dict(NULL, syn_attr2entry(h->sg_attr), true);
     } else if (h->sg_link > 0) {
       const char *link = (const char *)hl_table[h->sg_link - 1].sg_name;
       PUT(attrs, "link", STRING_OBJ(cstr_to_string(link)));

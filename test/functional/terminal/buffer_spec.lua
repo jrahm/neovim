@@ -5,12 +5,15 @@ local feed, clear, nvim = helpers.feed, helpers.clear, helpers.nvim
 local poke_eventloop = helpers.poke_eventloop
 local eval, feed_command, source = helpers.eval, helpers.feed_command, helpers.source
 local eq, neq = helpers.eq, helpers.neq
+local meths = helpers.meths
+local retry = helpers.retry
 local write_file = helpers.write_file
 local command = helpers.command
 local exc_exec = helpers.exc_exec
 local matches = helpers.matches
 local exec_lua = helpers.exec_lua
 local sleep = helpers.sleep
+local funcs = helpers.funcs
 
 describe(':terminal buffer', function()
   local screen
@@ -298,6 +301,44 @@ describe(':terminal buffer', function()
     feed_command('put a')  -- register a is empty
     helpers.assert_alive()
   end)
+
+  it([[can use temporary normal mode <c-\><c-o>]], function()
+    eq('t', funcs.mode(1))
+    feed [[<c-\><c-o>]]
+    screen:expect{grid=[[
+      tty ready                                         |
+      {2:^ }                                                 |
+                                                        |
+                                                        |
+                                                        |
+                                                        |
+      {3:-- (terminal) --}                                  |
+    ]]}
+    eq('ntT', funcs.mode(1))
+
+    feed [[:let g:x = 17]]
+    screen:expect{grid=[[
+      tty ready                                         |
+      {2: }                                                 |
+                                                        |
+                                                        |
+                                                        |
+                                                        |
+      :let g:x = 17^                                     |
+    ]]}
+
+    feed [[<cr>]]
+    screen:expect{grid=[[
+      tty ready                                         |
+      {1: }                                                 |
+                                                        |
+                                                        |
+                                                        |
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]]}
+    eq('t', funcs.mode(1))
+  end)
 end)
 
 describe('No heap-buffer-overflow when using', function()
@@ -363,4 +404,12 @@ describe('on_lines does not emit out-of-bounds line indexes when', function()
     feed_command('bdelete!')
     eq('', exec_lua([[return _G.cb_error]]))
   end)
+end)
+
+it('terminal truncates number of composing characters to 5', function()
+  clear()
+  local chan = meths.open_term(0, {})
+  local composing = ('a̳'):sub(2)
+  meths.chan_send(chan, 'a' .. composing:rep(8))
+  retry(nil, nil, function() eq('a' .. composing:rep(5), meths.get_current_line()) end)
 end)

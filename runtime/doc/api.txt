@@ -348,7 +348,7 @@ callbacks. These callbacks are called frequently in various contexts;
 
 |nvim_buf_attach()| will take keyword args for the callbacks. "on_lines" will
 receive parameters ("lines", {buf}, {changedtick}, {firstline}, {lastline},
-{new_lastline}, {old_byte_size}[, {old_utf32_size}, {old_utf16_size}]).
+{new_lastline}, {old_byte_size} [, {old_utf32_size}, {old_utf16_size}]).
 Unlike remote channel events the text contents are not passed. The new text can
 be accessed inside the callback as
 
@@ -536,12 +536,6 @@ created for extmark changes.
 ==============================================================================
 Global Functions                                                  *api-global*
 
-nvim__get_hl_defs({ns_id})                               *nvim__get_hl_defs()*
-                TODO: Documentation
-
-nvim__get_lib_dir()                                      *nvim__get_lib_dir()*
-                TODO: Documentation
-
 nvim__get_runtime({pat}, {all}, {*opts})                 *nvim__get_runtime()*
                 Find files in runtime directories
 
@@ -608,15 +602,6 @@ nvim__inspect_cell({grid}, {row}, {col})                *nvim__inspect_cell()*
                 NB: if your UI doesn't use hlstate, this will not return
                 hlstate first time.
 
-nvim__runtime_inspect()                              *nvim__runtime_inspect()*
-                TODO: Documentation
-
-nvim__screenshot({path})                                  *nvim__screenshot()*
-                TODO: Documentation
-
-                Attributes: ~
-                    |api-fast|
-
 nvim__set_hl_ns({ns_id})                                   *nvim__set_hl_ns()*
                 Set active namespace for highlights.
 
@@ -637,12 +622,6 @@ nvim__stats()                                                  *nvim__stats()*
 
                 Return: ~
                     Map of various internal stats.
-
-nvim__unpack({str})                                           *nvim__unpack()*
-                TODO: Documentation
-
-                Attributes: ~
-                    |api-fast|
 
 nvim_call_atomic({calls})                                 *nvim_call_atomic()*
                 Calls many API methods atomically.
@@ -995,7 +974,7 @@ nvim_get_keymap({mode})                                    *nvim_get_keymap()*
                     {mode}  Mode short-name ("n", "i", "v", ...)
 
                 Return: ~
-                    Array of maparg()-like dictionaries describing mappings.
+                    Array of |maparg()|-like dictionaries describing mappings.
                     The "buffer" key is always zero.
 
 nvim_get_mark({name}, {opts})                                *nvim_get_mark()*
@@ -1529,7 +1508,12 @@ nvim_set_keymap({mode}, {lhs}, {rhs}, {*opts})             *nvim_set_keymap()*
                             used to give a description to the mapping. When
                             called from Lua, also accepts a "callback" key
                             that takes a Lua function to call when the mapping
-                            is executed.
+                            is executed. When "expr" is true,
+                            "replace_keycodes" (boolean) can be used to
+                            replace keycodes in the resulting string (see
+                            |nvim_replace_termcodes()|), and a Lua callback
+                            returning `nil` is equivalent to returning an
+                            empty string.
 
 nvim_set_var({name}, {value})                                 *nvim_set_var()*
                 Sets a global (g:) variable.
@@ -1989,7 +1973,7 @@ nvim_buf_get_option({buffer}, {name})                  *nvim_buf_get_option()*
                     Option value
 
 nvim_buf_set_option({buffer}, {name}, {value})         *nvim_buf_set_option()*
-                Sets a buffer option value. Passing 'nil' as value deletes the
+                Sets a buffer option value. Passing `nil` as value deletes the
                 option (only works if there's a global fallback)
 
                 Parameters: ~
@@ -2096,8 +2080,8 @@ nvim_win_get_option({window}, {name})                  *nvim_win_get_option()*
                     Option value
 
 nvim_win_set_option({window}, {name}, {value})         *nvim_win_set_option()*
-                Sets a window option value. Passing 'nil' as value deletes the
-                option(only works if there's a global fallback)
+                Sets a window option value. Passing `nil` as value deletes the
+                option (only works if there's a global fallback)
 
                 Parameters: ~
                     {window}  Window handle, or 0 for current window
@@ -2123,13 +2107,6 @@ affected.
 
 You can use |nvim_buf_is_loaded()| or |nvim_buf_line_count()|
 to check whether a buffer is loaded.
-
-                                                    *nvim__buf_redraw_range()*
-nvim__buf_redraw_range({buffer}, {first}, {last})
-                TODO: Documentation
-
-nvim__buf_stats({buffer})                                  *nvim__buf_stats()*
-                TODO: Documentation
 
 nvim_buf_attach({buffer}, {send_buffer}, {opts})           *nvim_buf_attach()*
                 Activates buffer-update events on a channel, or as Lua
@@ -2325,7 +2302,7 @@ nvim_buf_get_keymap({buffer}, {mode})                  *nvim_buf_get_keymap()*
                     {buffer}  Buffer handle, or 0 for current buffer
 
                 Return: ~
-                    Array of maparg()-like dictionaries describing mappings.
+                    Array of |maparg()|-like dictionaries describing mappings.
                     The "buffer" key holds the associated buffer handle.
 
                                                         *nvim_buf_get_lines()*

@@ -15,6 +15,7 @@
 #include "nvim/buffer_defs.h"
 #include "nvim/change.h"
 #include "nvim/cursor.h"
+#include "nvim/eval/funcs.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/event/loop.h"
@@ -416,9 +417,9 @@ static int nlua_wait(lua_State *lstate)
   LOOP_PROCESS_EVENTS_UNTIL(&main_loop,
                             loop_events,
                             (int)timeout,
-                            is_function ? nlua_wait_condition(lstate,
-                                                              &pcall_status,
-                                                              &callback_result) : false || got_int);
+                            got_int || (is_function ? nlua_wait_condition(lstate,
+                                                                          &pcall_status,
+                                                                          &callback_result) : false));
 
   // Stop dummy timer
   time_watcher_stop(tw);
@@ -1673,7 +1674,7 @@ static void nlua_add_treesitter(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   lua_setfield(lstate, -2, "_ts_get_minimum_language_version");
 }
 
-int nlua_expand_pat(expand_T *xp, char_u *pat, int *num_results, char_u ***results)
+int nlua_expand_pat(expand_T *xp, char_u *pat, int *num_results, char ***results)
 {
   lua_State *const lstate = global_lstate;
   int ret = OK;
@@ -1685,7 +1686,7 @@ int nlua_expand_pat(expand_T *xp, char_u *pat, int *num_results, char_u ***resul
   lua_getfield(lstate, -1, "_expand_pat");
   luaL_checktype(lstate, -1, LUA_TFUNCTION);
 
-  // [ vim, vim._on_key, buf ]
+  // [ vim, vim._expand_pat, buf ]
   lua_pushlstring(lstate, (const char *)pat, STRLEN(pat));
 
   if (nlua_pcall(lstate, 1, 2) != 0) {
@@ -1838,7 +1839,7 @@ void nlua_execute_on_key(int c)
   // [ vim ]
   lua_getglobal(lstate, "vim");
 
-  // [ vim, vim._on_key]
+  // [ vim, vim._on_key ]
   lua_getfield(lstate, -1, "_on_key");
   luaL_checktype(lstate, -1, LUA_TFUNCTION);
 

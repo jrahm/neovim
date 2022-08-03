@@ -9,13 +9,16 @@
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/encode.h"
+#include "nvim/eval/funcs.h"
 #include "nvim/eval/userfunc.h"
+#include "nvim/eval/vars.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/fileio.h"
 #include "nvim/getchar.h"
 #include "nvim/globals.h"
+#include "nvim/insexpand.h"
 #include "nvim/lua/executor.h"
 #include "nvim/os/input.h"
 #include "nvim/regexp.h"
@@ -1265,7 +1268,7 @@ void free_all_functions(void)
   // Clean up the current_funccal chain and the funccal stack.
   while (current_funccal != NULL) {
     tv_clear(current_funccal->rettv);
-    cleanup_function_call(current_funccal);
+    cleanup_function_call(current_funccal);  // -V595
     if (current_funccal == NULL && funccal_stack != NULL) {
       restore_funccal();
     }

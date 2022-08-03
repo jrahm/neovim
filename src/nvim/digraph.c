@@ -1662,28 +1662,28 @@ bool check_digraph_chars_valid(int char1, int char2)
 /// format: {c1}{c2} char {c1}{c2} char ...
 ///
 /// @param str
-void putdigraph(char_u *str)
+void putdigraph(char *str)
 {
   while (*str != NUL) {
-    str = (char_u *)skipwhite((char *)str);
+    str = skipwhite(str);
 
     if (*str == NUL) {
       return;
     }
-    char_u char1 = *str++;
-    char_u char2 = *str++;
+    uint8_t char1 = (uint8_t)(*str++);
+    uint8_t char2 = (uint8_t)(*str++);
 
     if (!check_digraph_chars_valid(char1, char2)) {
       return;
     }
 
-    str = (char_u *)skipwhite((char *)str);
+    str = skipwhite(str);
 
     if (!ascii_isdigit(*str)) {
       emsg(_(e_number_exp));
       return;
     }
-    int n = getdigits_int((char **)&str, true, 0);
+    int n = getdigits_int(&str, true, 0);
 
     registerdigraph(char1, char2, n);
   }
@@ -2121,7 +2121,7 @@ void ex_loadkeymap(exarg_T *eap)
     vim_snprintf((char *)buf, sizeof(buf), "<buffer> %s %s",
                  ((kmap_T *)curbuf->b_kmap_ga.ga_data)[i].from,
                  ((kmap_T *)curbuf->b_kmap_ga.ga_data)[i].to);
-    (void)do_map(0, buf, MODE_LANGMAP, false);
+    (void)do_map(MAPTYPE_MAP, buf, MODE_LANGMAP, false);
   }
 
   p_cpo = save_cpo;
@@ -2158,7 +2158,7 @@ static void keymap_unload(void)
 
   for (int i = 0; i < curbuf->b_kmap_ga.ga_len; i++) {
     vim_snprintf(buf, sizeof(buf), "<buffer> %s", kp[i].from);
-    (void)do_map(1, (char_u *)buf, MODE_LANGMAP, false);
+    (void)do_map(MAPTYPE_UNMAP, (char_u *)buf, MODE_LANGMAP, false);
   }
   keymap_ga_clear(&curbuf->b_kmap_ga);
 

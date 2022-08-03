@@ -89,6 +89,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   # them be included as one of the first places to look for dependencies.
   list(APPEND CMAKE_PREFIX_PATH /sw /opt/local)
 
+  # If the macOS deployment target is not set manually (via $MACOSX_DEPLOYMENT_TARGET),
+  # fall back to local system version. Needs to be done both here and in cmake.deps.
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    execute_process(COMMAND sw_vers -productVersion
+                    OUTPUT_VARIABLE MACOS_VERSION
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_VERSION}")
+  endif()
+  message("Using deployment target ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+
   # Work around some old, broken detection by CMake for knowing when to use the
   # isystem flag.  Apple's compilers have supported this for quite some time
   # now.
@@ -665,6 +675,19 @@ add_dependencies(lintcommit nvim)
 add_custom_target(lint)
 add_dependencies(lint check-single-includes lintc lintlua lintpy lintsh lintcommit lintuncrustify)
 
+#
+# Format
+#
+add_custom_target(formatlua
+  COMMAND ${CMAKE_COMMAND}
+    -D FORMAT_PRG=${STYLUA_PRG}
+    -D LANG=lua
+    -P ${PROJECT_SOURCE_DIR}/cmake/Format.cmake
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_custom_target(format)
+add_dependencies(format formatc formatlua)
+
 install_helper(
   FILES ${CMAKE_SOURCE_DIR}/src/man/nvim.1
   DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
@@ -787,4 +810,3 @@ add_custom_target(uninstall
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   add_subdirectory(cmake.packaging)
 endif()
-

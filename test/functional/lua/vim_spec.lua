@@ -2148,6 +2148,13 @@ describe('lua stdlib', function()
     ]]
     eq('2', funcs.luaeval "BUF")
     eq(2, funcs.luaeval "#vim.api.nvim_list_bufs()")
+
+    -- vim.cmd can be indexed with a command name
+    exec_lua [[
+      vim.cmd.let 'g:var = 2'
+    ]]
+
+    eq(2, funcs.luaeval "vim.g.var")
   end)
 
   it('vim.regex', function()
@@ -2493,6 +2500,41 @@ describe('lua stdlib', function()
 
       eq(false, pcall_result)
     end)
+
+    describe('returns -2 when interrupted', function()
+      before_each(function()
+        local channel = meths.get_api_info()[1]
+        meths.set_var('channel', channel)
+      end)
+
+      it('without callback', function()
+        exec_lua([[
+          function _G.Wait()
+            vim.rpcnotify(vim.g.channel, 'ready')
+            local _, interrupted = vim.wait(4000)
+            vim.rpcnotify(vim.g.channel, 'wait', interrupted)
+          end
+        ]])
+        feed(':lua _G.Wait()<CR>')
+        eq({'notification', 'ready', {}}, next_msg(500))
+        feed('<C-C>')
+        eq({'notification', 'wait', {-2}}, next_msg(500))
+      end)
+
+      it('with callback', function()
+        exec_lua([[
+          function _G.Wait()
+            vim.rpcnotify(vim.g.channel, 'ready')
+            local _, interrupted = vim.wait(4000, function() end)
+            vim.rpcnotify(vim.g.channel, 'wait', interrupted)
+          end
+        ]])
+        feed(':lua _G.Wait()<CR>')
+        eq({'notification', 'ready', {}}, next_msg(500))
+        feed('<C-C>')
+        eq({'notification', 'wait', {-2}}, next_msg(500))
+      end)
+    end)
   end)
 
   it('vim.notify_once', function()
@@ -2750,12 +2792,12 @@ describe('vim.keymap', function()
 
   it('can make an expr mapping', function()
     exec_lua [[
-      vim.keymap.set('n', 'aa', function() return ':lua SomeValue = 99<cr>' end, {expr = true})
+      vim.keymap.set('n', 'aa', function() return '<Insert>π<C-V><M-π>foo<lt><Esc>' end, {expr = true})
     ]]
 
     feed('aa')
 
-    eq(99, exec_lua[[return SomeValue]])
+    eq({'π<M-π>foo<'}, meths.buf_get_lines(0, 0, -1, false))
   end)
 
   it('can overwrite a mapping', function()

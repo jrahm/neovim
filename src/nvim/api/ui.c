@@ -27,7 +27,7 @@ typedef struct {
   uint64_t channel_id;
 
 #define UI_BUF_SIZE 4096  ///< total buffer size for pending msgpack data.
-  /// guranteed size available for each new event (so packing of simple events
+  /// guaranteed size available for each new event (so packing of simple events
   /// and the header of grid_line will never fail)
 #define EVENT_BUF_SIZE 256
   char buf[UI_BUF_SIZE];  ///< buffer of packed but not yet sent msgpack data
@@ -43,7 +43,7 @@ typedef struct {
 
   // We start packing the two outermost msgpack arrays before knowing the total
   // number of elements. Thus track the location where array size will need
-  // to be written in the msgpack buffer, once the specifc array is finished.
+  // to be written in the msgpack buffer, once the specific array is finished.
   char *nevents_pos;
   char *ncalls_pos;
   uint32_t nevents;  ///< number of distinct events (top-level args to "redraw"
@@ -748,8 +748,10 @@ static void remote_ui_hl_attr_define(UI *ui, Integer id, HlAttrs rgb_attrs, HlAt
   UIData *data = ui->data;
   Array args = data->call_buf;
   ADD_C(args, INTEGER_OBJ(id));
-  ADD_C(args, DICTIONARY_OBJ(hlattrs2dict(rgb_attrs, true)));
-  ADD_C(args, DICTIONARY_OBJ(hlattrs2dict(cterm_attrs, false)));
+  MAXSIZE_TEMP_DICT(rgb, 16);
+  MAXSIZE_TEMP_DICT(cterm, 16);
+  ADD_C(args, DICTIONARY_OBJ(hlattrs2dict(&rgb, rgb_attrs, true)));
+  ADD_C(args, DICTIONARY_OBJ(hlattrs2dict(&cterm, cterm_attrs, false)));
 
   if (ui->ui_ext[kUIHlState]) {
     ADD_C(args, ARRAY_OBJ(info));
@@ -758,9 +760,6 @@ static void remote_ui_hl_attr_define(UI *ui, Integer id, HlAttrs rgb_attrs, HlAt
   }
 
   push_call(ui, "hl_attr_define", args);
-  // TODO(bfredl): could be elided
-  api_free_dictionary(kv_A(args, 1).data.dictionary);
-  api_free_dictionary(kv_A(args, 2).data.dictionary);
 }
 
 static void remote_ui_highlight_set(UI *ui, int id)
@@ -772,11 +771,9 @@ static void remote_ui_highlight_set(UI *ui, int id)
     return;
   }
   data->hl_id = id;
-  Dictionary hl = hlattrs2dict(syn_attr2entry(id), ui->rgb);
-
-  ADD_C(args, DICTIONARY_OBJ(hl));
+  MAXSIZE_TEMP_DICT(dict, 16);
+  ADD_C(args, DICTIONARY_OBJ(hlattrs2dict(&dict, syn_attr2entry(id), ui->rgb)));
   push_call(ui, "highlight_set", args);
-  api_free_dictionary(kv_A(args, 0).data.dictionary);
 }
 
 /// "true" cursor used only for input focus
@@ -963,7 +960,7 @@ static Array translate_contents(UI *ui, Array contents)
     Array new_item = ARRAY_DICT_INIT;
     int attr = (int)item.items[0].data.integer;
     if (attr) {
-      Dictionary rgb_attrs = hlattrs2dict(syn_attr2entry(attr), ui->rgb);
+      Dictionary rgb_attrs = hlattrs2dict(NULL, syn_attr2entry(attr), ui->rgb);
       ADD(new_item, DICTIONARY_OBJ(rgb_attrs));
     } else {
       ADD(new_item, DICTIONARY_OBJ((Dictionary)ARRAY_DICT_INIT));

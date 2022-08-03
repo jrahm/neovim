@@ -289,6 +289,7 @@ struct wininfo_S {
   winopt_T wi_opt;              // local window options
   bool wi_fold_manual;          // copy of w_fold_manual
   garray_T wi_folds;            // clone of w_folds
+  int wi_changelistidx;         // copy of w_changelistidx
 };
 
 /*
@@ -368,6 +369,7 @@ struct mapblock {
   char m_expr;                  // <expr> used, m_str is an expression
   sctx_T m_script_ctx;          // SCTX where map was defined
   char *m_desc;                 // description of keymap
+  bool m_replace_keycodes;      // replace termcodes in lua function
 };
 
 /// Used for highlighting in the status line.
@@ -444,11 +446,11 @@ typedef struct {
                                         // "containedin" argument
   int b_syn_sync_flags;                 // flags about how to sync
   int16_t b_syn_sync_id;                // group to sync on
-  long b_syn_sync_minlines;             // minimal sync lines offset
-  long b_syn_sync_maxlines;             // maximal sync lines offset
-  long b_syn_sync_linebreaks;           // offset for multi-line pattern
-  char_u *b_syn_linecont_pat;      // line continuation pattern
-  regprog_T *b_syn_linecont_prog;     // line continuation program
+  linenr_T b_syn_sync_minlines;         // minimal sync lines offset
+  linenr_T b_syn_sync_maxlines;         // maximal sync lines offset
+  linenr_T b_syn_sync_linebreaks;       // offset for multi-line pattern
+  char_u *b_syn_linecont_pat;           // line continuation pattern
+  regprog_T *b_syn_linecont_prog;       // line continuation program
   syn_time_T b_syn_linecont_time;
   int b_syn_linecont_ic;                // ignore-case flag for above
   int b_syn_topgrp;                     // for ":syntax include"
@@ -582,9 +584,9 @@ struct file_buffer {
   linenr_T b_mod_top;           // topmost lnum that was changed
   linenr_T b_mod_bot;           // lnum below last changed line, AFTER the
                                 // change
-  long b_mod_xlines;            // number of extra buffer lines inserted;
+  linenr_T b_mod_xlines;        // number of extra buffer lines inserted;
                                 // negative when lines were deleted
-  wininfo_T *b_wininfo;       // list of last used info for each window
+  wininfo_T *b_wininfo;         // list of last used info for each window
   disptick_T b_mod_tick_syn;    // last display tick syntax was updated
   disptick_T b_mod_tick_decor;  // last display tick decoration providers
                                 // where invoked
@@ -946,16 +948,15 @@ struct diffblock_S {
 typedef struct tabpage_S tabpage_T;
 struct tabpage_S {
   handle_T handle;
-  tabpage_T *tp_next;         ///< next tabpage or NULL
-  frame_T *tp_topframe;     ///< topframe for the windows
-  win_T *tp_curwin;       ///< current window in this Tab page
-  win_T *tp_prevwin;      ///< previous window in this Tab page
-  win_T *tp_firstwin;     ///< first window in this Tab page
-  win_T *tp_lastwin;      ///< last window in this Tab page
-  long tp_old_Rows;                 ///< Rows when Tab page was left
-  long tp_old_Columns;              ///< Columns when Tab page was left
-  long tp_ch_used;                  ///< value of 'cmdheight' when frame size
-                                    ///< was set
+  tabpage_T *tp_next;      ///< next tabpage or NULL
+  frame_T *tp_topframe;    ///< topframe for the windows
+  win_T *tp_curwin;        ///< current window in this Tab page
+  win_T *tp_prevwin;       ///< previous window in this Tab page
+  win_T *tp_firstwin;      ///< first window in this Tab page
+  win_T *tp_lastwin;       ///< last window in this Tab page
+  long tp_old_Rows_avail;  ///< ROWS_AVAIL when Tab page was left
+  long tp_old_Columns;     ///< Columns when Tab page was left
+  long tp_ch_used;         ///< value of 'cmdheight' when frame size was set
 
   diff_T *tp_first_diff;
   buf_T *(tp_diffbuf[DB_COUNT]);

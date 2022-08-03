@@ -21,6 +21,7 @@
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/userfunc.h"
+#include "nvim/eval/vars.h"
 #include "nvim/event/rstream.h"
 #include "nvim/event/wstream.h"
 #include "nvim/ex_cmds.h"
@@ -1395,7 +1396,7 @@ static int parse_count(exarg_T *eap, char **errormsg, bool validate)
   if ((eap->argt & EX_COUNT) && ascii_isdigit(*eap->arg)
       && (!(eap->argt & EX_BUFNAME) || *(p = skipdigits(eap->arg + 1)) == NUL
           || ascii_iswhite(*p))) {
-    n = getdigits_long((char_u **)&eap->arg, false, -1);
+    n = getdigits_long(&eap->arg, false, -1);
     eap->arg = skipwhite(eap->arg);
     if (n <= 0 && (eap->argt & EX_ZEROR) == 0) {
       if (errormsg != NULL) {
@@ -1623,7 +1624,7 @@ int execute_cmd(exarg_T *eap, CmdParseInfo *cmdinfo, bool preview)
 
   // If filename expansion is enabled, expand filenames
   if (cmdinfo->magic.file) {
-    if (expand_filename(eap, (char_u **)eap->cmdlinep, &errormsg) == FAIL) {
+    if (expand_filename(eap, eap->cmdlinep, &errormsg) == FAIL) {
       goto end;
     }
   }
@@ -2289,7 +2290,7 @@ static char *do_one_cmd(char **cmdlinep, int flags, cstack_T *cstack, LineGetter
   }
 
   if (ea.argt & EX_XFILE) {
-    if (expand_filename(&ea, (char_u **)cmdlinep, &errormsg) == FAIL) {
+    if (expand_filename(&ea, cmdlinep, &errormsg) == FAIL) {
       goto doend;
     }
   }
@@ -2852,11 +2853,13 @@ int parse_cmd_address(exarg_T *eap, char **errormsg, bool silent)
           if (!mark_check(fm)) {
             goto theend;
           }
+          assert(fm != NULL);
           eap->line1 = fm->mark.lnum;
           fm = mark_get_visual(curbuf, '>');
           if (!mark_check(fm)) {
             goto theend;
           }
+          assert(fm != NULL);
           eap->line2 = fm->mark.lnum;
           eap->addr_count++;
         }
@@ -3049,6 +3052,7 @@ char *find_ex_command(exarg_T *eap, int *full)
     } else {
       eap->cmdidx = CMD_bang;
     }
+    assert(eap->cmdidx >= 0);
 
     for (; (int)eap->cmdidx < CMD_SIZE;
          eap->cmdidx = (cmdidx_T)((int)eap->cmdidx + 1)) {
@@ -3268,6 +3272,7 @@ int cmd_exists(const char *const name)
   // For ":2match" and ":3match" we need to skip the number.
   ea.cmd = (char *)((*name == '2' || *name == '3') ? name + 1 : name);
   ea.cmdidx = (cmdidx_T)0;
+  ea.flags = 0;
   int full = false;
   p = find_ex_command(&ea, &full);
   if (p == NULL) {
@@ -3301,6 +3306,7 @@ void f_fullcommand(typval_T *argvars, typval_T *rettv, FunPtr fptr)
 
   ea.cmd = (*name == '2' || *name == '3') ? name + 1 : name;
   ea.cmdidx = (cmdidx_T)0;
+  ea.flags = 0;
   char *p = find_ex_command(&ea, NULL);
   if (p == NULL || ea.cmdidx == CMD_SIZE) {
     return;
@@ -4390,6 +4396,7 @@ static linenr_T get_address(exarg_T *eap, char **ptr, cmd_addr_T addr_type, int 
             cmd = NULL;
             goto error;
           }
+          assert(fm != NULL);
           lnum = fm->mark.lnum;
         }
       }
@@ -4482,7 +4489,7 @@ static linenr_T get_address(exarg_T *eap, char **ptr, cmd_addr_T addr_type, int 
 
     default:
       if (ascii_isdigit(*cmd)) {                // absolute line number
-        lnum = (linenr_T)getdigits((char_u **)&cmd, false, 0);
+        lnum = (linenr_T)getdigits(&cmd, false, 0);
       }
     }
 
@@ -4731,78 +4738,46 @@ static char *skip_grep_pat(exarg_T *eap)
 
 /// For the ":make" and ":grep" commands insert the 'makeprg'/'grepprg' option
 /// in the command line, so that things like % get expanded.
-char *replace_makeprg(exarg_T *eap, char *p, char **cmdlinep)
+char *replace_makeprg(exarg_T *eap, char *arg, char **cmdlinep)
 {
-  char *new_cmdline;
-  char *program;
-  char *pos;
-  char *ptr;
-  int len;
-  size_t i;
+  bool isgrep = eap->cmdidx == CMD_grep
+                || eap->cmdidx == CMD_lgrep
+                || eap->cmdidx == CMD_grepadd
+                || eap->cmdidx == CMD_lgrepadd;
 
-  /*
-   * Don't do it when ":vimgrep" is used for ":grep".
-   */
-  if ((eap->cmdidx == CMD_make || eap->cmdidx == CMD_lmake
-       || eap->cmdidx == CMD_grep || eap->cmdidx == CMD_lgrep
-       || eap->cmdidx == CMD_grepadd
-       || eap->cmdidx == CMD_lgrepadd)
+  // Don't do it when ":vimgrep" is used for ":grep".
+  if ((eap->cmdidx == CMD_make || eap->cmdidx == CMD_lmake || isgrep)
       && !grep_internal(eap->cmdidx)) {
-    if (eap->cmdidx == CMD_grep || eap->cmdidx == CMD_lgrep
-        || eap->cmdidx == CMD_grepadd || eap->cmdidx == CMD_lgrepadd) {
-      if (*curbuf->b_p_gp == NUL) {
-        program = (char *)p_gp;
-      } else {
-        program = (char *)curbuf->b_p_gp;
-      }
-    } else {
-      if (*curbuf->b_p_mp == NUL) {
-        program = (char *)p_mp;
-      } else {
-        program = (char *)curbuf->b_p_mp;
-      }
-    }
+    const char *program = isgrep ? (*curbuf->b_p_gp == NUL ? (char *)p_gp : (char *)curbuf->b_p_gp)
+                                 : (*curbuf->b_p_mp == NUL ? (char *)p_mp : (char *)curbuf->b_p_mp);
 
-    p = skipwhite(p);
+    arg = skipwhite(arg);
 
-    if ((pos = strstr(program, "$*")) != NULL) {
-      // replace $* by given arguments
-      i = 1;
-      while ((pos = strstr(pos + 2, "$*")) != NULL) {
-        i++;
-      }
-      len = (int)STRLEN(p);
-      new_cmdline = xmalloc(STRLEN(program) + i * (size_t)(len - 2) + 1);
-      ptr = new_cmdline;
-      while ((pos = strstr(program, "$*")) != NULL) {
-        i = (size_t)(pos - program);
-        memcpy(ptr, program, i);
-        STRCPY(ptr += i, p);
-        ptr += len;
-        program = pos + 2;
-      }
-      STRCPY(ptr, program);
-    } else {
-      new_cmdline = xmalloc(STRLEN(program) + STRLEN(p) + 2);
+    char *new_cmdline;
+    // Replace $* by given arguments
+    if ((new_cmdline = strrep(program, "$*", arg)) == NULL) {
+      // No $* in arg, build "<makeprg> <arg>" instead
+      new_cmdline = xmalloc(STRLEN(program) + STRLEN(arg) + 2);
       STRCPY(new_cmdline, program);
       STRCAT(new_cmdline, " ");
-      STRCAT(new_cmdline, p);
+      STRCAT(new_cmdline, arg);
     }
-    msg_make((char_u *)p);
+
+    msg_make((char_u *)arg);
 
     // 'eap->cmd' is not set here, because it is not used at CMD_make
     xfree(*cmdlinep);
     *cmdlinep = new_cmdline;
-    p = new_cmdline;
+    arg = new_cmdline;
   }
-  return p;
+  return arg;
 }
 
 /// Expand file name in Ex command argument.
 /// When an error is detected, "errormsgp" is set to a non-NULL pointer.
 ///
 /// @return  FAIL for failure, OK otherwise.
-int expand_filename(exarg_T *eap, char_u **cmdlinep, char **errormsgp)
+int expand_filename(exarg_T *eap, char **cmdlinep, char **errormsgp)
 {
   int has_wildcards;            // need to expand wildcards
   char *repl;
@@ -4908,7 +4883,7 @@ int expand_filename(exarg_T *eap, char_u **cmdlinep, char **errormsgp)
       repl = l;
     }
 
-    p = repl_cmdline(eap, p, srclen, repl, (char **)cmdlinep);
+    p = repl_cmdline(eap, p, srclen, repl, cmdlinep);
     xfree(repl);
   }
 
@@ -4935,7 +4910,7 @@ int expand_filename(exarg_T *eap, char_u **cmdlinep, char **errormsgp)
         p = NULL;
       }
       if (p != NULL) {
-        (void)repl_cmdline(eap, eap->arg, STRLEN(eap->arg), p, (char **)cmdlinep);
+        (void)repl_cmdline(eap, eap->arg, STRLEN(eap->arg), p, cmdlinep);
       }
     }
 
@@ -4962,7 +4937,7 @@ int expand_filename(exarg_T *eap, char_u **cmdlinep, char **errormsgp)
       if (p == NULL) {
         return FAIL;
       }
-      (void)repl_cmdline(eap, eap->arg, STRLEN(eap->arg), p, (char **)cmdlinep);
+      (void)repl_cmdline(eap, eap->arg, STRLEN(eap->arg), p, cmdlinep);
       xfree(p);
     }
   }
@@ -5246,7 +5221,7 @@ static int get_tabpage_arg(exarg_T *eap)
     }
 
     p_save = p;
-    tab_number = (int)getdigits((char_u **)&p, false, tab_number);
+    tab_number = (int)getdigits(&p, false, tab_number);
 
     if (relative == 0) {
       if (STRCMP(p, "$") == 0) {
@@ -5942,7 +5917,7 @@ two_count:
           return FAIL;
         }
 
-        *def = getdigits_long((char_u **)&p, true, 0);
+        *def = getdigits_long(&p, true, 0);
         *argt |= EX_ZEROR;
 
         if (p != val + vallen || vallen == 0) {
@@ -5968,7 +5943,7 @@ invalid_count:
           goto two_count;
         }
 
-        *def = getdigits_long((char_u **)&p, true, 0);
+        *def = getdigits_long(&p, true, 0);
 
         if (p != val + vallen) {
           goto invalid_count;
@@ -6783,9 +6758,18 @@ char *get_user_commands(expand_T *xp FUNC_ATTR_UNUSED, int idx)
   if (idx < buf->b_ucmds.ga_len) {
     return (char *)USER_CMD_GA(&buf->b_ucmds, idx)->uc_name;
   }
+
   idx -= buf->b_ucmds.ga_len;
   if (idx < ucmds.ga_len) {
-    return (char *)USER_CMD(idx)->uc_name;
+    char *name = (char *)USER_CMD(idx)->uc_name;
+
+    for (int i = 0; i < buf->b_ucmds.ga_len; i++) {
+      if (STRCMP(name, USER_CMD_GA(&buf->b_ucmds, i)->uc_name) == 0) {
+        // global command is overruled by buffer-local one
+        return "";
+      }
+    }
+    return name;
   }
   return NULL;
 }
@@ -7741,7 +7725,7 @@ static void ex_tabnext(exarg_T *eap)
     if (eap->arg && *eap->arg != NUL) {
       char *p = eap->arg;
       char *p_save = p;
-      tab_number = (int)getdigits((char_u **)&p, false, 0);
+      tab_number = (int)getdigits(&p, false, 0);
       if (p == p_save || *p_save == '-' || *p_save == '+' || *p != NUL
           || tab_number == 0) {
         // No numbers as argument.
@@ -8722,7 +8706,7 @@ static void ex_later(exarg_T *eap)
   if (*p == NUL) {
     count = 1;
   } else if (isdigit(*p)) {
-    count = getdigits_long((char_u **)&p, false, 0);
+    count = getdigits_long(&p, false, 0);
     switch (*p) {
     case 's':
       ++p; sec = true; break;
@@ -9239,7 +9223,7 @@ static void ex_findpat(exarg_T *eap)
 
   n = 1;
   if (ascii_isdigit(*eap->arg)) {  // get count
-    n = getdigits_long((char_u **)&eap->arg, false, 0);
+    n = getdigits_long(&eap->arg, false, 0);
     eap->arg = skipwhite(eap->arg);
   }
   if (*eap->arg == '/') {   // Match regexp, not just whole words
@@ -9997,7 +9981,7 @@ static void ex_setfiletype(exarg_T *eap)
 static void ex_digraphs(exarg_T *eap)
 {
   if (*eap->arg != NUL) {
-    putdigraph((char_u *)eap->arg);
+    putdigraph(eap->arg);
   } else {
     listdigraphs(eap->forceit);
   }

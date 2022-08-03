@@ -144,10 +144,9 @@ describe('TUI', function()
       {3:-- TERMINAL --}                                    |
     ]]}
 
-    -- TODO(bfredl): messes up the output (just like vim does).
     feed_data('g')
     screen:expect{grid=[[
-                    )                                   |
+      :call ManyErr()                                   |
       {8:Error detected while processing function ManyErr:} |
       {11:line    2:}                                        |
       {10:-- More --}{1: }                                       |
@@ -156,7 +155,7 @@ describe('TUI', function()
 
     screen:try_resize(50,10)
     screen:expect{grid=[[
-                    )                                   |
+      :call ManyErr()                                   |
       {8:Error detected while processing function ManyErr:} |
       {11:line    2:}                                        |
       {8:FAIL 0}                                            |
@@ -436,8 +435,11 @@ describe('TUI', function()
                                                         |
       {3:-- TERMINAL --}                                    |
     ]])
-    feed_data(':tab split\r:tabnew\r')
-    feed_data(':highlight Tabline ctermbg=NONE ctermfg=NONE cterm=underline\r')
+    child_session:request('nvim_command', [[
+      tab split
+      tabnew
+      highlight Tabline ctermbg=NONE ctermfg=NONE cterm=underline
+    ]])
     local attrs = screen:get_default_attr_ids()
     attrs[11] = {underline = true}
     screen:expect([[

@@ -19,6 +19,7 @@
 #include "nvim/eval/typval.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/highlight.h"
+#include "nvim/insexpand.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/menu.h"
@@ -1105,7 +1106,10 @@ void pum_show_popupmenu(vimmenu_T *menu)
     ui_flush();
 
     int c = vgetc();
-    if (c == ESC || c == Ctrl_C) {
+
+    // Bail out when typing Esc, CTRL-C or some callback or <expr> mapping
+    // closed the popup menu.
+    if (c == ESC || c == Ctrl_C || pum_array == NULL) {
       break;
     } else if (c == CAR || c == NL) {
       // enter: select current item, if any, and close

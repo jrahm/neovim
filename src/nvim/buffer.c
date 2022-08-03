@@ -37,6 +37,7 @@
 #include "nvim/diff.h"
 #include "nvim/digraph.h"
 #include "nvim/eval.h"
+#include "nvim/eval/vars.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
@@ -2482,6 +2483,9 @@ void buflist_setfpos(buf_T *const buf, win_T *const win, linenr_T lnum, colnr_T 
       wip->wi_mark.view = mark_view_make(win->w_topline, wip->wi_mark.mark);
     }
   }
+  if (win != NULL) {
+    wip->wi_changelistidx = win->w_changelistidx;
+  }
   if (copy_options && win != NULL) {
     // Save the window-specific option values.
     copy_winopt(&win->w_onebuf_opt, &wip->wi_opt);
@@ -2584,6 +2588,9 @@ void get_winopts(buf_T *buf)
     cloneFoldGrowArray(&wip->wi_folds, &curwin->w_folds);
   } else {
     copy_winopt(&curwin->w_allbuf_opt, &curwin->w_onebuf_opt);
+  }
+  if (wip != NULL) {
+    curwin->w_changelistidx = wip->wi_changelistidx;
   }
 
   if (curwin->w_float_config.style == kWinStyleMinimal) {
@@ -3281,7 +3288,7 @@ void maketitle(void)
       len = (int)STRLEN(buf_p);
       if (len > 100) {
         len -= 100;
-        len += mb_tail_off(buf_p, buf_p + len) + 1;
+        len += utf_cp_tail_off(buf_p, buf_p + len) + 1;
         buf_p += len;
       }
       STRCPY(icon_str, buf_p);
@@ -3463,7 +3470,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, int use_san
 
   // Proceed character by character through the statusline format string
   // fmt_p is the current position in the input buffer
-  for (char *fmt_p = usefmt; *fmt_p;) {
+  for (char *fmt_p = usefmt; *fmt_p != NUL;) {
     if (curitem == (int)stl_items_len) {
       size_t new_len = stl_items_len * 3 / 2;
 
@@ -3477,7 +3484,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, int use_san
       stl_items_len = new_len;
     }
 
-    if (*fmt_p != NUL && *fmt_p != '%') {
+    if (*fmt_p != '%') {
       prevchar_isflag = prevchar_isitem = false;
     }
 

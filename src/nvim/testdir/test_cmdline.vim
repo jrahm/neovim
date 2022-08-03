@@ -642,6 +642,9 @@ func Test_cmdline_remove_char()
 
     call feedkeys(":abc def\<S-Left>\<C-U>\<C-B>\"\<CR>", 'tx')
     call assert_equal('"def', @:, e)
+
+    " This was going before the start in latin1.
+    call feedkeys(": \<C-W>\<CR>", 'tx')
   endfor
 
   let &encoding = encoding_save
@@ -702,6 +705,16 @@ func Test_cmdline_complete_user_cmd()
   call feedkeys(":Foo b\<Tab>\<Home>\"\<cr>", 'tx')
   call assert_equal('"Foo blue', @:)
   delcommand Foo
+endfunc
+
+func Test_complete_user_cmd()
+  command FooBar echo 'global'
+  command -buffer FooBar echo 'local'
+  call feedkeys(":Foo\<C-A>\<Home>\"\<CR>", 'tx')
+  call assert_equal('"FooBar', @:)
+
+  delcommand -buffer FooBar
+  delcommand FooBar
 endfunc
 
 func s:ScriptLocalFunction()
@@ -1844,6 +1857,22 @@ endfunc
 func Test_long_error_message()
   " the error should be truncated, not overrun IObuff
   silent! norm Q00000000000000     000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000                                                                                                                                                                                                                        
+endfunc
+
+func Test_cmdline_redraw_tabline()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+      set showtabline=2
+      autocmd CmdlineEnter * set tabline=foo
+  END
+  call writefile(lines, 'Xcmdline_redraw_tabline')
+  let buf = RunVimInTerminal('-S Xcmdline_redraw_tabline', #{rows: 6})
+  call term_sendkeys(buf, ':')
+  call WaitForAssert({-> assert_match('^foo', term_getline(buf, 1))})
+
+  call StopVimInTerminal(buf)
+  call delete('Xcmdline_redraw_tabline')
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

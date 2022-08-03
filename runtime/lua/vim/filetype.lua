@@ -176,6 +176,7 @@ local extension = {
   bbappend = 'bitbake',
   bbclass = 'bitbake',
   bl = 'blank',
+  bsd = 'bsdl',
   bsdl = 'bsdl',
   bst = 'bst',
   btm = function(path, bufnr)
@@ -968,7 +969,7 @@ local extension = {
   txi = 'texinfo',
   texinfo = 'texinfo',
   text = 'text',
-  tfvars = 'terraform',
+  tfvars = 'terraform-vars',
   tla = 'tla',
   tli = 'tli',
   toml = 'toml',
@@ -1383,10 +1384,6 @@ local filename = {
   ['/etc/host.conf'] = 'hostconf',
   ['/etc/hosts.allow'] = 'hostsaccess',
   ['/etc/hosts.deny'] = 'hostsaccess',
-  ['/i3/config'] = 'i3config',
-  ['/sway/config'] = 'i3config',
-  ['/.sway/config'] = 'i3config',
-  ['/.i3/config'] = 'i3config',
   ['/.icewm/menu'] = 'icemenu',
   ['.indent.pro'] = 'indent',
   indentrc = 'indent',
@@ -1668,7 +1665,6 @@ local pattern = {
   ['.*/build/conf/.*%.conf'] = 'bitbake',
   ['.*/meta/conf/.*%.conf'] = 'bitbake',
   ['.*/meta%-.*/conf/.*%.conf'] = 'bitbake',
-  ['.*bsd'] = 'bsdl',
   ['bzr_log%..*'] = 'bzr',
   ['.*enlightenment/.*%.cfg'] = 'c',
   ['cabal%.project%..*'] = starsetf('cabalproject'),
@@ -1835,9 +1831,7 @@ local pattern = {
   ['.*/etc/hosts%.allow'] = 'hostsaccess',
   ['.*%.html%.m4'] = 'htmlm4',
   ['.*/%.i3/config'] = 'i3config',
-  ['.*/sway/config'] = 'i3config',
   ['.*/i3/config'] = 'i3config',
-  ['.*/%.sway/config'] = 'i3config',
   ['.*/%.icewm/menu'] = 'icemenu',
   ['.*/etc/initng/.*/.*%.i'] = 'initng',
   ['JAM.*%..*'] = starsetf('jam'),
@@ -2076,6 +2070,8 @@ local pattern = {
   end,
   ['.*/etc/sudoers'] = 'sudoers',
   ['svn%-commit.*%.tmp'] = 'svn',
+  ['.*/sway/config'] = 'swayconfig',
+  ['.*/%.sway/config'] = 'swayconfig',
   ['.*%.swift%.gyb'] = 'swiftgyb',
   ['.*%.[Ss][Yy][Ss]'] = function(path, bufnr)
     return require('vim.filetype.detect').sys(bufnr)
@@ -2241,30 +2237,30 @@ end
 --- <pre>
 ---  vim.filetype.add({
 ---    extension = {
----      foo = "fooscript",
+---      foo = 'fooscript',
 ---      bar = function(path, bufnr)
 ---        if some_condition() then
----          return "barscript", function(bufnr)
+---          return 'barscript', function(bufnr)
 ---            -- Set a buffer variable
 ---            vim.b[bufnr].barscript_version = 2
 ---          end
 ---        end
----        return "bar"
+---        return 'bar'
 ---      end,
 ---    },
 ---    filename = {
----      [".foorc"] = "toml",
----      ["/etc/foo/config"] = "toml",
+---      ['.foorc'] = 'toml',
+---      ['/etc/foo/config'] = 'toml',
 ---    },
 ---    pattern = {
----      [".*/etc/foo/.*"] = "fooscript",
+---      ['.*/etc/foo/.*'] = 'fooscript',
 ---      -- Using an optional priority
----      [".*/etc/foo/.*%.conf"] = { "dosini", { priority = 10 } },
----      ["README.(%a+)$"] = function(path, bufnr, ext)
----        if ext == "md" then
----          return "markdown"
----        elseif ext == "rst" then
----          return "rst"
+---      ['.*/etc/foo/.*%.conf'] = { 'dosini', { priority = 10 } },
+---      ['README.(%a+)$'] = function(path, bufnr, ext)
+---        if ext == 'md' then
+---          return 'markdown'
+---        elseif ext == 'rst' then
+---          return 'rst'
 ---        end
 ---      end,
 ---    },
@@ -2279,9 +2275,9 @@ end
 ---       priority = -math.huge,
 ---       function(path, bufnr)
 ---         local content = vim.filetype.getlines(bufnr, 1)
----         if vim.filetype.matchregex(content, { [[^#!.*\\<mine\\>]] }) then
+---         if vim.filetype.matchregex(content, [[^#!.*\\<mine\\>]]) then
 ---           return 'mine'
----         elseif vim.filetype.matchregex(content, { [[\\<drawing\\>]] }) then
+---         elseif vim.filetype.matchregex(content, [[\\<drawing\\>]]) then
 ---           return 'drawing'
 ---         end
 ---       end,

@@ -1,5 +1,5 @@
 # This is not meant to be included by the top-level.
-cmake_minimum_required (VERSION 2.8.12)
+cmake_minimum_required (VERSION 3.10)
 project(NVIM_DEPS C)
 
 # Needed for: check_c_compiler_flag()
@@ -132,6 +132,18 @@ if(CMAKE_OSX_ARCHITECTURES)
   endforeach()
 endif()
 
+# If the macOS deployment target is not set manually (via $MACOSX_DEPLOYMENT_TARGET),
+# fall back to local system version. Needs to be done here and in top-level CMakeLists.txt.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    execute_process(COMMAND sw_vers -productVersion
+                    OUTPUT_VARIABLE MACOS_VERSION
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_VERSION}")
+  endif()
+  message("-- Using deployment target ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 set(HOSTDEPS_INSTALL_DIR "${DEPS_INSTALL_DIR}")
 set(HOSTDEPS_BIN_DIR "${DEPS_BIN_DIR}")
 set(HOSTDEPS_LIB_DIR "${DEPS_LIB_DIR}")
@@ -147,8 +159,8 @@ set(MSGPACK_URL https://github.com/msgpack/msgpack-c/releases/download/c-4.0.0/m
 set(MSGPACK_SHA256 420fe35e7572f2a168d17e660ef981a589c9cbe77faa25eb34a520e1fcc032c8)
 
 # https://github.com/LuaJIT/LuaJIT/tree/v2.1
-set(LUAJIT_URL https://github.com/LuaJIT/LuaJIT/archive/50936d784474747b4569d988767f1b5bab8bb6d0.tar.gz)
-set(LUAJIT_SHA256 4d44e4709130b031c1c2c81cf5c102dfce877bf454409dabba03249e18870e66)
+set(LUAJIT_URL https://github.com/LuaJIT/LuaJIT/archive/a7d0265480c662964988f83d4e245bf139eb7cc0.tar.gz)
+set(LUAJIT_SHA256 7d7f58ca5c02b453ed4ddd2298e741053cbd6cd3d96e79460d06ec6684244c59)
 
 set(LUA_URL https://www.lua.org/ftp/lua-5.1.5.tar.gz)
 set(LUA_SHA256 2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333)

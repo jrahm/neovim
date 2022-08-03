@@ -37,6 +37,7 @@
 #include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/highlight_group.h"
+#include "nvim/insexpand.h"
 #include "nvim/lua/executor.h"
 #include "nvim/mapping.h"
 #include "nvim/mark.h"
@@ -472,10 +473,10 @@ Object nvim_exec_lua(String code, Array args, Error *err)
 Object nvim_notify(String msg, Integer log_level, Dictionary opts, Error *err)
   FUNC_API_SINCE(7)
 {
-  FIXED_TEMP_ARRAY(args, 3);
-  args.items[0] = STRING_OBJ(msg);
-  args.items[1] = INTEGER_OBJ(log_level);
-  args.items[2] = DICTIONARY_OBJ(opts);
+  MAXSIZE_TEMP_ARRAY(args, 3);
+  ADD_C(args, STRING_OBJ(msg));
+  ADD_C(args, INTEGER_OBJ(log_level));
+  ADD_C(args, DICTIONARY_OBJ(opts));
 
   return nlua_exec(STATIC_CSTR_AS_STRING("return vim.notify(...)"), args, err);
 }
@@ -1009,10 +1010,10 @@ static void term_write(char *buf, size_t size, void *data)
   if (cb == LUA_NOREF) {
     return;
   }
-  FIXED_TEMP_ARRAY(args, 3);
-  args.items[0] = INTEGER_OBJ((Integer)chan->id);
-  args.items[1] = BUFFER_OBJ(terminal_buf(chan->term));
-  args.items[2] = STRING_OBJ(((String){ .data = buf, .size = size }));
+  MAXSIZE_TEMP_ARRAY(args, 3);
+  ADD_C(args, INTEGER_OBJ((Integer)chan->id));
+  ADD_C(args, BUFFER_OBJ(terminal_buf(chan->term)));
+  ADD_C(args, STRING_OBJ(((String){ .data = buf, .size = size })));
   textlock++;
   nlua_call_ref(cb, "input", args, false, NULL);
   textlock--;
@@ -1410,7 +1411,7 @@ Dictionary nvim_get_mode(void)
 /// Gets a list of global (non-buffer-local) |mapping| definitions.
 ///
 /// @param  mode       Mode short-name ("n", "i", "v", ...)
-/// @returns Array of maparg()-like dictionaries describing mappings.
+/// @returns Array of |maparg()|-like dictionaries describing mappings.
 ///          The "buffer" key is always zero.
 ArrayOf(Dictionary) nvim_get_keymap(uint64_t channel_id, String mode)
   FUNC_API_SINCE(3)
@@ -1422,8 +1423,8 @@ ArrayOf(Dictionary) nvim_get_keymap(uint64_t channel_id, String mode)
 ///
 /// To set a buffer-local mapping, use |nvim_buf_set_keymap()|.
 ///
-/// Unlike |:map|, leading/trailing whitespace is accepted as part of the {lhs}
-/// or {rhs}. Empty {rhs} is |<Nop>|. |keycodes| are replaced as usual.
+/// Unlike |:map|, leading/trailing whitespace is accepted as part of the {lhs} or {rhs}.
+/// Empty {rhs} is |<Nop>|. |keycodes| are replaced as usual.
 ///
 /// Example:
 /// <pre>
@@ -1440,13 +1441,15 @@ ArrayOf(Dictionary) nvim_get_keymap(uint64_t channel_id, String mode)
 ///               or "!" for |:map!|, or empty string for |:map|.
 /// @param  lhs   Left-hand-side |{lhs}| of the mapping.
 /// @param  rhs   Right-hand-side |{rhs}| of the mapping.
-/// @param  opts  Optional parameters map: keys are |:map-arguments|, values
-///               are booleans (default false). Accepts all |:map-arguments| as
-///               keys excluding |<buffer>| but including |noremap| and "desc".
-///               Unknown key is an error. "desc" can be used to give a
-///               description to the mapping. When called from Lua, also accepts a
-///               "callback" key that takes a Lua function to call when the
-///               mapping is executed.
+/// @param  opts  Optional parameters map: keys are |:map-arguments|, values are booleans (default
+///               false). Accepts all |:map-arguments| as keys excluding |<buffer>| but including
+///               |noremap| and "desc". Unknown key is an error.
+///               "desc" can be used to give a description to the mapping.
+///               When called from Lua, also accepts a "callback" key that takes a Lua function to
+///               call when the mapping is executed.
+///               When "expr" is true, "replace_keycodes" (boolean) can be used to replace keycodes
+///               in the resulting string (see |nvim_replace_termcodes()|), and a Lua callback
+///               returning `nil` is equivalent to returning an empty string.
 /// @param[out]   err   Error details, if any.
 void nvim_set_keymap(uint64_t channel_id, String mode, String lhs, String rhs, Dict(keymap) *opts,
                      Error *err)
@@ -2255,4 +2258,12 @@ Dictionary nvim_eval_statusline(String str, Dict(eval_statusline) *opts, Error *
   PUT(result, "str", CSTR_TO_OBJ((char *)buf));
 
   return result;
+}
+
+void nvim_error_event(uint64_t channel_id, Integer lvl, String data)
+  FUNC_API_REMOTE_ONLY
+{
+  // TODO(bfredl): consider printing message to user, as will be relevant
+  // if we fork nvim processes as async workers
+  ELOG("async error on channel %" PRId64 ": %s", channel_id, data.size ? data.data : "");
 }

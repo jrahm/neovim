@@ -928,6 +928,7 @@ int do_record(int c)
 {
   char_u *p;
   static int regname;
+  static bool changed_cmdheight = false;
   yankreg_T *old_y_previous;
   int retval;
 
@@ -941,6 +942,15 @@ int do_record(int c)
       showmode();
       regname = c;
       retval = OK;
+
+      if (!ui_has_messages()) {
+        // Enable macro indicator temporarily
+        set_option_value("ch", 1L, NULL, 0);
+        update_screen(VALID);
+
+        changed_cmdheight = true;
+      }
+
       apply_autocmds(EVENT_RECORDINGENTER, NULL, NULL, false, curbuf);
     }
   } else {  // stop recording
@@ -985,6 +995,12 @@ int do_record(int c)
       retval = stuff_yank(regname, p);
 
       y_previous = old_y_previous;
+    }
+
+    if (changed_cmdheight) {
+      // Restore cmdheight
+      set_option_value("ch", 0L, NULL, 0);
+      redraw_all_later(CLEAR);
     }
   }
   return retval;
@@ -1050,7 +1066,7 @@ static int execreg_lastc = NUL;
 ///              with a \. Lines that start with a comment "\ character are ignored.
 /// @returns the concatenated line. The index of the line that should be
 ///          processed next is returned in idx.
-static char_u *execreg_line_continuation(char_u **lines, size_t *idx)
+static char_u *execreg_line_continuation(char **lines, size_t *idx)
 {
   size_t i = *idx;
   assert(i > 0);
@@ -1065,7 +1081,7 @@ static char_u *execreg_line_continuation(char_u **lines, size_t *idx)
   // Any line not starting with \ or "\ is the start of the
   // command.
   while (--i > 0) {
-    p = (char_u *)skipwhite((char *)lines[i]);
+    p = (char_u *)skipwhite(lines[i]);
     if (*p != '\\' && (p[0] != '"' || p[1] != '\\' || p[2] != ' ')) {
       break;
     }
@@ -1073,9 +1089,9 @@ static char_u *execreg_line_continuation(char_u **lines, size_t *idx)
   const size_t cmd_start = i;
 
   // join all the lines
-  ga_concat(&ga, (char *)lines[cmd_start]);
+  ga_concat(&ga, lines[cmd_start]);
   for (size_t j = cmd_start + 1; j <= cmd_end; j++) {
-    p = (char_u *)skipwhite((char *)lines[j]);
+    p = (char_u *)skipwhite(lines[j]);
     if (*p == '\\') {
       // Adjust the growsize to the current length to
       // speed up concatenating many lines.
@@ -1188,7 +1204,7 @@ int do_execreg(int regname, int colon, int addcr, int silent)
       if (colon && i > 0) {
         p = (char_u *)skipwhite((char *)str);
         if (*p == '\\' || (p[0] == '"' && p[1] == '\\' && p[2] == ' ')) {
-          str = execreg_line_continuation((char_u **)reg->y_array, &i);
+          str = execreg_line_continuation(reg->y_array, &i);
           free_str = true;
         }
       }
@@ -1945,7 +1961,7 @@ static void mb_adjust_opend(oparg_T *oap)
 {
   if (oap->inclusive) {
     char *p = (char *)ml_get(oap->end.lnum);
-    oap->end.col += mb_tail_off(p, p + oap->end.col);
+    oap->end.col += utf_cp_tail_off(p, p + oap->end.col);
   }
 }
 
@@ -2936,7 +2952,7 @@ static void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
     xfree(reg->y_array);
   }
 
-  if (message && (p_ch > 0 || ui_has(kUIMessages))) {  // Display message about yank?
+  if (message) {  // Display message about yank?
     if (yank_type == kMTCharWise && yanklines == 1) {
       yanklines = 0;
     }
@@ -4480,6 +4496,9 @@ static void op_format(oparg_T *oap, int keep_cursor)
   if (keep_cursor) {
     curwin->w_cursor = saved_cursor;
     saved_cursor.lnum = 0;
+
+    // formatting may have made the cursor position invalid
+    check_cursor();
   }
 
   if (oap->is_VIsual) {
@@ -5017,7 +5036,7 @@ void op_addsub(oparg_T *oap, linenr_T Prenum1, bool g_cmd)
   linenr_T amount = Prenum1;
 
   // do_addsub() might trigger re-evaluation of 'foldexpr' halfway, when the
-  // buffer is not completly updated yet. Postpone updating folds until before
+  // buffer is not completely updated yet. Postpone updating folds until before
   // the call to changed_lines().
   disable_fold_update++;
 

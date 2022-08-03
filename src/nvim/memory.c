@@ -14,6 +14,7 @@
 #include "nvim/eval.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
+#include "nvim/insexpand.h"
 #include "nvim/lua/executor.h"
 #include "nvim/mapping.h"
 #include "nvim/memfile.h"
@@ -545,7 +546,7 @@ void arena_start(Arena *arena, ArenaMem *reuse_blk)
 
 /// Finnish the allocations in an arena.
 ///
-/// This does not immedately free the memory, but leaves existing allocated
+/// This does not immediately free the memory, but leaves existing allocated
 /// objects valid, and returns an opaque ArenaMem handle, which can be used to
 /// free the allocations using `arena_mem_free`, when the objects allocated
 /// from the arena are not needed anymore.
@@ -710,6 +711,7 @@ void free_all_mem(void)
   free_search_patterns();
   free_old_sub();
   free_last_insert();
+  free_insexpand_stuff();
   free_prev_shellcmd();
   free_regexp_stuff();
   free_tag_stuff();
