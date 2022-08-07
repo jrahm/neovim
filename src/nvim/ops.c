@@ -20,6 +20,7 @@
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/userfunc.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_getln.h"
@@ -828,6 +829,129 @@ bool valid_yank_reg(int regname, bool writing)
   return false;
 }
 
+static int call_userreg_put(const char* urf, int regname, typval_T* out)
+{
+  char regname_str[5];
+  int len;
+
+  len = (*utf_char2len)(regname);
+  regname_str[len] = 0;
+  utf_char2bytes(regname, regname_str);
+
+  typval_T args[3];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_NUMBER;
+
+  args[0].vval.v_string = "put";
+  args[1].vval.v_string = regname_str;
+  args[2].vval.v_number = 0;
+
+  funcexe_T funcexe = FUNCEXE_INIT;
+  funcexe.evaluate = true;
+
+  return call_func(
+        urf,
+        -1,
+        out,
+        /* argcount_in = */ 3,
+        args,
+        &funcexe);
+}
+
+// Converts a typval returned from the userregfunction to a register.
+static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
+{
+  if (!yankreg || !val) return;
+
+  char* type;
+  dict_T* dict;
+  typval_T tv;
+  size_t i;
+
+  free_register(yankreg);
+  memset(yankreg, 0, sizeof(*yankreg));
+
+  switch (val->v_type) {
+  case VAR_STRING:
+    yankreg->y_type = kMTCharWise;
+    yankreg->y_size = 1;
+
+    if (val->vval.v_string) {
+      yankreg->y_array = xcalloc(sizeof(char*), 1);
+      yankreg->y_array[0] = strdup(val->vval.v_string);
+    } else {
+      yankreg->y_array = NULL;
+    }
+
+    break;
+
+  case VAR_DICT:
+    dict = val->vval.v_dict;
+    type = tv_dict_get_string(dict, "type", false);
+
+    if (!strcmp(type, "block")) {
+      yankreg->y_width = (int) tv_dict_get_number(dict, "width");
+      yankreg->y_type = kMTBlockWise;
+    } else if (!strcmp(type, "line")) {
+      yankreg->y_type = kMTLineWise;
+    } else {
+      yankreg->y_type = kMTCharWise;
+    }
+
+    if (tv_dict_get_tv(dict, "lines", &tv) == OK) {
+      if (tv.v_type == VAR_STRING) {
+        yankreg->y_array = xcalloc(sizeof(char*), 1);
+        yankreg->y_array[0] = strdup(tv.vval.v_string);
+      } else if (tv.v_type == VAR_LIST) {
+        yankreg->y_array =
+          xcalloc(sizeof(char*), (size_t) tv_list_len(tv.vval.v_list));
+
+        i = 0;
+        TV_LIST_ITER_CONST(tv.vval.v_list, li, {
+          if (li->li_tv.v_type == VAR_STRING) {
+            yankreg->y_array[i] = strdup(li->li_tv.vval.v_string);
+          } else {
+            yankreg->y_array[i] = NULL;
+          }
+          ++ i;
+        });
+
+        yankreg->y_size = i;
+      }
+    } else {
+      yankreg->y_array = NULL;
+    }
+
+    if (tv_dict_get_tv(dict, "additional_data", &tv) == OK) {
+      if (tv.v_type == VAR_DICT) {
+        yankreg->additional_data = tv.vval.v_dict;
+      }
+    }
+    break;
+
+  default:
+    break;
+
+  }
+}
+
+static void copy_userreg(yankreg_T* into, int regname)
+{
+  if (!into) return;
+
+  if (!curbuf->b_p_urf || strlen((char *) curbuf->b_p_urf) == 0)
+    return;
+
+
+  typval_T ret;
+  if (call_userreg_put((const char*) curbuf->b_p_urf, regname, &ret) == FAIL) {
+    return;
+  }
+
+  typval_to_yankreg(into, &ret);
+}
+
 /// @return yankreg_T to use, according to the value of `regname`.
 /// Cannot handle the '_' (black hole) register.
 /// Must only be called with a valid register name!
@@ -866,6 +990,9 @@ yankreg_T *get_yank_register(int regname, int mode)
     i = 0;
   }
   reg = get_global_reg(i);
+  if (get_userreg(regname) != -1) {
+    copy_userreg(reg, regname);
+  }
 
   if (mode == YREG_YANK) {
     // remember the written register for unnamed paste
@@ -1325,6 +1452,7 @@ int insert_reg(int regname, bool literally_arg)
     }
   } else {  // Name or number register.
     yankreg_T *reg = get_yank_register(regname, YREG_PASTE);
+
     if (reg->y_array == NULL) {
       retval = FAIL;
     } else {
@@ -1385,29 +1513,45 @@ static void stuffescaped(const char *arg, bool literally)
 /// @return  true if "regname" is a special register,
 bool get_spec_reg(int regname, char_u **argp, bool *allocated, bool errmsg);
 
-/*
- * Executes a call to the put() function on a user-defined register to get the
- * contents of a user defined register.
- */
-static int eval_urf_put(char_u *ufn, int regname, char_u **argp)
-{
-  char regname_str[5];
-  int len;
+/// Converts a yankreg to a dict which can be used as an argument to the
+// userregfunc.
+static dict_T* yankreg_to_dict(yankreg_T* yankreg) {
+  dict_T *const dict = tv_dict_alloc();
+  dict->dv_refcount = 1;
+  tv_dict_add_nr(dict, S_LEN("width"), yankreg->y_width);
 
-  len = (*utf_char2len)(regname);
-  regname_str[len] = 0;
-  utf_char2bytes(regname, (char*) regname_str);
+  const char* type;
 
-  typval_T args[3];
-  args[0].v_type = VAR_STRING;
-  args[1].v_type = VAR_STRING;
-  args[2].v_type = VAR_UNKNOWN;
+  switch(yankreg->y_type) {
+    case kMTLineWise:
+      type = "line";
+      break;
+    case kMTCharWise:
+      type = "char";
+      break;
+    case kMTBlockWise:
+      type = "block";
+      break;
+    default:
+      type = "unknown";
+  }
 
-  args[0].vval.v_string = "put";
-  args[1].vval.v_string = regname_str;
+  tv_dict_add_str(dict, S_LEN("type"), type);
+  if (yankreg->additional_data) {
+    tv_dict_add_dict(dict, S_LEN("additional_data"), yankreg->additional_data);
+  }
 
-  *argp = (char_u *)call_func_retstr((char *)ufn, 3, args);
-  return *argp == NULL;
+  list_T *const lines = tv_list_alloc(yankreg->y_size);
+
+  size_t i;
+  for (i = 0; i < yankreg->y_size; ++ i) {
+    tv_list_append_string(
+        lines, yankreg->y_array[i], strlen(yankreg->y_array[i]));
+  }
+
+  tv_dict_add_list(dict, S_LEN("lines"), lines);
+
+  return dict;
 }
 
 /*
@@ -1419,30 +1563,8 @@ static int eval_yank_userreg(const char_u *ufn, int regname, yankreg_T *reg)
   if (!reg)
     return -1;
 
-  char *totalbuf;
-  size_t totallen = 0;
-  size_t i, j, k;
   int ret, len;
   char regname_str[5];
-
-  {
-    // Concat the contents of the register to pass into the yank()
-    // user-defined function.
-    for (i = 0; i < reg->y_size; ++i) {
-      totallen += strlen((char *)reg->y_array[i]) + 1;
-    }
-    totalbuf = xmalloc(sizeof(char_u) * totallen);
-    j = 0;
-    for (i = 0; i < reg->y_size; ++i) {
-      for (k = 0; reg->y_array[i][k] != 0; ++k, ++j) {
-        totalbuf[j] = reg->y_array[i][k];
-      }
-      if (i < reg->y_size - 1) {
-        totalbuf[j++] = '\n';
-      }
-    }
-    totalbuf[j++] = 0;
-  }
 
   len = (*utf_char2len)(regname);
   regname_str[len] = 0;
@@ -1451,17 +1573,16 @@ static int eval_yank_userreg(const char_u *ufn, int regname, yankreg_T *reg)
   typval_T args[4];
   args[0].v_type = VAR_STRING;
   args[1].v_type = VAR_STRING;
-  args[2].v_type = VAR_STRING;
+  args[2].v_type = VAR_DICT;
   args[3].v_type = VAR_UNKNOWN;
 
   args[0].vval.v_string = "yank";
   args[1].vval.v_string = regname_str;
-  args[2].vval.v_string = totalbuf;
+  args[2].vval.v_dict = yankreg_to_dict(reg);
 
   char *dup_ufn = strdup((char *)ufn);
   ret = (int)call_func_retnr(dup_ufn, 3, args);
   xfree(dup_ufn);
-  xfree(totalbuf);
   return ret;
 }
 
@@ -1552,13 +1673,14 @@ bool get_spec_reg(
     return true;
 
   default:                     /* User-defined registers. */
-    if (get_userreg(regname) != -1) {
-      if (!curbuf->b_p_urf || strlen((char *) curbuf->b_p_urf) == 0)
-        return false;
-      eval_urf_put(curbuf->b_p_urf, regname, argp);
-      *allocated = true;
-      return true;
-    }
+    break;
+    // if (get_userreg(regname) != -1) {
+    //   if (!curbuf->b_p_urf || strlen((char *) curbuf->b_p_urf) == 0)
+    //     return false;
+    //   eval_urf_put(curbuf->b_p_urf, regname, argp);
+    //   *allocated = true;
+    //   return true;
+    // }
   }
 
   return false;
@@ -3234,7 +3356,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
 
   if (insert_string != NULL) {
     y_type = kMTCharWise;
-    if (regname == '=' || get_userreg(regname) != -1) {
+    if (regname == '=') {
       /* For the = register we need to split the string at NL
        * characters.
        * Loop twice: count the number of lines and save them. */
@@ -3274,6 +3396,10 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
     // just restoring the deleted text.
     if (reg == NULL) {
       reg = get_yank_register(regname, YREG_PASTE);
+    }
+
+    if (get_userreg(regname) != -1)  {
+      copy_userreg(reg, regname);
     }
 
     y_type = reg->y_type;

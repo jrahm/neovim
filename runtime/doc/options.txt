@@ -6719,10 +6719,23 @@ A jump table for the options with a short description can be found at |Q_op|.
 			characters are allowed.
 
 		{content} If the action is 'yank' this is the content being
-			yanked into the register.
+			yanked into the register. The content is a dictionary
+			with the following items:
+
+			{lines} The lines being yanked, as a list.
+
+			{type} The type of yank, either "line", "char", or
+			"block"
+
+			{width} The width in case of "block" mode.
+
+			{additional_data} Additional data. (can be returned in
+			put mode).
 
 	In case the action is 'put', the 'userregfun' function should return
-	the content to place in that location.
+	the content to place in that location. The content can either be a
+	string, in which case "char" mode is inferred, or it can return a
+	dictionary of the same template that populates 'content'.
 
 	A very simple example of a 'userregfun' function that behaves exactly
 	like traditional registers would look like: >
