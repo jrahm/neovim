@@ -990,7 +990,8 @@ yankreg_T *get_yank_register(int regname, int mode)
     i = 0;
   }
   reg = get_global_reg(i);
-  if (get_userreg(regname) != -1) {
+  if (get_userreg(regname) != -1 && mode != YREG_YANK) {
+    // If the mode is not yank, copy the userreg data to the reg.
     copy_userreg(reg, regname);
   }
 
@@ -1061,8 +1062,7 @@ int do_record(int c)
 
   if (reg_recording == 0) {
     // start recording
-    // registers 0-9, a-z and " are allowed
-    if (c < 0 || (!ASCII_ISALNUM(c) && c != '"')) {
+    if (c < 0) {
       retval = FAIL;
     } else {
       reg_recording = c;
@@ -1094,9 +1094,10 @@ int do_record(int c)
     }
 
     // Name of requested register, or empty string for unnamed operation.
-    char buf[NUMBUFLEN + 2];
+    char buf[NUMBUFLEN + 5];
+    int len = (*utf_char2len)(regname);
     buf[0] = (char)regname;
-    buf[1] = NUL;
+    buf[len] = NUL;
     (void)tv_dict_add_str(dict, S_LEN("regname"), buf);
     tv_dict_set_keys_readonly(dict);
 
@@ -1177,6 +1178,9 @@ static int stuff_yank(int regname, char_u *p)
     reg->y_type = kMTCharWise;
   }
   reg->timestamp = os_time();
+  if (get_userreg(regname) != -1) {
+    return eval_yank_userreg(curbuf->b_p_urf, regname, reg);
+  }
   return OK;
 }
 
