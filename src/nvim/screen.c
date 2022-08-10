@@ -6216,8 +6216,12 @@ static void recording_mode(int attr)
 {
   msg_puts_attr(_("recording"), attr);
   if (!shortmess(SHM_RECORDING)) {
-    char s[4];
-    snprintf(s, ARRAY_SIZE(s), " @%c", reg_recording);
+    char s[10];
+    int len = (*utf_char2len)(reg_recording);
+    utf_char2bytes(reg_recording, s + 2);
+    s[0] = ' ';
+    s[1] = '@';
+    s[len + 2] = 0;
     msg_puts_attr(s, attr);
   }
 }

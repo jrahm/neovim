@@ -1096,7 +1096,7 @@ int do_record(int c)
     // Name of requested register, or empty string for unnamed operation.
     char buf[NUMBUFLEN + 5];
     int len = (*utf_char2len)(regname);
-    buf[0] = (char)regname;
+    utf_char2bytes(regname, buf);
     buf[len] = NUL;
     (void)tv_dict_add_str(dict, S_LEN("regname"), buf);
     tv_dict_set_keys_readonly(dict);
