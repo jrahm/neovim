@@ -898,7 +898,11 @@ static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
 
         i = 0;
         TV_LIST_ITER_CONST(tv.vval.v_list, li, {
-          yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
+          if (li->li_tv.v_type == VAR_STRING) {
+            yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
+          } else {
+            yankreg->y_array[i] = NULL;
+          }
           ++ i;
         });
 
@@ -941,6 +945,8 @@ static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
     break;
 
   }
+
+  yankreg->timestamp = os_time();
 }
 
 static void copy_userreg(yankreg_T* into, int regname)
