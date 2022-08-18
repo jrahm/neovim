@@ -868,23 +868,12 @@ static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
   dict_T* dict;
   typval_T tv;
   size_t i;
+  size_t sz;
 
   free_register(yankreg);
   memset(yankreg, 0, sizeof(*yankreg));
 
   switch (val->v_type) {
-  case VAR_STRING:
-    yankreg->y_type = kMTCharWise;
-    yankreg->y_size = 1;
-
-    if (val->vval.v_string) {
-      yankreg->y_array = xcalloc(sizeof(char*), 1);
-      yankreg->y_array[0] = strdup(val->vval.v_string);
-    } else {
-      yankreg->y_array = NULL;
-    }
-
-    break;
 
   case VAR_DICT:
     dict = val->vval.v_dict;
@@ -909,11 +898,7 @@ static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
 
         i = 0;
         TV_LIST_ITER_CONST(tv.vval.v_list, li, {
-          if (li->li_tv.v_type == VAR_STRING) {
-            yankreg->y_array[i] = strdup(li->li_tv.vval.v_string);
-          } else {
-            yankreg->y_array[i] = NULL;
-          }
+          yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
           ++ i;
         });
 
@@ -930,7 +915,29 @@ static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
     }
     break;
 
+  case VAR_LIST:
+    yankreg->y_type = kMTLineWise;
+    sz = (size_t) tv_list_len(val->vval.v_list);
+    yankreg->y_array = xcalloc(sizeof(char*), sz);
+    yankreg->y_size = sz;
+    i = 0;
+    TV_LIST_ITER_CONST(val->vval.v_list, li, {
+      yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
+      i ++;
+    });
+    break;
+
   default:
+    yankreg->y_type = kMTCharWise;
+    yankreg->y_size = 1;
+
+    if (val->vval.v_string) {
+      yankreg->y_array = xcalloc(sizeof(char*), 1);
+      yankreg->y_array[0] = strdup(tv_get_string(val));
+    } else {
+      yankreg->y_array = NULL;
+    }
+
     break;
 
   }
@@ -944,12 +951,15 @@ static void copy_userreg(yankreg_T* into, int regname)
     return;
 
 
-  typval_T ret;
-  if (call_userreg_put((const char*) curbuf->b_p_urf, regname, &ret) == FAIL) {
+  typval_T* ret = xmalloc(sizeof(typval_T));
+
+  if (call_userreg_put((const char*) curbuf->b_p_urf, regname, ret) == FAIL) {
     return;
   }
 
-  typval_to_yankreg(into, &ret);
+  typval_to_yankreg(into, ret);
+
+  tv_free(ret);
 }
 
 /// @return yankreg_T to use, according to the value of `regname`.

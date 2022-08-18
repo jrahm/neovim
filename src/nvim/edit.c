@@ -4082,11 +4082,13 @@ static void ins_ctrl_g(void)
   // Don't map the second key. This also prevents the mode message to be
   // deleted when ESC is hit.
   no_mapping++;
+
   allow_keys++;
   c = plain_vgetc();
   no_mapping--;
   allow_keys--;
   switch (c) {
+
   // CTRL-G k and CTRL-G <Up>: cursor up to Insstart.col
   case K_UP:
   case Ctrl_K:
