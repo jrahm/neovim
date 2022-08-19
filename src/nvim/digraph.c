@@ -12,8 +12,8 @@
 #include "nvim/ascii.h"
 #include "nvim/charset.h"
 #include "nvim/digraph.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval/typval.h"
-#include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/garray.h"
@@ -24,7 +24,7 @@
 #include "nvim/message.h"
 #include "nvim/normal.h"
 #include "nvim/os/input.h"
-#include "nvim/screen.h"
+#include "nvim/runtime.h"
 #include "nvim/strings.h"
 #include "nvim/vim.h"
 

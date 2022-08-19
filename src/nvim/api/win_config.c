@@ -10,9 +10,9 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/win_config.h"
 #include "nvim/ascii.h"
+#include "nvim/drawscreen.h"
 #include "nvim/highlight_group.h"
 #include "nvim/option.h"
-#include "nvim/screen.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/ui.h"
@@ -167,7 +167,7 @@ Window nvim_open_win(Buffer buffer, Boolean enter, Dict(float_config) *config, E
 
   if (fconfig.style == kWinStyleMinimal) {
     win_set_minimal_style(wp);
-    didset_window_options(wp);
+    didset_window_options(wp, true);
   }
   return wp->handle;
 }
@@ -209,7 +209,7 @@ void nvim_win_set_config(Window window, Dict(float_config) *config, Error *err)
   }
   if (fconfig.style == kWinStyleMinimal) {
     win_set_minimal_style(win);
-    didset_window_options(win);
+    didset_window_options(win, true);
   }
 }
 

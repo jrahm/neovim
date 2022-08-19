@@ -10,11 +10,11 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/charset.h"
 #include "nvim/decoration_provider.h"
+#include "nvim/drawscreen.h"
 #include "nvim/extmark.h"
 #include "nvim/highlight_group.h"
 #include "nvim/lua/executor.h"
 #include "nvim/memline.h"
-#include "nvim/screen.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/extmark.c.generated.h"
@@ -441,8 +441,9 @@ Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object e
 ///                   the extmark end position (if it exists) will be shifted
 ///                   in when new text is inserted (true for right, false
 ///                   for left). Defaults to false.
-///               - priority: a priority value for the highlight group. For
-///                   example treesitter highlighting uses a value of 100.
+///               - priority: a priority value for the highlight group or sign
+///                   attribute. For example treesitter highlighting uses a
+///                   value of 100.
 ///               - strict: boolean that indicates extmark should not be placed
 ///                   if the line or column value is past the end of the
 ///                   buffer or end of the line respectively. Defaults to true.
@@ -1030,6 +1031,8 @@ void nvim_set_decoration_provider(Integer ns_id, DictionaryOf(LuaRef) opts, Erro
   }
 
   p->active = true;
+  p->hl_valid++;
+  p->hl_cached = false;
   return;
 error:
   decor_provider_clear(p);

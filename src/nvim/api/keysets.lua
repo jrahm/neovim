@@ -106,7 +106,6 @@ return {
     "reverse";
     "nocombine";
     "default";
-    "global";
     "cterm";
     "foreground"; "fg";
     "background"; "bg";
@@ -114,9 +113,9 @@ return {
     "ctermbg";
     "special"; "sp";
     "link";
+    "global_link";
     "fallback";
     "blend";
-    "temp";
   };
   highlight_cterm = {
     "bold";

@@ -27,13 +27,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "nvim/arglist.h"
 #include "nvim/ascii.h"
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/decoration_provider.h"
 #include "nvim/diff.h"
 #include "nvim/digraph.h"
+#include "nvim/drawscreen.h"
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
@@ -49,6 +52,7 @@
 #include "nvim/hardcopy.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
+#include "nvim/indent.h"
 #include "nvim/indent_c.h"
 #include "nvim/insexpand.h"
 #include "nvim/keycodes.h"
@@ -66,12 +70,13 @@
 #include "nvim/os/os.h"
 #include "nvim/os_unix.h"
 #include "nvim/path.h"
-#include "nvim/popupmnu.h"
+#include "nvim/popupmenu.h"
 #include "nvim/regexp.h"
 #include "nvim/runtime.h"
 #include "nvim/screen.h"
 #include "nvim/spell.h"
 #include "nvim/spellfile.h"
+#include "nvim/spellsuggest.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/ui.h"
@@ -82,7 +87,9 @@
 #ifdef WIN32
 # include "nvim/os/pty_conpty_win.h"
 #endif
+#include "nvim/api/extmark.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/vim.h"
 #include "nvim/lua/executor.h"
 #include "nvim/os/input.h"
 #include "nvim/os/lang.h"
@@ -978,7 +985,7 @@ int do_set(char *arg, int opt_flags)
   varnumber_T value;
   int key;
   uint32_t flags;                   // flags for current option
-  char_u *varp = NULL;         // pointer to variable for current option
+  char *varp = NULL;                // pointer to variable for current option
   int did_show = false;             // already showed one value
   int adding;                       // "opt+=arg"
   int prepending;                   // "opt^=arg"
@@ -1106,7 +1113,7 @@ int do_set(char *arg, int opt_flags)
         }
 
         flags = options[opt_idx].flags;
-        varp = get_varp_scope(&(options[opt_idx]), opt_flags);
+        varp = (char *)get_varp_scope(&(options[opt_idx]), opt_flags);
       } else {
         flags = P_STRING;
       }
@@ -1188,7 +1195,7 @@ int do_set(char *arg, int opt_flags)
           showoneopt(&options[opt_idx], opt_flags);
           if (p_verbose > 0) {
             // Mention where the option was last set.
-            if (varp == options[opt_idx].var) {
+            if (varp == (char *)options[opt_idx].var) {
               option_last_set_msg(options[opt_idx].last_set);
             } else if ((int)options[opt_idx].indir & PV_WIN) {
               option_last_set_msg(curwin->w_p_script_ctx[
@@ -1250,8 +1257,7 @@ int do_set(char *arg, int opt_flags)
             }
           }
 
-          errmsg = set_bool_option(opt_idx, varp, (int)value,
-                                   opt_flags);
+          errmsg = set_bool_option(opt_idx, (char_u *)varp, (int)value, opt_flags);
         } else {  // Numeric or string.
           if (vim_strchr("=:&<", nextchar) == NULL
               || prefix != 1) {
@@ -1310,7 +1316,7 @@ int do_set(char *arg, int opt_flags)
             if (removing) {
               value = *(long *)varp - value;
             }
-            errmsg = set_num_option(opt_idx, varp, (long)value,
+            errmsg = set_num_option(opt_idx, (char_u *)varp, (long)value,
                                     errbuf, sizeof(errbuf),
                                     opt_flags);
           } else if (opt_idx >= 0) {  // String.
@@ -1333,7 +1339,7 @@ int do_set(char *arg, int opt_flags)
             // reset, use the global value here.
             if ((opt_flags & (OPT_LOCAL | OPT_GLOBAL)) == 0
                 && ((int)options[opt_idx].indir & PV_BOTH)) {
-              varp = options[opt_idx].var;
+              varp = (char *)options[opt_idx].var;
             }
 
             // The old value is kept until we are sure that the
@@ -1382,23 +1388,16 @@ int do_set(char *arg, int opt_flags)
             } else {
               arg++;                    // jump to after the '=' or ':'
 
-              /*
-               * Set 'keywordprg' to ":help" if an empty
-               * value was passed to :set by the user.
-               * Misuse errbuf[] for the resulting string.
-               */
-              if (varp == (char_u *)&p_kp
-                  && (*arg == NUL || *arg == ' ')) {
+              // Set 'keywordprg' to ":help" if an empty
+              // value was passed to :set by the user.
+              // Misuse errbuf[] for the resulting string.
+              if (varp == (char *)&p_kp && (*arg == NUL || *arg == ' ')) {
                 STRCPY(errbuf, ":help");
                 save_arg = (char_u *)arg;
                 arg = errbuf;
-              }
-              /*
-               * Convert 'backspace' number to string, for
-               * adding, prepending and removing string.
-               */
-              else if (varp == (char_u *)&p_bs
-                       && ascii_isdigit(**(char_u **)varp)) {
+              } else if (varp == (char *)&p_bs && ascii_isdigit(**(char_u **)varp)) {
+                // Convert 'backspace' number to string, for
+                // adding, prepending and removing string.
                 i = getdigits_int((char **)varp, true, 0);
                 switch (i) {
                 case 0:
@@ -1425,14 +1424,10 @@ int do_set(char *arg, int opt_flags)
                   origval_g = *(char_u **)varp;
                 }
                 oldval = *(char_u **)varp;
-              }
-              /*
-               * Convert 'whichwrap' number to string, for
-               * backwards compatibility with Vim 3.0.
-               * Misuse errbuf[] for the resulting string.
-               */
-              else if (varp == (char_u *)&p_ww
-                       && ascii_isdigit(*arg)) {
+              } else if (varp == (char *)&p_ww && ascii_isdigit(*arg)) {
+                // Convert 'whichwrap' number to string, for
+                // backwards compatibility with Vim 3.0.
+                // Misuse errbuf[] for the resulting string.
                 *errbuf = NUL;
                 i = getdigits_int(&arg, true, 0);
                 if (i & 1) {
@@ -1452,14 +1447,11 @@ int do_set(char *arg, int opt_flags)
                 }
                 save_arg = (char_u *)arg;
                 arg = errbuf;
-              }
-              /*
-               * Remove '>' before 'dir' and 'bdir', for
-               * backwards compatibility with version 3.0
-               */
-              else if (*arg == '>'
-                       && (varp == (char_u *)&p_dir
-                           || varp == (char_u *)&p_bdir)) {
+              } else if (*arg == '>'
+                         && (varp == (char *)&p_dir
+                             || varp == (char *)&p_bdir)) {
+                // Remove '>' before 'dir' and 'bdir', for
+                // backwards compatibility with version 3.0
                 arg++;
               }
 
@@ -1993,7 +1985,7 @@ static void didset_options(void)
   (void)check_cedit();
   // initialize the table for 'breakat'.
   fill_breakat_flags();
-  didset_window_options(curwin);
+  didset_window_options(curwin, true);
 }
 
 // More side effects of setting options.
@@ -2070,6 +2062,7 @@ void check_buf_options(buf_T *buf)
   check_string_option(&buf->b_p_cpt);
   check_string_option(&buf->b_p_cfu);
   check_string_option(&buf->b_p_ofu);
+  check_string_option(&buf->b_p_urf);
   check_string_option(&buf->b_p_keymap);
   check_string_option(&buf->b_p_gp);
   check_string_option(&buf->b_p_mp);
@@ -2324,7 +2317,7 @@ static char *set_string_option(const int opt_idx, const char *const value, const
 
 /// Return true if "val" is a valid name: only consists of alphanumeric ASCII
 /// characters or characters in "allowed".
-static bool valid_name(const char_u *val, const char *allowed)
+bool valid_name(const char_u *val, const char *allowed)
   FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   for (const char_u *s = val; *s != NUL; s++) {
@@ -2342,25 +2335,6 @@ static bool valid_filetype(const char_u *val)
   FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return valid_name(val, ".-_");
-}
-
-/// Return true if "val" is a valid 'spelllang' value.
-bool valid_spelllang(const char_u *val)
-  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
-{
-  return valid_name(val, ".-_,@");
-}
-
-/// Return true if "val" is a valid 'spellfile' value.
-static bool valid_spellfile(const char_u *val)
-  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
-{
-  for (const char_u *s = val; *s != NUL; s++) {
-    if (!vim_isfilec(*s) && *s != ',' && *s != ' ') {
-      return false;
-    }
-  }
-  return true;
 }
 
 /// Handle setting 'mousescroll'.
@@ -2441,7 +2415,7 @@ static char *did_set_string_option(int opt_idx, char_u **varp, char_u *oldval, c
                                    size_t errbuflen, int opt_flags, int *value_checked)
 {
   char *errmsg = NULL;
-  char_u *s, *p;
+  char *s, *p;
   int did_chartab = false;
   char_u **gvarp;
   bool free_oldval = (options[opt_idx].flags & P_ALLOCED);
@@ -2530,7 +2504,7 @@ static char *did_set_string_option(int opt_idx, char_u **varp, char_u *oldval, c
     errmsg = check_colorcolumn(curwin);
   } else if (varp == &p_hlg) {  // 'helplang'
     // Check for "", "ab", "ab,cd", etc.
-    for (s = p_hlg; *s != NUL; s += 3) {
+    for (s = (char *)p_hlg; *s != NUL; s += 3) {
       if (s[1] == NUL || ((s[2] != ',' || s[3] == NUL) && s[2] != NUL)) {
         errmsg = e_invarg;
         break;
@@ -2578,18 +2552,7 @@ static char *did_set_string_option(int opt_idx, char_u **varp, char_u *oldval, c
     if (check_opt_strings(p_ambw, p_ambw_values, false) != OK) {
       errmsg = e_invarg;
     } else {
-      FOR_ALL_TAB_WINDOWS(tp, wp) {
-        if (set_chars_option(wp, &wp->w_p_lcs, true) != NULL) {
-          errmsg = _("E834: Conflicts with value of 'listchars'");
-          goto ambw_end;
-        }
-        if (set_chars_option(wp, &wp->w_p_fcs, true) != NULL) {
-          errmsg = _("E835: Conflicts with value of 'fillchars'");
-          goto ambw_end;
-        }
-      }
-ambw_end:
-      {}  // clint prefers {} over ; as an empty statement
+      errmsg = check_chars_options();
     }
   } else if (varp == &p_bg) {  // 'background'
     if (check_opt_strings(p_bg, p_bg_values, false) == OK) {
@@ -2647,9 +2610,9 @@ ambw_end:
 
     if (errmsg == NULL) {
       // canonize the value, so that STRCMP() can be used on it
-      p = enc_canonize(*varp);
+      p = (char *)enc_canonize(*varp);
       xfree(*varp);
-      *varp = p;
+      *varp = (char_u *)p;
       if (varp == &p_enc) {
         // only encoding=utf-8 allowed
         if (STRCMP(p_enc, "utf-8") != 0) {
@@ -2661,9 +2624,9 @@ ambw_end:
     }
   } else if (varp == &p_penc) {
     // Canonize printencoding if VIM standard one
-    p = enc_canonize(p_penc);
+    p = (char *)enc_canonize(p_penc);
     xfree(p_penc);
-    p_penc = p;
+    p_penc = (char_u *)p;
   } else if (varp == &curbuf->b_p_keymap) {
     if (!valid_filetype(*varp)) {
       errmsg = e_invarg;
@@ -2726,17 +2689,17 @@ ambw_end:
       errmsg = e_invarg;
     }
   } else if (gvarp == &p_mps) {  // 'matchpairs'
-    for (p = *varp; *p != NUL; p++) {
+    for (p = (char *)(*varp); *p != NUL; p++) {
       int x2 = -1;
       int x3 = -1;
 
-      p += utfc_ptr2len((char *)p);
+      p += utfc_ptr2len(p);
       if (*p != NUL) {
-        x2 = *p++;
+        x2 = (unsigned char)(*p++);
       }
       if (*p != NUL) {
-        x3 = utf_ptr2char((char *)p);
-        p += utfc_ptr2len((char *)p);
+        x3 = utf_ptr2char(p);
+        p += utfc_ptr2len(p);
       }
       if (x2 != ':' || x3 == -1 || (*p != NUL && *p != ',')) {
         errmsg = e_invarg;
@@ -2747,7 +2710,7 @@ ambw_end:
       }
     }
   } else if (gvarp == &p_com) {  // 'comments'
-    for (s = *varp; *s;) {
+    for (s = (char *)(*varp); *s;) {
       while (*s && *s != ':') {
         if (vim_strchr(COM_ALL, *s) == NULL
             && !ascii_isdigit(*s) && *s != '-') {
@@ -2770,7 +2733,7 @@ ambw_end:
         }
         s++;
       }
-      s = skip_to_option_part(s);
+      s = (char *)skip_to_option_part((char_u *)s);
     }
   } else if (varp == &p_lcs) {  // global 'listchars'
     errmsg = set_chars_option(curwin, varp, false);
@@ -2826,7 +2789,7 @@ ambw_end:
     // there would be a disconnect between the check for P_ALLOCED at the start
     // of the function and the set of P_ALLOCED at the end of the function.
     free_oldval = (options[opt_idx].flags & P_ALLOCED);
-    for (s = p_shada; *s;) {
+    for (s = (char *)p_shada; *s;) {
       // Check it's a valid character
       if (vim_strchr("!\"%'/:<@cfhnrs", *s) == NULL) {
         errmsg = illegal_char(errbuf, errbuflen, *s);
@@ -2871,8 +2834,8 @@ ambw_end:
       errmsg = N_("E528: Must specify a ' value");
     }
   } else if (gvarp == &p_sbr) {  // 'showbreak'
-    for (s = *varp; *s;) {
-      if (ptr2cells((char *)s) != 1) {
+    for (s = (char *)(*varp); *s;) {
+      if (ptr2cells(s) != 1) {
         errmsg = N_("E595: 'showbreak' contains unprintable or wide character");
       }
       MB_PTR_ADV(s);
@@ -2996,13 +2959,13 @@ ambw_end:
     if (varp == &p_ruf) {       // reset ru_wid first
       ru_wid = 0;
     }
-    s = *varp;
+    s = (char *)(*varp);
     if (varp == &p_ruf && *s == '%') {
       // set ru_wid if 'ruf' starts with "%99("
       if (*++s == '-') {        // ignore a '-'
         s++;
       }
-      wid = getdigits_int((char **)&s, true, 0);
+      wid = getdigits_int(&s, true, 0);
       if (wid && *s == '(' && (errmsg = check_stl_option((char *)p_ruf)) == NULL) {
         ru_wid = wid;
       } else {
@@ -3010,7 +2973,7 @@ ambw_end:
       }
     } else if (varp == &p_ruf || s[0] != '%' || s[1] != '!') {
       // check 'statusline', 'winbar' or 'tabline' only if it doesn't start with "%!"
-      errmsg = check_stl_option((char *)s);
+      errmsg = check_stl_option(s);
     }
     if (varp == &p_ruf && errmsg == NULL) {
       comp_col();
@@ -3021,7 +2984,7 @@ ambw_end:
     }
   } else if (gvarp == &p_cpt) {
     // check if it is a valid value for 'complete' -- Acevedo
-    for (s = *varp; *s;) {
+    for (s = (char *)(*varp); *s;) {
       while (*s == ',' || *s == ' ') {
         s++;
       }
@@ -3090,11 +3053,11 @@ ambw_end:
       p = NULL;
       (void)replace_termcodes((char *)p_pt,
                               STRLEN(p_pt),
-                              (char **)&p, REPTERM_FROM_PART | REPTERM_DO_LT, NULL,
+                              &p, REPTERM_FROM_PART | REPTERM_DO_LT, NULL,
                               CPO_TO_CPO_FLAGS);
       if (p != NULL) {
         free_string_option(p_pt);
-        p_pt = p;
+        p_pt = (char_u *)p;
       }
     }
   } else if (varp == &p_bs) {  // 'backspace'
@@ -3113,10 +3076,10 @@ ambw_end:
     unsigned int *flags;
 
     if (opt_flags & OPT_LOCAL) {
-      p = curbuf->b_p_tc;
+      p = (char *)curbuf->b_p_tc;
       flags = &curbuf->b_tc_flags;
     } else {
-      p = p_tc;
+      p = (char *)p_tc;
       flags = &tc_flags;
     }
 
@@ -3124,7 +3087,7 @@ ambw_end:
       // make the local value empty: use the global value
       *flags = 0;
     } else if (*p == NUL
-               || opt_strings_flags(p, p_tc_values, flags, false) != OK) {
+               || opt_strings_flags((char_u *)p, p_tc_values, flags, false) != OK) {
       errmsg = e_invarg;
     }
   } else if (varp == &p_cmp) {  // 'casemap'
@@ -3150,10 +3113,10 @@ ambw_end:
       foldUpdateAll(curwin);
     }
   } else if (gvarp == &curwin->w_allbuf_opt.wo_fmr) {  // 'foldmarker'
-    p = (char_u *)vim_strchr((char *)(*varp), ',');
+    p = vim_strchr((char *)(*varp), ',');
     if (p == NULL) {
       errmsg = N_("E536: comma required");
-    } else if (p == *varp || p[1] == NUL) {
+    } else if ((char_u *)p == *varp || p[1] == NUL) {
       errmsg = e_invarg;
     } else if (foldmethodIsMarker(curwin)) {
       foldUpdateAll(curwin);
@@ -3198,7 +3161,7 @@ ambw_end:
     }
   } else if (varp == &p_csqf) {
     if (p_csqf != NULL) {
-      p = p_csqf;
+      p = (char *)p_csqf;
       while (*p != NUL) {
         if (vim_strchr(CSQF_CMDS, *p) == NULL
             || p[1] == NUL
@@ -3310,22 +3273,22 @@ ambw_end:
     // Options that are a list of flags.
     p = NULL;
     if (varp == &p_ww) {  // 'whichwrap'
-      p = (char_u *)WW_ALL;
+      p = WW_ALL;
     }
     if (varp == &p_shm) {  // 'shortmess'
-      p = (char_u *)SHM_ALL;
+      p = (char *)SHM_ALL;
     } else if (varp == (char_u **)&(p_cpo)) {  // 'cpoptions'
-      p = (char_u *)CPO_VI;
+      p = CPO_VI;
     } else if (varp == &(curbuf->b_p_fo)) {  // 'formatoptions'
-      p = (char_u *)FO_ALL;
+      p = FO_ALL;
     } else if (varp == &curwin->w_p_cocu) {  // 'concealcursor'
-      p = (char_u *)COCU_ALL;
+      p = COCU_ALL;
     } else if (varp == &p_mouse) {  // 'mouse'
-      p = (char_u *)MOUSE_ALL;
+      p = MOUSE_ALL;
     }
     if (p != NULL) {
-      for (s = *varp; *s; s++) {
-        if (vim_strchr((char *)p, *s) == NULL) {
+      for (s = (char *)(*varp); *s; s++) {
+        if (vim_strchr(p, *s) == NULL) {
           errmsg = illegal_char(errbuf, errbuflen, *s);
           break;
         }
@@ -3360,7 +3323,7 @@ ambw_end:
         && ((int)options[opt_idx].indir & PV_BOTH)) {
       /* global option with local value set to use global value; free
        * the local value and make it empty */
-      p = get_varp_scope(&(options[opt_idx]), OPT_LOCAL);
+      p = (char *)get_varp_scope(&(options[opt_idx]), OPT_LOCAL);
       free_string_option(*(char_u **)p);
       *(char_u **)p = empty_option;
     } else if (!(opt_flags & OPT_LOCAL) && opt_flags != OPT_GLOBAL) {
@@ -3423,14 +3386,14 @@ ambw_end:
        * Use the first name in 'spelllang' up to '_region' or
        * '.encoding'.
        */
-      for (p = q; *p != NUL; p++) {
+      for (p = (char *)q; *p != NUL; p++) {
         if (!ASCII_ISALNUM(*p) && *p != '-') {
           break;
         }
       }
-      if (p > q) {
+      if (p > (char *)q) {
         vim_snprintf((char *)fname, sizeof(fname), "spell/%.*s.vim",
-                     (int)(p - q), q);
+                     (int)(p - (char *)q), q);
         source_runtime((char *)fname, DIP_ALL);
       }
     }
@@ -3448,12 +3411,6 @@ ambw_end:
   check_redraw(options[opt_idx].flags);
 
   return errmsg;
-}
-
-/// Simple int comparison function for use with qsort()
-static int int_cmp(const void *a, const void *b)
-{
-  return *(const int *)a - *(const int *)b;
 }
 
 /// Handle setting 'signcolumn' for value 'val'
@@ -3486,354 +3443,10 @@ int check_signcolumn(char_u *val)
   return FAIL;
 }
 
-/// Handle setting 'colorcolumn' or 'textwidth' in window "wp".
-///
-/// @return error message, NULL if it's OK.
-char *check_colorcolumn(win_T *wp)
-{
-  char_u *s;
-  int col;
-  unsigned int count = 0;
-  int color_cols[256];
-  int j = 0;
-
-  if (wp->w_buffer == NULL) {
-    return NULL;      // buffer was closed
-  }
-
-  for (s = wp->w_p_cc; *s != NUL && count < 255;) {
-    if (*s == '-' || *s == '+') {
-      // -N and +N: add to 'textwidth'
-      col = (*s == '-') ? -1 : 1;
-      s++;
-      if (!ascii_isdigit(*s)) {
-        return e_invarg;
-      }
-      col = col * getdigits_int((char **)&s, true, 0);
-      if (wp->w_buffer->b_p_tw == 0) {
-        goto skip;          // 'textwidth' not set, skip this item
-      }
-      assert((col >= 0
-              && wp->w_buffer->b_p_tw <= INT_MAX - col
-              && wp->w_buffer->b_p_tw + col >= INT_MIN)
-             || (col < 0
-                 && wp->w_buffer->b_p_tw >= INT_MIN - col
-                 && wp->w_buffer->b_p_tw + col <= INT_MAX));
-      col += (int)wp->w_buffer->b_p_tw;
-      if (col < 0) {
-        goto skip;
-      }
-    } else if (ascii_isdigit(*s)) {
-      col = getdigits_int((char **)&s, true, 0);
-    } else {
-      return e_invarg;
-    }
-    color_cols[count++] = col - 1;      // 1-based to 0-based
-skip:
-    if (*s == NUL) {
-      break;
-    }
-    if (*s != ',') {
-      return e_invarg;
-    }
-    if (*++s == NUL) {
-      return e_invarg;        // illegal trailing comma as in "set cc=80,"
-    }
-  }
-
-  xfree(wp->w_p_cc_cols);
-  if (count == 0) {
-    wp->w_p_cc_cols = NULL;
-  } else {
-    wp->w_p_cc_cols = xmalloc(sizeof(int) * (count + 1));
-    /* sort the columns for faster usage on screen redraw inside
-     * win_line() */
-    qsort(color_cols, count, sizeof(int), int_cmp);
-
-    for (unsigned int i = 0; i < count; i++) {
-      // skip duplicates
-      if (j == 0 || wp->w_p_cc_cols[j - 1] != color_cols[i]) {
-        wp->w_p_cc_cols[j++] = color_cols[i];
-      }
-    }
-    wp->w_p_cc_cols[j] = -1;        // end marker
-  }
-
-  return NULL;    // no error
-}
-
 void check_blending(win_T *wp)
 {
   wp->w_grid_alloc.blending =
     wp->w_p_winbl > 0 || (wp->w_floating && wp->w_float_config.shadow);
-}
-
-/// Calls mb_cptr2char_adv(p) and returns the character.
-/// If "p" starts with "\x", "\u" or "\U" the hex or unicode value is used.
-/// Returns 0 for invalid hex or invalid UTF-8 byte.
-static int get_encoded_char_adv(char_u **p)
-{
-  char_u *s = *p;
-
-  if (s[0] == '\\' && (s[1] == 'x' || s[1] == 'u' || s[1] == 'U')) {
-    int64_t num = 0;
-    int bytes;
-    int n;
-    for (bytes = s[1] == 'x' ? 1 : s[1] == 'u' ? 2 : 4; bytes > 0; bytes--) {
-      *p += 2;
-      n = hexhex2nr(*p);
-      if (n < 0) {
-        return 0;
-      }
-      num = num * 256 + n;
-    }
-    *p += 2;
-    return (int)num;
-  }
-
-  // TODO(bfredl): use schar_T representation and utfc_ptr2len
-  int clen = utf_ptr2len((char *)s);
-  int c = mb_cptr2char_adv((const char_u **)p);
-  if (clen == 1 && c > 127) {  // Invalid UTF-8 byte
-    return 0;
-  }
-  return c;
-}
-
-/// Handle setting 'listchars' or 'fillchars'.
-/// Assume monocell characters
-///
-/// @param varp either &curwin->w_p_lcs or &curwin->w_p_fcs
-/// @return error message, NULL if it's OK.
-static char *set_chars_option(win_T *wp, char_u **varp, bool set)
-{
-  int round, i, len, len2, entries;
-  char_u *p, *s;
-  int c1;
-  int c2 = 0;
-  int c3 = 0;
-  char_u *last_multispace = NULL;   // Last occurrence of "multispace:"
-  char_u *last_lmultispace = NULL;  // Last occurrence of "leadmultispace:"
-  int multispace_len = 0;           // Length of lcs-multispace string
-  int lead_multispace_len = 0;      // Length of lcs-leadmultispace string
-
-  struct chars_tab {
-    int *cp;    ///< char value
-    char *name;  ///< char id
-    int def;    ///< default value
-  };
-  struct chars_tab *tab;
-
-  struct chars_tab fcs_tab[] = {
-    { &wp->w_p_fcs_chars.colorcol,   "colorcol",  NUL  },
-    { &wp->w_p_fcs_chars.stl,        "stl",        ' '  },
-    { &wp->w_p_fcs_chars.stlnc,      "stlnc",      ' '  },
-    { &wp->w_p_fcs_chars.wbr,        "wbr",        ' '  },
-    { &wp->w_p_fcs_chars.horiz,      "horiz",      9472 },  // ─
-    { &wp->w_p_fcs_chars.horizup,    "horizup",    9524 },  // ┴
-    { &wp->w_p_fcs_chars.horizdown,  "horizdown",  9516 },  // ┬
-    { &wp->w_p_fcs_chars.vert,       "vert",       9474 },  // │
-    { &wp->w_p_fcs_chars.vertleft,   "vertleft",   9508 },  // ┤
-    { &wp->w_p_fcs_chars.vertright,  "vertright",  9500 },  // ├
-    { &wp->w_p_fcs_chars.verthoriz,  "verthoriz",  9532 },  // ┼
-    { &wp->w_p_fcs_chars.fold,       "fold",       183  },  // ·
-    { &wp->w_p_fcs_chars.foldopen,   "foldopen",   '-'  },
-    { &wp->w_p_fcs_chars.foldclosed, "foldclose",  '+'  },
-    { &wp->w_p_fcs_chars.foldsep,    "foldsep",    9474 },  // │
-    { &wp->w_p_fcs_chars.diff,       "diff",       '-'  },
-    { &wp->w_p_fcs_chars.msgsep,     "msgsep",     ' '  },
-    { &wp->w_p_fcs_chars.eob,        "eob",        '~'  },
-  };
-  struct chars_tab lcs_tab[] = {
-    { &wp->w_p_lcs_chars.eol,     "eol",      NUL  },
-    { &wp->w_p_lcs_chars.ext,     "extends",  NUL  },
-    { &wp->w_p_lcs_chars.nbsp,    "nbsp",     NUL  },
-    { &wp->w_p_lcs_chars.prec,    "precedes", NUL  },
-    { &wp->w_p_lcs_chars.space,   "space",    NUL  },
-    { &wp->w_p_lcs_chars.tab2,    "tab",      NUL  },
-    { &wp->w_p_lcs_chars.lead,    "lead",     NUL  },
-    { &wp->w_p_lcs_chars.trail,   "trail",    NUL  },
-    { &wp->w_p_lcs_chars.conceal, "conceal",  NUL  },
-  };
-
-  if (varp == &p_lcs || varp == &wp->w_p_lcs) {
-    tab = lcs_tab;
-    entries = ARRAY_SIZE(lcs_tab);
-    if (varp == &wp->w_p_lcs && wp->w_p_lcs[0] == NUL) {
-      varp = &p_lcs;
-    }
-  } else {
-    tab = fcs_tab;
-    entries = ARRAY_SIZE(fcs_tab);
-    if (varp == &wp->w_p_fcs && wp->w_p_fcs[0] == NUL) {
-      varp = &p_fcs;
-    }
-    if (*p_ambw == 'd') {
-      // XXX: If ambiwidth=double then some characters take 2 columns,
-      // which is forbidden (TUI limitation?). Set old defaults.
-      fcs_tab[3].def  = '-';
-      fcs_tab[4].def  = '-';
-      fcs_tab[5].def  = '-';
-      fcs_tab[6].def  = '|';
-      fcs_tab[7].def  = '|';
-      fcs_tab[8].def  = '|';
-      fcs_tab[9].def  = '+';
-      fcs_tab[10].def  = '-';
-      fcs_tab[13].def = '|';
-    }
-  }
-
-  // first round: check for valid value, second round: assign values
-  for (round = 0; round <= (set ? 1 : 0); round++) {
-    if (round > 0) {
-      // After checking that the value is valid: set defaults
-      for (i = 0; i < entries; i++) {
-        if (tab[i].cp != NULL) {
-          *(tab[i].cp) = tab[i].def;
-        }
-      }
-      if (varp == &p_lcs || varp == &wp->w_p_lcs) {
-        wp->w_p_lcs_chars.tab1 = NUL;
-        wp->w_p_lcs_chars.tab3 = NUL;
-
-        xfree(wp->w_p_lcs_chars.multispace);
-        if (multispace_len > 0) {
-          wp->w_p_lcs_chars.multispace = xmalloc(((size_t)multispace_len + 1) * sizeof(int));
-          wp->w_p_lcs_chars.multispace[multispace_len] = NUL;
-        } else {
-          wp->w_p_lcs_chars.multispace = NULL;
-        }
-
-        xfree(wp->w_p_lcs_chars.leadmultispace);
-        if (lead_multispace_len > 0) {
-          wp->w_p_lcs_chars.leadmultispace
-            = xmalloc(((size_t)lead_multispace_len + 1) * sizeof(int));
-          wp->w_p_lcs_chars.leadmultispace[lead_multispace_len] = NUL;
-        } else {
-          wp->w_p_lcs_chars.leadmultispace = NULL;
-        }
-      }
-    }
-    p = *varp;
-    while (*p) {
-      for (i = 0; i < entries; i++) {
-        len = (int)STRLEN(tab[i].name);
-        if (STRNCMP(p, tab[i].name, len) == 0
-            && p[len] == ':'
-            && p[len + 1] != NUL) {
-          c2 = c3 = 0;
-          s = p + len + 1;
-          c1 = get_encoded_char_adv(&s);
-          if (c1 == 0 || char2cells(c1) > 1) {
-            return e_invarg;
-          }
-          if (tab[i].cp == &wp->w_p_lcs_chars.tab2) {
-            if (*s == NUL) {
-              return e_invarg;
-            }
-            c2 = get_encoded_char_adv(&s);
-            if (c2 == 0 || char2cells(c2) > 1) {
-              return e_invarg;
-            }
-            if (!(*s == ',' || *s == NUL)) {
-              c3 = get_encoded_char_adv(&s);
-              if (c3 == 0 || char2cells(c3) > 1) {
-                return e_invarg;
-              }
-            }
-          }
-          if (*s == ',' || *s == NUL) {
-            if (round > 0) {
-              if (tab[i].cp == &wp->w_p_lcs_chars.tab2) {
-                wp->w_p_lcs_chars.tab1 = c1;
-                wp->w_p_lcs_chars.tab2 = c2;
-                wp->w_p_lcs_chars.tab3 = c3;
-              } else if (tab[i].cp != NULL) {
-                *(tab[i].cp) = c1;
-              }
-            }
-            p = s;
-            break;
-          }
-        }
-      }
-
-      if (i == entries) {
-        len = (int)STRLEN("multispace");
-        len2 = (int)STRLEN("leadmultispace");
-        if ((varp == &p_lcs || varp == &wp->w_p_lcs)
-            && STRNCMP(p, "multispace", len) == 0
-            && p[len] == ':'
-            && p[len + 1] != NUL) {
-          s = p + len + 1;
-          if (round == 0) {
-            // Get length of lcs-multispace string in the first round
-            last_multispace = p;
-            multispace_len = 0;
-            while (*s != NUL && *s != ',') {
-              c1 = get_encoded_char_adv(&s);
-              if (c1 == 0 || char2cells(c1) > 1) {
-                return e_invarg;
-              }
-              multispace_len++;
-            }
-            if (multispace_len == 0) {
-              // lcs-multispace cannot be an empty string
-              return e_invarg;
-            }
-            p = s;
-          } else {
-            int multispace_pos = 0;
-            while (*s != NUL && *s != ',') {
-              c1 = get_encoded_char_adv(&s);
-              if (p == last_multispace) {
-                wp->w_p_lcs_chars.multispace[multispace_pos++] = c1;
-              }
-            }
-            p = s;
-          }
-        } else if ((varp == &p_lcs || varp == &wp->w_p_lcs)
-                   && STRNCMP(p, "leadmultispace", len2) == 0
-                   && p[len2] == ':'
-                   && p[len2 + 1] != NUL) {
-          s = p + len2 + 1;
-          if (round == 0) {
-            // get length of lcs-leadmultispace string in first round
-            last_lmultispace = p;
-            lead_multispace_len = 0;
-            while (*s != NUL && *s != ',') {
-              c1 = get_encoded_char_adv(&s);
-              if (c1 == 0 || char2cells(c1) > 1) {
-                return e_invarg;
-              }
-              lead_multispace_len++;
-            }
-            if (lead_multispace_len == 0) {
-              // lcs-leadmultispace cannot be an empty string
-              return e_invarg;
-            }
-            p = s;
-          } else {
-            int multispace_pos = 0;
-            while (*s != NUL && *s != ',') {
-              c1 = get_encoded_char_adv(&s);
-              if (p == last_lmultispace) {
-                wp->w_p_lcs_chars.leadmultispace[multispace_pos++] = c1;
-              }
-            }
-            p = s;
-          }
-        } else {
-          return e_invarg;
-        }
-      }
-      if (*p == ',') {
-        p++;
-      }
-    }
-  }
-
-  return NULL;          // no error
 }
 
 /// Check validity of options with the 'statusline' format.
@@ -3906,63 +3519,30 @@ char *check_stl_option(char *s)
   return NULL;
 }
 
-static char *did_set_spell_option(bool is_spellfile)
-{
-  char *errmsg = NULL;
-
-  if (is_spellfile) {
-    int l = (int)STRLEN(curwin->w_s->b_p_spf);
-    if (l > 0
-        && (l < 4 || STRCMP(curwin->w_s->b_p_spf + l - 4, ".add") != 0)) {
-      errmsg = e_invarg;
-    }
-  }
-
-  if (errmsg == NULL) {
-    FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
-      if (wp->w_buffer == curbuf && wp->w_p_spell) {
-        errmsg = did_set_spelllang(wp);
-        break;
-      }
-    }
-  }
-
-  return errmsg;
-}
-
-/// Set curbuf->b_cap_prog to the regexp program for 'spellcapcheck'.
-/// Return error message when failed, NULL when OK.
-static char *compile_cap_prog(synblock_T *synblock)
-  FUNC_ATTR_NONNULL_ALL
-{
-  regprog_T *rp = synblock->b_cap_prog;
-  char_u *re;
-
-  if (synblock->b_p_spc == NULL || *synblock->b_p_spc == NUL) {
-    synblock->b_cap_prog = NULL;
-  } else {
-    // Prepend a ^ so that we only match at one column
-    re = concat_str((char_u *)"^", synblock->b_p_spc);
-    synblock->b_cap_prog = vim_regcomp((char *)re, RE_MAGIC);
-    xfree(re);
-    if (synblock->b_cap_prog == NULL) {
-      synblock->b_cap_prog = rp;         // restore the previous program
-      return e_invarg;
-    }
-  }
-
-  vim_regfree(rp);
-  return NULL;
-}
-
 /// Handle setting `winhighlight' in window "wp"
-static bool parse_winhl_opt(win_T *wp)
+bool parse_winhl_opt(win_T *wp)
 {
-  int w_hl_id_normal = 0;
-  int w_hl_ids[HLF_COUNT] = { 0 };
-  int hlf;
-
   const char *p = (const char *)wp->w_p_winhl;
+
+  if (!*p) {
+    if (wp->w_ns_hl_winhl && wp->w_ns_hl == wp->w_ns_hl_winhl) {
+      wp->w_ns_hl = 0;
+      wp->w_hl_needs_update = true;
+    }
+
+    return true;
+  }
+
+  if (wp->w_ns_hl_winhl == 0) {
+    wp->w_ns_hl_winhl = (int)nvim_create_namespace(NULL_STRING);
+  } else {
+    // namespace already exist. invalidate existing items
+    DecorProvider *dp = get_decor_provider(wp->w_ns_hl_winhl, true);
+    dp->hl_valid++;
+  }
+  wp->w_ns_hl = wp->w_ns_hl_winhl;
+  int ns_hl = wp->w_ns_hl;
+
   while (*p) {
     char *colon = strchr(p, ':');
     if (!colon) {
@@ -3973,27 +3553,15 @@ static bool parse_winhl_opt(win_T *wp)
     char *commap = xstrchrnul(hi, ',');
     size_t len = (size_t)(commap - hi);
     int hl_id = len ? syn_check_group(hi, len) : -1;
+    int hl_id_link = nlen ? syn_check_group(p, nlen) : 0;
 
-    if (strncmp("Normal", p, nlen) == 0) {
-      w_hl_id_normal = hl_id;
-    } else {
-      for (hlf = 0; hlf < HLF_COUNT; hlf++) {
-        if (strlen(hlf_names[hlf]) == nlen
-            && strncmp(hlf_names[hlf], p, nlen) == 0) {
-          w_hl_ids[hlf] = hl_id;
-          break;
-        }
-      }
-      if (hlf == HLF_COUNT) {
-        return false;
-      }
-    }
+    HlAttrs attrs = HLATTRS_INIT;
+    attrs.rgb_ae_attr |= HL_GLOBAL;
+    ns_hl_def(ns_hl, hl_id_link, attrs, hl_id, NULL);
 
     p = *commap ? commap + 1 : "";
   }
 
-  wp->w_hl_id_normal = w_hl_id_normal;
-  memcpy(wp->w_hl_ids, w_hl_ids, sizeof(w_hl_ids));
   wp->w_hl_needs_update = true;
   return true;
 }
@@ -4009,7 +3577,7 @@ static void set_option_sctx_idx(int opt_idx, int opt_flags, sctx_T script_ctx)
     .script_ctx = {
       script_ctx.sc_sid,
       script_ctx.sc_seq,
-      script_ctx.sc_lnum + sourcing_lnum
+      script_ctx.sc_lnum + SOURCING_LNUM
     },
     current_channel_id
   };
@@ -5667,7 +5235,7 @@ static int put_setstring(FILE *fd, char *cmd, char *name, char_u **valuep, uint6
   char_u *s;
   char_u *buf = NULL;
   char_u *part = NULL;
-  char_u *p;
+  char *p;
 
   if (fprintf(fd, "%s %s=", cmd, name) < 0) {
     return FAIL;
@@ -5703,14 +5271,14 @@ static int put_setstring(FILE *fd, char *cmd, char *name, char_u **valuep, uint6
         if (put_eol(fd) == FAIL) {
           goto fail;
         }
-        p = buf;
+        p = (char *)buf;
         while (*p != NUL) {
           // for each comma separated option part, append value to
           // the option, :set rtp+=value
           if (fprintf(fd, "%s %s+=", cmd, name) < 0) {
             goto fail;
           }
-          (void)copy_option_part((char **)&p, (char *)part, size, ",");
+          (void)copy_option_part(&p, (char *)part, size, ",");
           if (put_escstr(fd, part, 2) == FAIL || put_eol(fd) == FAIL) {
             goto fail;
           }
@@ -5769,47 +5337,6 @@ static int put_setbool(FILE *fd, char *cmd, char *name, int value)
     return FAIL;
   }
   return OK;
-}
-
-/// Compute columns for ruler and shown command. 'sc_col' is also used to
-/// decide what the maximum length of a message on the status line can be.
-/// If there is a status line for the last window, 'sc_col' is independent
-/// of 'ru_col'.
-
-#define COL_RULER 17        // columns needed by standard ruler
-
-void comp_col(void)
-{
-  int last_has_status = (p_ls > 1 || (p_ls == 1 && !ONE_WINDOW));
-
-  sc_col = 0;
-  ru_col = 0;
-  if (p_ru) {
-    ru_col = (ru_wid ? ru_wid : COL_RULER) + 1;
-    // no last status line, adjust sc_col
-    if (!last_has_status) {
-      sc_col = ru_col;
-    }
-  }
-  if (p_sc) {
-    sc_col += SHOWCMD_COLS;
-    if (!p_ru || last_has_status) {         // no need for separating space
-      sc_col++;
-    }
-  }
-  assert(sc_col >= 0
-         && INT_MIN + sc_col <= Columns);
-  sc_col = Columns - sc_col;
-  assert(ru_col >= 0
-         && INT_MIN + ru_col <= Columns);
-  ru_col = Columns - ru_col;
-  if (sc_col <= 0) {            // screen too narrow, will become a mess
-    sc_col = 1;
-  }
-  if (ru_col <= 0) {
-    ru_col = 1;
-  }
-  set_vim_var_nr(VV_ECHOSPACE, sc_col - 1);
 }
 
 // Unset local option value, similar to ":set opt<".
@@ -6157,6 +5684,7 @@ static char_u *get_varp(vimoption_T *p)
     return (char_u *)&(curwin->w_p_cocu);
   case PV_COLE:
     return (char_u *)&(curwin->w_p_cole);
+
   case PV_AI:
     return (char_u *)&(curbuf->b_p_ai);
   case PV_BIN:
@@ -6317,7 +5845,7 @@ void win_copy_options(win_T *wp_from, win_T *wp_to)
 {
   copy_winopt(&wp_from->w_onebuf_opt, &wp_to->w_onebuf_opt);
   copy_winopt(&wp_from->w_allbuf_opt, &wp_to->w_allbuf_opt);
-  didset_window_options(wp_to);
+  didset_window_options(wp_to, true);
 }
 
 /// Copy the options from one winopt_T to another.
@@ -6442,7 +5970,7 @@ void clear_winopt(winopt_T *wop)
   clear_string_option((char_u **)&wop->wo_wbr);
 }
 
-void didset_window_options(win_T *wp)
+void didset_window_options(win_T *wp, bool valid_cursor)
 {
   check_colorcolumn(wp);
   briopt_check(wp);
@@ -6451,7 +5979,7 @@ void didset_window_options(win_T *wp)
   set_chars_option(wp, &wp->w_p_lcs, true);
   parse_winhl_opt(wp);  // sets w_hl_needs_update also for w_p_winbl
   check_blending(wp);
-  set_winbar_win(wp, false);
+  set_winbar_win(wp, false, valid_cursor);
   wp->w_grid_alloc.blending = wp->w_p_winbl > 0;
 }
 
@@ -6514,7 +6042,7 @@ void buf_copy_options(buf_T *buf, int flags)
     }
 
     if (should_copy || (flags & BCO_ALWAYS)) {
-      memset(buf->b_p_script_ctx, 0, sizeof(buf->b_p_script_ctx));
+      CLEAR_FIELD(buf->b_p_script_ctx);
       init_buf_opt_idx();
       // Don't copy the options specific to a help buffer when
       // BCO_NOHELP is given or the options were initialized already
@@ -7567,313 +7095,6 @@ bool file_ff_differs(buf_T *buf, bool ignore_empty)
 int check_ff_value(char_u *p)
 {
   return check_opt_strings(p, p_ff_values, false);
-}
-
-// Set the integer values corresponding to the string setting of 'vartabstop'.
-// "array" will be set, caller must free it if needed.
-// Return false for an error.
-bool tabstop_set(char_u *var, long **array)
-{
-  long valcount = 1;
-  int t;
-  char_u *cp;
-
-  if (var[0] == NUL || (var[0] == '0' && var[1] == NUL)) {
-    *array = NULL;
-    return true;
-  }
-
-  for (cp = var; *cp != NUL; cp++) {
-    if (cp == var || cp[-1] == ',') {
-      char_u *end;
-
-      if (strtol((char *)cp, (char **)&end, 10) <= 0) {
-        if (cp != end) {
-          emsg(_(e_positive));
-        } else {
-          semsg(_(e_invarg2), cp);
-        }
-        return false;
-      }
-    }
-
-    if (ascii_isdigit(*cp)) {
-      continue;
-    }
-    if (cp[0] == ',' && cp > var && cp[-1] != ',' && cp[1] != NUL) {
-      valcount++;
-      continue;
-    }
-    semsg(_(e_invarg2), var);
-    return false;
-  }
-
-  *array = (long *)xmalloc((unsigned)(valcount + 1) * sizeof(long));
-  (*array)[0] = valcount;
-
-  t = 1;
-  for (cp = var; *cp != NUL;) {
-    int n = atoi((char *)cp);
-
-    // Catch negative values, overflow and ridiculous big values.
-    if (n <= 0 || n > TABSTOP_MAX) {
-      semsg(_(e_invarg2), cp);
-      XFREE_CLEAR(*array);
-      return false;
-    }
-    (*array)[t++] = n;
-    while (*cp != NUL && *cp != ',') {
-      cp++;
-    }
-    if (*cp != NUL) {
-      cp++;
-    }
-  }
-
-  return true;
-}
-
-// Calculate the number of screen spaces a tab will occupy.
-// If "vts" is set then the tab widths are taken from that array,
-// otherwise the value of ts is used.
-int tabstop_padding(colnr_T col, long ts_arg, long *vts)
-{
-  long ts = ts_arg == 0 ? 8 : ts_arg;
-  colnr_T tabcol = 0;
-  int t;
-  long padding = 0;
-
-  if (vts == NULL || vts[0] == 0) {
-    return (int)(ts - (col % ts));
-  }
-
-  const long tabcount = vts[0];
-
-  for (t = 1; t <= tabcount; t++) {
-    tabcol += (colnr_T)vts[t];
-    if (tabcol > col) {
-      padding = tabcol - col;
-      break;
-    }
-  }
-  if (t > tabcount) {
-    padding = vts[tabcount] - ((col - tabcol) % vts[tabcount]);
-  }
-
-  return (int)padding;
-}
-
-// Find the size of the tab that covers a particular column.
-int tabstop_at(colnr_T col, long ts, long *vts)
-{
-  colnr_T tabcol = 0;
-  int t;
-  long tab_size = 0;
-
-  if (vts == NULL || vts[0] == 0) {
-    return (int)ts;
-  }
-
-  const long tabcount = vts[0];
-  for (t = 1; t <= tabcount; t++) {
-    tabcol += (colnr_T)vts[t];
-    if (tabcol > col) {
-      tab_size = vts[t];
-      break;
-    }
-  }
-  if (t > tabcount) {
-    tab_size = vts[tabcount];
-  }
-
-  return (int)tab_size;
-}
-
-// Find the column on which a tab starts.
-colnr_T tabstop_start(colnr_T col, long ts, long *vts)
-{
-  colnr_T tabcol = 0;
-  int t;
-
-  if (vts == NULL || vts[0] == 0) {
-    return (int)((col / ts) * ts);
-  }
-
-  const long tabcount = vts[0];
-  for (t = 1; t <= tabcount; t++) {
-    tabcol += (colnr_T)vts[t];
-    if (tabcol > col) {
-      return (int)(tabcol - vts[t]);
-    }
-  }
-
-  const int excess = (int)(tabcol % vts[tabcount]);
-  return (int)(excess + ((col - excess) / vts[tabcount]) * vts[tabcount]);
-}
-
-// Find the number of tabs and spaces necessary to get from one column
-// to another.
-void tabstop_fromto(colnr_T start_col, colnr_T end_col, long ts_arg, long *vts, int *ntabs,
-                    int *nspcs)
-{
-  int spaces = end_col - start_col;
-  colnr_T tabcol = 0;
-  long padding = 0;
-  int t;
-  long ts = ts_arg == 0 ? curbuf->b_p_ts : ts_arg;
-
-  if (vts == NULL || vts[0] == 0) {
-    int tabs = 0;
-
-    const int initspc = (int)(ts - (start_col % ts));
-    if (spaces >= initspc) {
-      spaces -= initspc;
-      tabs++;
-    }
-    tabs += (int)(spaces / ts);
-    spaces -= (int)((spaces / ts) * ts);
-
-    *ntabs = tabs;
-    *nspcs = spaces;
-    return;
-  }
-
-  // Find the padding needed to reach the next tabstop.
-  const long tabcount = vts[0];
-  for (t = 1; t <= tabcount; t++) {
-    tabcol += (colnr_T)vts[t];
-    if (tabcol > start_col) {
-      padding = tabcol - start_col;
-      break;
-    }
-  }
-  if (t > tabcount) {
-    padding = vts[tabcount] - ((start_col - tabcol) % vts[tabcount]);
-  }
-
-  // If the space needed is less than the padding no tabs can be used.
-  if (spaces < padding) {
-    *ntabs = 0;
-    *nspcs = spaces;
-    return;
-  }
-
-  *ntabs = 1;
-  spaces -= (int)padding;
-
-  // At least one tab has been used. See if any more will fit.
-  while (spaces != 0 && ++t <= tabcount) {
-    padding = vts[t];
-    if (spaces < padding) {
-      *nspcs = spaces;
-      return;
-    }
-    *ntabs += 1;
-    spaces -= (int)padding;
-  }
-
-  *ntabs += spaces / (int)vts[tabcount];
-  *nspcs = spaces % (int)vts[tabcount];
-}
-
-// See if two tabstop arrays contain the same values.
-bool tabstop_eq(long *ts1, long *ts2)
-{
-  int t;
-
-  if ((ts1 == 0 && ts2) || (ts1 && ts2 == 0)) {
-    return false;
-  }
-  if (ts1 == ts2) {
-    return true;
-  }
-  if (ts1[0] != ts2[0]) {
-    return false;
-  }
-
-  for (t = 1; t <= ts1[0]; t++) {
-    if (ts1[t] != ts2[t]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// Copy a tabstop array, allocating space for the new array.
-int *tabstop_copy(long *oldts)
-{
-  long *newts;
-  int t;
-
-  if (oldts == 0) {
-    return 0;
-  }
-
-  newts = xmalloc((unsigned)(oldts[0] + 1) * sizeof(long));
-  for (t = 0; t <= oldts[0]; t++) {
-    newts[t] = oldts[t];
-  }
-
-  return (int *)newts;
-}
-
-// Return a count of the number of tabstops.
-int tabstop_count(long *ts)
-{
-  return ts != NULL ? (int)ts[0] : 0;
-}
-
-// Return the first tabstop, or 8 if there are no tabstops defined.
-int tabstop_first(long *ts)
-{
-  return ts != NULL ? (int)ts[1] : 8;
-}
-
-/// Return the effective shiftwidth value for current buffer, using the
-/// 'tabstop' value when 'shiftwidth' is zero.
-int get_sw_value(buf_T *buf)
-{
-  long result = get_sw_value_col(buf, 0);
-  assert(result >= 0 && result <= INT_MAX);
-  return (int)result;
-}
-
-// Idem, using the first non-black in the current line.
-long get_sw_value_indent(buf_T *buf)
-{
-  pos_T pos = curwin->w_cursor;
-
-  pos.col = (colnr_T)getwhitecols_curline();
-  return get_sw_value_pos(buf, &pos);
-}
-
-// Idem, using "pos".
-long get_sw_value_pos(buf_T *buf, pos_T *pos)
-{
-  pos_T save_cursor = curwin->w_cursor;
-  long sw_value;
-
-  curwin->w_cursor = *pos;
-  sw_value = get_sw_value_col(buf, get_nolist_virtcol());
-  curwin->w_cursor = save_cursor;
-  return sw_value;
-}
-
-// Idem, using virtual column "col".
-long get_sw_value_col(buf_T *buf, colnr_T col)
-{
-  return buf->b_p_sw ? buf->b_p_sw
-                     : tabstop_at(col, buf->b_p_ts, buf->b_p_vts_array);
-}
-
-/// Return the effective softtabstop value for the current buffer,
-/// using the shiftwidth  value when 'softtabstop' is negative.
-int get_sts_value(void)
-{
-  long result = curbuf->b_p_sts < 0 ? get_sw_value(curbuf) : curbuf->b_p_sts;
-  assert(result >= 0 && result <= INT_MAX);
-  return (int)result;
 }
 
 /// This is called when 'breakindentopt' is changed and when a window is

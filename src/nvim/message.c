@@ -15,6 +15,7 @@
 #include "nvim/ascii.h"
 #include "nvim/assert.h"
 #include "nvim/charset.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
@@ -23,7 +24,9 @@
 #include "nvim/func_attr.h"
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
+#include "nvim/grid.h"
 #include "nvim/highlight.h"
+#include "nvim/indent.h"
 #include "nvim/input.h"
 #include "nvim/keycodes.h"
 #include "nvim/main.h"
@@ -38,7 +41,7 @@
 #include "nvim/os/os.h"
 #include "nvim/os/time.h"
 #include "nvim/regexp.h"
-#include "nvim/screen.h"
+#include "nvim/runtime.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/ui.h"
@@ -318,7 +321,7 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
   if (entered >= 3) {
     return TRUE;
   }
-  ++entered;
+  entered++;
 
   // Add message to history (unless it's a repeated kept message or a
   // truncated message)
@@ -355,7 +358,7 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
   need_fileinfo = false;
 
   xfree(buf);
-  --entered;
+  entered--;
   return retval;
 }
 
@@ -524,7 +527,7 @@ int smsg_attr_keep(int attr, const char *s, ...)
  * isn't printed each time when it didn't change.
  */
 static int last_sourcing_lnum = 0;
-static char_u *last_sourcing_name = NULL;
+static char *last_sourcing_name = NULL;
 
 /// Reset the last used sourcing name/lnum.  Makes sure it is displayed again
 /// for the next error message;
@@ -534,16 +537,16 @@ void reset_last_sourcing(void)
   last_sourcing_lnum = 0;
 }
 
-/// @return  TRUE if "sourcing_name" differs from "last_sourcing_name".
-static int other_sourcing_name(void)
+/// @return  true if "SOURCING_NAME" differs from "last_sourcing_name".
+static bool other_sourcing_name(void)
 {
-  if (sourcing_name != NULL) {
+  if (SOURCING_NAME != NULL) {
     if (last_sourcing_name != NULL) {
-      return STRCMP(sourcing_name, last_sourcing_name) != 0;
+      return strcmp(SOURCING_NAME, last_sourcing_name) != 0;
     }
-    return TRUE;
+    return true;
   }
-  return FALSE;
+  return false;
 }
 
 /// Get the message about the source, as used for an error message
@@ -553,11 +556,19 @@ static int other_sourcing_name(void)
 static char *get_emsg_source(void)
   FUNC_ATTR_MALLOC FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  if (sourcing_name != NULL && other_sourcing_name()) {
+  if (SOURCING_NAME != NULL && other_sourcing_name()) {
+    char *sname = estack_sfile(ESTACK_NONE);
+    char *tofree = sname;
+
+    if (sname == NULL) {
+      sname = SOURCING_NAME;
+    }
+
     const char *const p = _("Error detected while processing %s:");
-    const size_t buf_len = STRLEN(sourcing_name) + strlen(p) + 1;
+    const size_t buf_len = STRLEN(sname) + strlen(p) + 1;
     char *const buf = xmalloc(buf_len);
-    snprintf(buf, buf_len, p, sourcing_name);
+    snprintf(buf, buf_len, p, sname);
+    xfree(tofree);
     return buf;
   }
   return NULL;
@@ -572,13 +583,13 @@ static char *get_emsg_lnum(void)
 {
   // lnum is 0 when executing a command from the command line
   // argument, we don't want a line number then
-  if (sourcing_name != NULL
-      && (other_sourcing_name() || sourcing_lnum != last_sourcing_lnum)
-      && sourcing_lnum != 0) {
+  if (SOURCING_NAME != NULL
+      && (other_sourcing_name() || SOURCING_LNUM != last_sourcing_lnum)
+      && SOURCING_LNUM != 0) {
     const char *const p = _("line %4ld:");
     const size_t buf_len = 20 + strlen(p);
     char *const buf = xmalloc(buf_len);
-    snprintf(buf, buf_len, p, (long)sourcing_lnum);
+    snprintf(buf, buf_len, p, (long)SOURCING_LNUM);
     return buf;
   }
   return NULL;
@@ -589,6 +600,15 @@ static char *get_emsg_lnum(void)
 /// is only displayed if it changed.
 void msg_source(int attr)
 {
+  static bool recursive = false;
+
+  // Bail out if something called here causes an error.
+  if (recursive) {
+    return;
+  }
+  recursive = true;
+
+  msg_scroll = true;  // this will take more than one line
   no_wait_return++;
   char *p = get_emsg_source();
   if (p != NULL) {
@@ -599,19 +619,19 @@ void msg_source(int attr)
   if (p != NULL) {
     msg_attr(p, HL_ATTR(HLF_N));
     xfree(p);
-    last_sourcing_lnum = sourcing_lnum;      // only once for each line
+    last_sourcing_lnum = SOURCING_LNUM;      // only once for each line
   }
 
   // remember the last sourcing name printed, also when it's empty
-  if (sourcing_name == NULL || other_sourcing_name()) {
-    xfree(last_sourcing_name);
-    if (sourcing_name == NULL) {
-      last_sourcing_name = NULL;
-    } else {
-      last_sourcing_name = vim_strsave((char_u *)sourcing_name);
+  if (SOURCING_NAME == NULL || other_sourcing_name()) {
+    XFREE_CLEAR(last_sourcing_name);
+    if (SOURCING_NAME != NULL) {
+      last_sourcing_name = xstrdup(SOURCING_NAME);
     }
   }
-  --no_wait_return;
+  no_wait_return--;
+
+  recursive = false;
 }
 
 /// @return  TRUE if not giving error messages right now:
@@ -686,9 +706,9 @@ static bool emsg_multiline(const char *s, bool multiline)
       }
 
       // Log (silent) errors as debug messages.
-      if (sourcing_name != NULL && sourcing_lnum != 0) {
+      if (SOURCING_NAME != NULL && SOURCING_LNUM != 0) {
         DLOG("(:silent) %s (%s (line %ld))",
-             s, sourcing_name, (long)sourcing_lnum);
+             s, SOURCING_NAME, (long)SOURCING_LNUM);
       } else {
         DLOG("(:silent) %s", s);
       }
@@ -697,8 +717,8 @@ static bool emsg_multiline(const char *s, bool multiline)
     }
 
     // Log editor errors as INFO.
-    if (sourcing_name != NULL && sourcing_lnum != 0) {
-      ILOG("%s (%s (line %ld))", s, sourcing_name, (long)sourcing_lnum);
+    if (SOURCING_NAME != NULL && SOURCING_LNUM != 0) {
+      ILOG("%s (%s (line %ld))", s, SOURCING_NAME, (long)SOURCING_LNUM);
     } else {
       ILOG("%s", s);
     }
@@ -722,7 +742,6 @@ static bool emsg_multiline(const char *s, bool multiline)
   }
 
   emsg_on_display = true;     // remember there is an error message
-  msg_scroll++;               // don't overwrite a previous message
   attr = HL_ATTR(HLF_E);      // set highlight mode for error messages
   if (msg_scrolled != 0) {
     need_wait_return = true;  // needed in case emsg() is called after
@@ -733,9 +752,8 @@ static bool emsg_multiline(const char *s, bool multiline)
     msg_ext_set_kind("emsg");
   }
 
-  /*
-   * Display name and line number for the source of the error.
-   */
+  // Display name and line number for the source of the error.
+  // Sets "msg_scroll".
   msg_source(attr);
 
   // Display the error message itself.
@@ -812,8 +830,15 @@ static bool semsgv(const char *fmt, va_list ap)
 /// detected when fuzzing vim.
 void iemsg(const char *s)
 {
+  if (emsg_not_now()) {
+    return;
+  }
+
   emsg(s);
 #ifdef ABORT_ON_INTERNAL_ERROR
+  set_vim_var_string(VV_ERRMSG, s, -1);
+  msg_putchar('\n');  // avoid overwriting the error message
+  ui_flush();
   abort();
 #endif
 }
@@ -823,11 +848,17 @@ void iemsg(const char *s)
 /// detected when fuzzing vim.
 void siemsg(const char *s, ...)
 {
+  if (emsg_not_now()) {
+    return;
+  }
+
   va_list ap;
   va_start(ap, s);
   (void)semsgv(s, ap);
   va_end(ap);
 #ifdef ABORT_ON_INTERNAL_ERROR
+  msg_putchar('\n');  // avoid overwriting the error message
+  ui_flush();
   abort();
 #endif
 }
@@ -999,7 +1030,7 @@ int delete_first_msg(void)
   xfree(p->msg);
   hl_msg_free(p->multiattr);
   xfree(p);
-  --msg_hist_len;
+  msg_hist_len--;
   return OK;
 }
 
@@ -1964,13 +1995,13 @@ static char_u *screen_puts_mbyte(char_u *s, int l, int attr)
     msg_col -= cw;
     if (msg_col == 0) {
       msg_col = Columns;
-      ++msg_row;
+      msg_row++;
     }
   } else {
     msg_col += cw;
     if (msg_col >= Columns) {
       msg_col = 0;
-      ++msg_row;
+      msg_row++;
     }
   }
   return s + l;
@@ -2123,7 +2154,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
   int t_col = 0;  // Screen cells todo, 0 when "t_s" not used.
   int l;
   int cw;
-  const char_u *sb_str = str;
+  const char *sb_str = (char *)str;
   int sb_col = msg_col;
   int wrap;
   int did_last_char;
@@ -2208,7 +2239,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
 
       if (p_more) {
         // Store text for scrolling back.
-        store_sb_text((char_u **)&sb_str, (char_u *)s, attr, &sb_col, true);
+        store_sb_text((char **)&sb_str, (char *)s, attr, &sb_col, true);
       }
 
       inc_msg_scrolled();
@@ -2223,7 +2254,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
        * for a character.
        */
       if (lines_left > 0) {
-        --lines_left;
+        lines_left--;
       }
       if (p_more && lines_left == 0 && State != MODE_HITRETURN
           && !msg_no_more && !exmode_active) {
@@ -2255,7 +2286,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
 
     if (wrap && p_more && !recurse) {
       // Store text for scrolling back.
-      store_sb_text((char_u **)&sb_str, (char_u *)s, attr, &sb_col, true);
+      store_sb_text((char **)&sb_str, (char *)s, attr, &sb_col, true);
     }
 
     if (*s == '\n') {               // go to next line
@@ -2272,7 +2303,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
       msg_col = 0;
     } else if (*s == '\b') {      // go to previous char
       if (msg_col) {
-        --msg_col;
+        msg_col--;
       }
     } else if (*s == TAB) {       // translate Tab into spaces
       do {
@@ -2306,7 +2337,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
         s += l - 1;
       }
     }
-    ++s;
+    s++;
   }
 
   // Output any postponed text.
@@ -2314,7 +2345,7 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr, int recurs
     t_puts(&t_col, t_s, s, attr);
   }
   if (p_more && !recurse) {
-    store_sb_text((char_u **)&sb_str, (char_u *)s, attr, &sb_col, false);
+    store_sb_text((char **)&sb_str, (char *)s, attr, &sb_col, false);
   }
 
   msg_check();
@@ -2457,7 +2488,7 @@ void msg_reset_scroll(void)
 static void inc_msg_scrolled(void)
 {
   if (*get_vim_var_str(VV_SCROLLSTART) == NUL) {
-    char *p = sourcing_name;
+    char *p = SOURCING_NAME;
     char *tofree = NULL;
 
     // v:scrollstart is empty, set it to the script/function name and line
@@ -2468,7 +2499,7 @@ static void inc_msg_scrolled(void)
       size_t len = strlen(p) + 40;
       tofree = xmalloc(len);
       vim_snprintf(tofree, len, _("%s line %" PRId64),
-                   p, (int64_t)sourcing_lnum);
+                   p, (int64_t)SOURCING_LNUM);
       p = tofree;
     }
     set_vim_var_string(VV_SCROLLSTART, p, -1);
@@ -2497,7 +2528,7 @@ static sb_clear_T do_clear_sb_text = SB_CLEAR_NONE;
 /// @param sb_str  start of string
 /// @param s  just after string
 /// @param finish  line ends
-static void store_sb_text(char_u **sb_str, char_u *s, int attr, int *sb_col, int finish)
+static void store_sb_text(char **sb_str, char *s, int attr, int *sb_col, int finish)
 {
   msgchunk_T *mp;
 
@@ -2654,7 +2685,7 @@ static msgchunk_T *disp_sb_line(int row, msgchunk_T *smp)
     msg_col = mp->sb_msg_col;
     p = mp->sb_text;
     if (*p == '\n') {       // don't display the line break
-      ++p;
+      p++;
     }
     msg_puts_display(p, -1, mp->sb_attr, TRUE);
     if (mp->sb_eol || mp->sb_next == NULL) {
@@ -2683,7 +2714,7 @@ static void t_puts(int *t_col, const char_u *t_s, const char_u *s, int attr)
   }
   if (msg_col >= Columns) {
     msg_col = 0;
-    ++msg_row;
+    msg_row++;
   }
 }
 
@@ -2938,7 +2969,7 @@ static int do_more_prompt(int typed_char)
                       HL_ATTR(HLF_MSG));
             for (i = 0; mp != NULL && i < Rows - 1; i++) {
               mp = disp_sb_line(i, mp);
-              ++msg_scrolled;
+              msg_scrolled++;
             }
             to_redraw = false;
           }
@@ -3037,12 +3068,12 @@ static void msg_screen_putchar(int c, int attr)
   if (cmdmsg_rl) {
     if (--msg_col == 0) {
       msg_col = Columns;
-      ++msg_row;
+      msg_row++;
     }
   } else {
     if (++msg_col >= Columns) {
       msg_col = 0;
-      ++msg_row;
+      msg_row++;
     }
   }
 }
@@ -3339,7 +3370,7 @@ int redirecting(void)
 void verbose_enter(void)
 {
   if (*p_vfile != NUL) {
-    ++msg_silent;
+    msg_silent++;
   }
 }
 
@@ -3358,7 +3389,7 @@ void verbose_leave(void)
 void verbose_enter_scroll(void)
 {
   if (*p_vfile != NUL) {
-    ++msg_silent;
+    msg_silent++;
   } else {
     // always scroll up, don't overwrite
     msg_scroll = TRUE;
@@ -3520,7 +3551,7 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
    * Since we wait for a keypress, don't make the
    * user press RETURN as well afterwards.
    */
-  ++no_wait_return;
+  no_wait_return++;
   hotkeys = msg_show_console_dialog(message, buttons, dfltbutton);
 
   for (;;) {
@@ -3569,7 +3600,7 @@ int do_dialog(int type, char_u *title, char_u *message, char_u *buttons, int dfl
   msg_silent = save_msg_silent;
   State = oldState;
   setmouse();
-  --no_wait_return;
+  no_wait_return--;
   msg_end_prompt();
 
   return retval;
@@ -3723,7 +3754,7 @@ static void copy_hotkeys_and_msg(const char_u *message, char_u *buttons, int def
       }
     } else if (*r == DLG_HOTKEY_CHAR || first_hotkey) {
       if (*r == DLG_HOTKEY_CHAR) {
-        ++r;
+        r++;
       }
 
       first_hotkey = false;

@@ -13,11 +13,12 @@
 #include "nvim/cursor.h"
 #include "nvim/cursor_shape.h"
 #include "nvim/diff.h"
+#include "nvim/drawscreen.h"
 #include "nvim/event/loop.h"
-#include "nvim/ex_cmds2.h"
 #include "nvim/ex_getln.h"
 #include "nvim/fold.h"
 #include "nvim/garray.h"
+#include "nvim/grid.h"
 #include "nvim/highlight.h"
 #include "nvim/log.h"
 #include "nvim/main.h"
@@ -31,8 +32,7 @@
 #include "nvim/os/signal.h"
 #include "nvim/os/time.h"
 #include "nvim/os_unix.h"
-#include "nvim/popupmnu.h"
-#include "nvim/screen.h"
+#include "nvim/popupmenu.h"
 #include "nvim/ui.h"
 #include "nvim/ui_compositor.h"
 #include "nvim/vim.h"
@@ -663,6 +663,6 @@ void ui_grid_resize(handle_T grid_handle, int width, int height, Error *error)
     // non-positive indicates no request
     wp->w_height_request = MAX(height, 0);
     wp->w_width_request = MAX(width, 0);
-    win_set_inner_size(wp);
+    win_set_inner_size(wp, true);
   }
 }

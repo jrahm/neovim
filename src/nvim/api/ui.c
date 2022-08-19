@@ -11,14 +11,14 @@
 #include "nvim/api/ui.h"
 #include "nvim/channel.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/grid.h"
 #include "nvim/highlight.h"
 #include "nvim/map.h"
 #include "nvim/memory.h"
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/msgpack_rpc/helpers.h"
 #include "nvim/option.h"
-#include "nvim/popupmnu.h"
-#include "nvim/screen.h"
+#include "nvim/popupmenu.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
 #include "nvim/window.h"
@@ -224,7 +224,7 @@ void nvim_ui_attach(uint64_t channel_id, Integer width, Integer height, Dictiona
   ui->event = remote_ui_event;
   ui->inspect = remote_ui_inspect;
 
-  memset(ui->ui_ext, 0, sizeof(ui->ui_ext));
+  CLEAR_FIELD(ui->ui_ext);
 
   for (size_t i = 0; i < options.size; i++) {
     ui_set_option(ui, true, options.items[i].key, options.items[i].value, err);

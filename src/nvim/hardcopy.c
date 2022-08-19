@@ -17,12 +17,13 @@
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
 #include "nvim/eval.h"
-#include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/fileio.h"
 #include "nvim/garray.h"
+#include "nvim/grid.h"
 #include "nvim/hardcopy.h"
 #include "nvim/highlight_group.h"
+#include "nvim/indent.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -31,7 +32,7 @@
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
 #include "nvim/path.h"
-#include "nvim/screen.h"
+#include "nvim/runtime.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/ui.h"
@@ -292,8 +293,8 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
   char *ret = NULL;
   char_u *stringp;
   char_u *colonp;
-  char_u *commap;
-  char_u *p;
+  char *commap;
+  char *p;
   size_t idx = 0;                          // init for GCC
   int len;
 
@@ -315,9 +316,9 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
       ret = N_("E550: Missing colon");
       break;
     }
-    commap = (char_u *)vim_strchr((char *)stringp, ',');
+    commap = vim_strchr((char *)stringp, ',');
     if (commap == NULL) {
-      commap = option_str + STRLEN(option_str);
+      commap = (char *)option_str + STRLEN(option_str);
     }
 
     len = (int)(colonp - stringp);
@@ -333,8 +334,8 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
       break;
     }
 
-    p = colonp + 1;
-    table[idx].present = TRUE;
+    p = (char *)colonp + 1;
+    table[idx].present = true;
 
     if (table[idx].hasnum) {
       if (!ascii_isdigit(*p)) {
@@ -342,15 +343,15 @@ static char *parse_list_options(char_u *option_str, option_table_T *table, size_
         break;
       }
 
-      table[idx].number = getdigits_int((char **)&p, false, 0);
+      table[idx].number = getdigits_int(&p, false, 0);
     }
 
-    table[idx].string = p;
+    table[idx].string = (char_u *)p;
     table[idx].strlen = (int)(commap - p);
 
-    stringp = commap;
+    stringp = (char_u *)commap;
     if (*stringp == ',') {
-      ++stringp;
+      stringp++;
     }
   }
 
@@ -632,8 +633,8 @@ void ex_hardcopy(exarg_T *eap)
   int page_line;
   int jobsplit;
 
-  memset(&settings, 0, sizeof(prt_settings_T));
-  settings.has_color = TRUE;
+  CLEAR_FIELD(settings);
+  settings.has_color = true;
 
   if (*eap->arg == '>') {
     char *errormsg = NULL;
@@ -734,7 +735,7 @@ void ex_hardcopy(exarg_T *eap)
     prt_pos_T page_prtpos;              // print position at page start
     int side;
 
-    memset(&page_prtpos, 0, sizeof(prt_pos_T));
+    CLEAR_FIELD(page_prtpos);
     page_prtpos.file_line = eap->line1;
     prtpos = page_prtpos;
 
@@ -837,7 +838,7 @@ void ex_hardcopy(exarg_T *eap)
         }
       }
       if (settings.duplex && prtpos.file_line <= eap->line2) {
-        ++page_count;
+        page_count++;
       }
 
       // Remember the position where the next page starts.
@@ -900,7 +901,7 @@ static colnr_T hardcopy_line(prt_settings_T *psettings, int page_line, prt_pos_T
     }
     // syntax highlighting stuff.
     if (psettings->do_syntax) {
-      id = syn_get_id(curwin, ppos->file_line, col, 1, NULL, FALSE);
+      id = syn_get_id(curwin, ppos->file_line, col, 1, NULL, false);
       if (id > 0) {
         id = syn_get_final_id(id);
       } else {
@@ -1718,7 +1719,7 @@ static bool prt_open_resource(struct prt_ps_resource_S *resource)
     semsg(_("E624: Can't open file \"%s\""), resource->filename);
     return false;
   }
-  memset(prt_resfile.buffer, NUL, PRT_FILE_BUFFER_LEN);
+  CLEAR_FIELD(prt_resfile.buffer);
 
   // Parse first line to ensure valid resource file
   prt_resfile.len = (int)fread((char *)prt_resfile.buffer, sizeof(char_u),

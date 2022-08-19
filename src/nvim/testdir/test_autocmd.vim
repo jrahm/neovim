@@ -2614,6 +2614,28 @@ func Test_BufWrite_lockmarks()
   call delete('Xtest2')
 endfunc
 
+func Test_FileType_spell()
+  if !isdirectory('/tmp')
+    throw "Skipped: requires /tmp directory"
+  endif
+
+  " this was crashing with an invalid free()
+  setglobal spellfile=/tmp/en.utf-8.add
+  augroup crash
+    autocmd!
+    autocmd BufNewFile,BufReadPost crashfile setf somefiletype
+    autocmd BufNewFile,BufReadPost crashfile set ft=anotherfiletype
+    autocmd FileType anotherfiletype setlocal spell
+  augroup END
+  func! NoCrash() abort
+    edit /tmp/crashfile
+  endfunc
+  call NoCrash()
+
+  au! crash
+  setglobal spellfile=
+endfunc
+
 " Test closing a window or editing another buffer from a FileChangedRO handler
 " in a readonly buffer
 func Test_FileChangedRO_winclose()
@@ -2713,6 +2735,59 @@ func Test_autocmd_sigusr1()
 
   au! Signal
   unlet g:sigusr1_passed
+endfunc
+
+" Test for BufReadPre autocmd deleting the file
+func Test_BufReadPre_delfile()
+  augroup TestAuCmd
+    au!
+    autocmd BufReadPre Xfile call delete('Xfile')
+  augroup END
+  call writefile([], 'Xfile')
+  call assert_fails('new Xfile', 'E200:')
+  call assert_equal('Xfile', @%)
+  call assert_equal(1, &readonly)
+  call delete('Xfile')
+  augroup TestAuCmd
+    au!
+  augroup END
+  close!
+endfunc
+
+" Test for BufReadPre autocmd changing the current buffer
+func Test_BufReadPre_changebuf()
+  augroup TestAuCmd
+    au!
+    autocmd BufReadPre Xfile edit Xsomeotherfile
+  augroup END
+  call writefile([], 'Xfile')
+  call assert_fails('new Xfile', 'E201:')
+  call assert_equal('Xsomeotherfile', @%)
+  call assert_equal(1, &readonly)
+  call delete('Xfile')
+  augroup TestAuCmd
+    au!
+  augroup END
+  close!
+endfunc
+
+" Test for BufWipeouti autocmd changing the current buffer when reading a file
+" in an empty buffer with 'f' flag in 'cpo'
+func Test_BufDelete_changebuf()
+  new
+  augroup TestAuCmd
+    au!
+    autocmd BufWipeout * let bufnr = bufadd('somefile') | exe "b " .. bufnr
+  augroup END
+  let save_cpo = &cpo
+  set cpo+=f
+  call assert_fails('r Xfile', 'E484:')
+  call assert_equal('somefile', @%)
+  let &cpo = save_cpo
+  augroup TestAuCmd
+    au!
+  augroup END
+  close!
 endfunc
 
 " Test for the temporary internal window used to execute autocmds

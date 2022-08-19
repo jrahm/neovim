@@ -6,6 +6,7 @@
 #include "nvim/ascii.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/grid_defs.h"
+#include "nvim/mbyte.h"
 
 /// By default, all windows are drawn on a single rectangular grid, represented by
 /// this ScreenGrid instance. In multigrid mode each window will have its own
@@ -17,6 +18,9 @@
 EXTERN ScreenGrid default_grid INIT(= SCREEN_GRID_INIT);
 
 #define DEFAULT_GRID_HANDLE 1  // handle for the default_grid
+
+/// While resizing the screen this flag is set.
+EXTERN bool resizing_screen INIT(= 0);
 
 EXTERN schar_T *linebuf_char INIT(= NULL);
 EXTERN sattr_T *linebuf_attr INIT(= NULL);

@@ -4,14 +4,15 @@
 #include "nvim/api/private/converter.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/ui.h"
+#include "nvim/autocmd.h"
 #include "nvim/channel.h"
 #include "nvim/eval.h"
 #include "nvim/eval/encode.h"
 #include "nvim/event/socket.h"
-#include "nvim/fileio.h"
 #include "nvim/lua/executor.h"
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/msgpack_rpc/server.h"
+#include "nvim/os/fs.h"
 #include "nvim/os/shell.h"
 #ifdef WIN32
 # include "nvim/os/os_win_console.h"
@@ -314,8 +315,6 @@ Channel *channel_job_start(char **argv, CallbackReader on_stdout, CallbackReader
                            ChannelStdinMode stdin_mode, const char *cwd, uint16_t pty_width,
                            uint16_t pty_height, dict_T *env, varnumber_T *status_out)
 {
-  assert(cwd == NULL || os_isdir_executable(cwd));
-
   Channel *chan = channel_alloc(kChannelStreamProc);
   chan->on_data = on_stdout;
   chan->on_stderr = on_stderr;

@@ -142,6 +142,7 @@ local extension = {
   asp = function(path, bufnr)
     return require('vim.filetype.detect').asp(bufnr)
   end,
+  astro = 'astro',
   atl = 'atlas',
   as = 'atlas',
   ahk = 'autohotkey',
@@ -668,6 +669,21 @@ local extension = {
   moo = 'moo',
   moon = 'moonscript',
   mp = 'mp',
+  mpiv = function(path, bufnr)
+    return 'mp', function(b)
+      vim.b[b].mp_metafun = 1
+    end
+  end,
+  mpvi = function(path, bufnr)
+    return 'mp', function(b)
+      vim.b[b].mp_metafun = 1
+    end
+  end,
+  mpxl = function(path, bufnr)
+    return 'mp', function(b)
+      vim.b[b].mp_metafun = 1
+    end
+  end,
   mof = 'msidl',
   odl = 'msidl',
   msql = 'msql',
@@ -776,6 +792,7 @@ local extension = {
   ptl = 'python',
   ql = 'ql',
   qll = 'ql',
+  qmd = 'quarto',
   R = function(path, bufnr)
     return require('vim.filetype.detect').r(bufnr)
   end,
@@ -2472,7 +2489,15 @@ function M.match(args)
 
   -- Finally, check file contents
   if contents or bufnr then
-    contents = contents or M.getlines(bufnr)
+    if contents == nil then
+      if api.nvim_buf_line_count(bufnr) > 101 then
+        -- only need first 100 and last line for current checks
+        contents = M.getlines(bufnr, 1, 100)
+        contents[#contents + 1] = M.getlines(bufnr, -1)
+      else
+        contents = M.getlines(bufnr)
+      end
+    end
     -- If name is nil, catch any errors from the contents filetype detection function.
     -- If the function tries to use the filename that is nil then it will fail,
     -- but this enables checks which do not need a filename to still work.

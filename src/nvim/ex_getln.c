@@ -15,13 +15,16 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/vim.h"
 #include "nvim/arabic.h"
+#include "nvim/arglist.h"
 #include "nvim/ascii.h"
 #include "nvim/assert.h"
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
+#include "nvim/cmdhist.h"
 #include "nvim/cursor.h"
 #include "nvim/cursor_shape.h"
 #include "nvim/digraph.h"
+#include "nvim/drawscreen.h"
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/funcs.h"
@@ -37,6 +40,8 @@
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
 #include "nvim/globals.h"
+#include "nvim/grid.h"
+#include "nvim/help.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/highlight_group.h"
@@ -63,9 +68,9 @@
 #include "nvim/os/time.h"
 #include "nvim/os_unix.h"
 #include "nvim/path.h"
-#include "nvim/popupmnu.h"
+#include "nvim/popupmenu.h"
+#include "nvim/profile.h"
 #include "nvim/regexp.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/sign.h"
 #include "nvim/state.h"
@@ -143,7 +148,7 @@ struct cmdline_info {
 /// Last value of prompt_id, incremented when doing new prompt
 static unsigned last_prompt_id = 0;
 
-// Struct to store the viewstate during 'incsearch' highlighting.
+// Struct to store the viewstate during 'incsearch' highlighting and 'inccommand' preview.
 typedef struct {
   colnr_T vs_curswant;
   colnr_T vs_leftcol;
@@ -195,6 +200,32 @@ typedef struct command_line_state {
   long *b_im_ptr;
 } CommandLineState;
 
+typedef struct cmdpreview_win_info {
+  win_T *win;
+  pos_T save_w_cursor;
+  viewstate_T save_viewstate;
+  int save_w_p_cul;
+  int save_w_p_cuc;
+} CpWinInfo;
+
+typedef struct cmdpreview_buf_info {
+  buf_T *buf;
+  time_t save_b_u_time_cur;
+  long save_b_u_seq_cur;
+  u_header_T *save_b_u_newhead;
+  long save_b_p_ul;
+  int save_b_changed;
+  varnumber_T save_changedtick;
+} CpBufInfo;
+
+typedef struct cmdpreview_info {
+  kvec_t(CpWinInfo) win_info;
+  kvec_t(CpBufInfo) buf_info;
+  bool save_hls;
+  cmdmod_T save_cmdmod;
+  garray_T save_view;
+} CpInfo;
+
 typedef struct cmdline_info CmdlineInfo;
 
 /// The current cmdline_info.  It is initialized in getcmdline() and after that
@@ -213,12 +244,6 @@ static Array cmdline_block = ARRAY_DICT_INIT;
  * Type used by call_user_expand_func
  */
 typedef void *(*user_expand_func_T)(const char_u *, int, typval_T *);
-
-static histentry_T *(history[HIST_COUNT]) = { NULL, NULL, NULL, NULL, NULL };
-static int hisidx[HIST_COUNT] = { -1, -1, -1, -1, -1 };       // lastused entry
-static int hisnum[HIST_COUNT] = { 0, 0, 0, 0, 0 };
-// identifying (unique) number of newest history entry
-static int hislen = 0;                  // actual length of history tables
 
 /// Flag for command_line_handle_key to ignore <C-c>
 ///
@@ -243,26 +268,26 @@ static long cmdpreview_ns = 0;
 
 static int cmd_hkmap = 0;  // Hebrew mapping during command line
 
-static void save_viewstate(viewstate_T *vs)
+static void save_viewstate(win_T *wp, viewstate_T *vs)
   FUNC_ATTR_NONNULL_ALL
 {
-  vs->vs_curswant = curwin->w_curswant;
-  vs->vs_leftcol = curwin->w_leftcol;
-  vs->vs_topline = curwin->w_topline;
-  vs->vs_topfill = curwin->w_topfill;
-  vs->vs_botline = curwin->w_botline;
-  vs->vs_empty_rows = curwin->w_empty_rows;
+  vs->vs_curswant = wp->w_curswant;
+  vs->vs_leftcol = wp->w_leftcol;
+  vs->vs_topline = wp->w_topline;
+  vs->vs_topfill = wp->w_topfill;
+  vs->vs_botline = wp->w_botline;
+  vs->vs_empty_rows = wp->w_empty_rows;
 }
 
-static void restore_viewstate(viewstate_T *vs)
+static void restore_viewstate(win_T *wp, viewstate_T *vs)
   FUNC_ATTR_NONNULL_ALL
 {
-  curwin->w_curswant = vs->vs_curswant;
-  curwin->w_leftcol = vs->vs_leftcol;
-  curwin->w_topline = vs->vs_topline;
-  curwin->w_topfill = vs->vs_topfill;
-  curwin->w_botline = vs->vs_botline;
-  curwin->w_empty_rows = vs->vs_empty_rows;
+  wp->w_curswant = vs->vs_curswant;
+  wp->w_leftcol = vs->vs_leftcol;
+  wp->w_topline = vs->vs_topline;
+  wp->w_topfill = vs->vs_topfill;
+  wp->w_botline = vs->vs_botline;
+  wp->w_empty_rows = vs->vs_empty_rows;
 }
 
 static void init_incsearch_state(incsearch_state_T *s)
@@ -274,8 +299,8 @@ static void init_incsearch_state(incsearch_state_T *s)
   clearpos(&s->match_end);
   s->save_cursor = curwin->w_cursor;  // may be restored later
   s->search_start = curwin->w_cursor;
-  save_viewstate(&s->init_viewstate);
-  save_viewstate(&s->old_viewstate);
+  save_viewstate(curwin, &s->init_viewstate);
+  save_viewstate(curwin, &s->old_viewstate);
 }
 
 /// Completion for |:checkhealth| command.
@@ -316,7 +341,6 @@ static bool do_incsearch_highlighting(int firstc, int *search_delim, incsearch_s
   int delim;
   char *end;
   char *dummy;
-  exarg_T ea;
   pos_T save_cursor;
   bool use_last_pat;
   bool retval = false;
@@ -341,11 +365,12 @@ static bool do_incsearch_highlighting(int firstc, int *search_delim, incsearch_s
   }
 
   emsg_off++;
-  memset(&ea, 0, sizeof(ea));
-  ea.line1 = 1;
-  ea.line2 = 1;
-  ea.cmd = (char *)ccline.cmdbuff;
-  ea.addr_type = ADDR_LINES;
+  exarg_T ea = {
+    .line1 = 1,
+    .line2 = 1,
+    .cmd = (char *)ccline.cmdbuff,
+    .addr_type = ADDR_LINES,
+  };
 
   cmdmod_T dummy_cmdmod;
   parse_command_modifiers(&ea, &dummy, &dummy_cmdmod, true);
@@ -458,7 +483,6 @@ static void may_do_incsearch_highlighting(int firstc, long count, incsearch_stat
 {
   pos_T end_pos;
   proftime_T tm;
-  searchit_arg_T sia;
   int skiplen, patlen;
   char_u next_char;
   char_u use_last_pat;
@@ -521,8 +545,9 @@ static void may_do_incsearch_highlighting(int firstc, long count, incsearch_stat
       search_flags += SEARCH_START;
     }
     ccline.cmdbuff[skiplen + patlen] = NUL;
-    memset(&sia, 0, sizeof(sia));
-    sia.sa_tm = &tm;
+    searchit_arg_T sia = {
+      .sa_tm = &tm,
+    };
     found = do_search(NULL, firstc == ':' ? '/' : firstc, search_delim,
                       ccline.cmdbuff + skiplen, count,
                       search_flags, &sia);
@@ -555,7 +580,7 @@ static void may_do_incsearch_highlighting(int firstc, long count, incsearch_stat
 
   // first restore the old curwin values, so the screen is
   // positioned in the same way as the actual search command
-  restore_viewstate(&s->old_viewstate);
+  restore_viewstate(curwin, &s->old_viewstate);
   changed_cline_bef_curs();
   update_topline(curwin);
 
@@ -665,7 +690,7 @@ static void finish_incsearch_highlighting(int gotesc, incsearch_state_T *s, bool
       }
       curwin->w_cursor = s->search_start;  // -V519
     }
-    restore_viewstate(&s->old_viewstate);
+    restore_viewstate(curwin, &s->old_viewstate);
     highlight_match = false;
 
     // by default search all lines
@@ -736,7 +761,7 @@ static uint8_t *command_line_enter(int firstc, long count, int indent, bool init
     save_cmdline(&save_ccline);
     did_save_ccline = true;
   } else if (init_ccline) {
-    memset(&ccline, 0, sizeof(struct cmdline_info));
+    CLEAR_FIELD(ccline);
   }
 
   if (s->firstc == -1) {
@@ -869,7 +894,7 @@ static uint8_t *command_line_enter(int firstc, long count, int indent, bool init
   may_trigger_modechanged();
 
   init_history();
-  s->hiscnt = hislen;              // set hiscnt to impossible history value
+  s->hiscnt = get_hislen();  // set hiscnt to impossible history value
   s->histype = hist_char2type(s->firstc);
   do_digraph(-1);                       // init digraph typeahead
 
@@ -1664,7 +1689,7 @@ static int may_do_command_line_next_incsearch(int firstc, long count, incsearch_
     update_topline(curwin);
     validate_cursor();
     highlight_match = true;
-    save_viewstate(&s->old_viewstate);
+    save_viewstate(curwin, &s->old_viewstate);
     update_screen(NOT_VALID);
     highlight_match = false;
     redrawcmdline();
@@ -1682,12 +1707,12 @@ static void command_line_next_histidx(CommandLineState *s, bool next_match)
   for (;;) {
     // one step backwards
     if (!next_match) {
-      if (s->hiscnt == hislen) {
+      if (s->hiscnt == get_hislen()) {
         // first time
-        s->hiscnt = hisidx[s->histype];
-      } else if (s->hiscnt == 0 && hisidx[s->histype] != hislen - 1) {
-        s->hiscnt = hislen - 1;
-      } else if (s->hiscnt != hisidx[s->histype] + 1) {
+        s->hiscnt = *get_hisidx(s->histype);
+      } else if (s->hiscnt == 0 && *get_hisidx(s->histype) != get_hislen() - 1) {
+        s->hiscnt = get_hislen() - 1;
+      } else if (s->hiscnt != *get_hisidx(s->histype) + 1) {
         s->hiscnt--;
       } else {
         // at top of list
@@ -1696,17 +1721,17 @@ static void command_line_next_histidx(CommandLineState *s, bool next_match)
       }
     } else {          // one step forwards
       // on last entry, clear the line
-      if (s->hiscnt == hisidx[s->histype]) {
-        s->hiscnt = hislen;
+      if (s->hiscnt == *get_hisidx(s->histype)) {
+        s->hiscnt = get_hislen();
         break;
       }
 
       // not on a history line, nothing to do
-      if (s->hiscnt == hislen) {
+      if (s->hiscnt == get_hislen()) {
         break;
       }
 
-      if (s->hiscnt == hislen - 1) {
+      if (s->hiscnt == get_hislen() - 1) {
         // wrap around
         s->hiscnt = 0;
       } else {
@@ -1714,14 +1739,14 @@ static void command_line_next_histidx(CommandLineState *s, bool next_match)
       }
     }
 
-    if (s->hiscnt < 0 || history[s->histype][s->hiscnt].hisstr == NULL) {
+    if (s->hiscnt < 0 || get_histentry(s->histype)[s->hiscnt].hisstr == NULL) {
       s->hiscnt = s->save_hiscnt;
       break;
     }
 
     if ((s->c != K_UP && s->c != K_DOWN)
         || s->hiscnt == s->save_hiscnt
-        || STRNCMP(history[s->histype][s->hiscnt].hisstr,
+        || STRNCMP(get_histentry(s->histype)[s->hiscnt].hisstr,
                    s->lookfor, (size_t)j) == 0) {
       break;
     }
@@ -2103,7 +2128,7 @@ static int command_line_handle_key(CommandLineState *s)
   case K_KPAGEUP:
   case K_PAGEDOWN:
   case K_KPAGEDOWN:
-    if (s->histype == HIST_INVALID || hislen == 0 || s->firstc == NUL) {
+    if (s->histype == HIST_INVALID || get_hislen() == 0 || s->firstc == NUL) {
       // no history
       return command_line_not_changed(s);
     }
@@ -2128,10 +2153,10 @@ static int command_line_handle_key(CommandLineState *s)
 
       XFREE_CLEAR(ccline.cmdbuff);
       s->xpc.xp_context = EXPAND_NOTHING;
-      if (s->hiscnt == hislen) {
+      if (s->hiscnt == get_hislen()) {
         p = s->lookfor;                  // back to the old one
       } else {
-        p = history[s->histype][s->hiscnt].hisstr;
+        p = get_histentry(s->histype)[s->hiscnt].hisstr;
       }
 
       if (s->histype == HIST_SEARCH
@@ -2159,14 +2184,14 @@ static int command_line_handle_key(CommandLineState *s)
                 if (i > 0) {
                   ccline.cmdbuff[len] = '\\';
                 }
-                ++len;
+                len++;
               }
 
               if (i > 0) {
                 ccline.cmdbuff[len] = p[j];
               }
             }
-            ++len;
+            len++;
           }
 
           if (i == 0) {
@@ -2396,6 +2421,126 @@ static void cmdpreview_close_win(void)
   }
 }
 
+/// Save current state and prepare windows and buffers for command preview.
+static void cmdpreview_prepare(CpInfo *cpinfo)
+{
+  kv_init(cpinfo->buf_info);
+  kv_init(cpinfo->win_info);
+
+  FOR_ALL_WINDOWS_IN_TAB(win, curtab) {
+    buf_T *buf = win->w_buffer;
+
+    // Don't save state of command preview buffer or preview window.
+    if (buf->handle == cmdpreview_bufnr) {
+      continue;
+    }
+
+    CpBufInfo cp_bufinfo;
+    cp_bufinfo.buf = buf;
+
+    cp_bufinfo.save_b_u_time_cur = buf->b_u_time_cur;
+    cp_bufinfo.save_b_u_seq_cur = buf->b_u_seq_cur;
+    cp_bufinfo.save_b_u_newhead = buf->b_u_newhead;
+    cp_bufinfo.save_b_p_ul = buf->b_p_ul;
+    cp_bufinfo.save_b_changed = buf->b_changed;
+    cp_bufinfo.save_changedtick = buf_get_changedtick(buf);
+
+    kv_push(cpinfo->buf_info, cp_bufinfo);
+
+    buf->b_p_ul = LONG_MAX;     // Make sure we can undo all changes
+
+    CpWinInfo cp_wininfo;
+    cp_wininfo.win = win;
+
+    // Save window cursor position and viewstate
+    cp_wininfo.save_w_cursor = win->w_cursor;
+    save_viewstate(win, &cp_wininfo.save_viewstate);
+
+    // Save 'cursorline' and 'cursorcolumn'
+    cp_wininfo.save_w_p_cul = win->w_p_cul;
+    cp_wininfo.save_w_p_cuc = win->w_p_cuc;
+
+    kv_push(cpinfo->win_info, cp_wininfo);
+
+    win->w_p_cul = false;       // Disable 'cursorline' so it doesn't mess up the highlights
+    win->w_p_cuc = false;       // Disable 'cursorcolumn' so it doesn't mess up the highlights
+  }
+
+  cpinfo->save_hls = p_hls;
+  cpinfo->save_cmdmod = cmdmod;
+  win_size_save(&cpinfo->save_view);
+  save_search_patterns();
+
+  p_hls = false;                 // Don't show search highlighting during live substitution
+  cmdmod.cmod_split = 0;         // Disable :leftabove/botright modifiers
+  cmdmod.cmod_tab = 0;           // Disable :tab modifier
+  cmdmod.cmod_flags |= CMOD_NOSWAPFILE;  // Disable swap for preview buffer
+}
+
+// Restore the state of buffers and windows before command preview.
+static void cmdpreview_restore_state(CpInfo *cpinfo)
+{
+  for (size_t i = 0; i < cpinfo->buf_info.size; i++) {
+    CpBufInfo cp_bufinfo = cpinfo->buf_info.items[i];
+    buf_T *buf = cp_bufinfo.buf;
+
+    buf->b_changed = cp_bufinfo.save_b_changed;
+
+    if (buf->b_u_seq_cur != cp_bufinfo.save_b_u_seq_cur) {
+      int count = 0;
+
+      // Calculate how many undo steps are necessary to restore earlier state.
+      for (u_header_T *uhp = buf->b_u_curhead ? buf->b_u_curhead : buf->b_u_newhead;
+           uhp != NULL && uhp->uh_seq > cp_bufinfo.save_b_u_seq_cur;
+           uhp = uhp->uh_next.ptr, ++count) {}
+
+      aco_save_T aco;
+      aucmd_prepbuf(&aco, buf);
+      // Undo invisibly. This also moves the cursor!
+      if (!u_undo_and_forget(count)) {
+        abort();
+      }
+      aucmd_restbuf(&aco);
+
+      // Restore newhead. It is meaningless when curhead is valid, but we must
+      // restore it so that undotree() is identical before/after the preview.
+      buf->b_u_newhead = cp_bufinfo.save_b_u_newhead;
+      buf->b_u_time_cur = cp_bufinfo.save_b_u_time_cur;
+    }
+    if (cp_bufinfo.save_changedtick != buf_get_changedtick(buf)) {
+      buf_set_changedtick(buf, cp_bufinfo.save_changedtick);
+    }
+
+    buf->b_p_ul = cp_bufinfo.save_b_p_ul;        // Restore 'undolevels'
+
+    // Clear preview highlights.
+    extmark_clear(buf, (uint32_t)cmdpreview_ns, 0, 0, MAXLNUM, MAXCOL);
+  }
+  for (size_t i = 0; i < cpinfo->win_info.size; i++) {
+    CpWinInfo cp_wininfo = cpinfo->win_info.items[i];
+    win_T *win = cp_wininfo.win;
+
+    // Restore window cursor position and viewstate
+    win->w_cursor = cp_wininfo.save_w_cursor;
+    restore_viewstate(win, &cp_wininfo.save_viewstate);
+
+    // Restore 'cursorline' and 'cursorcolumn'
+    win->w_p_cul = cp_wininfo.save_w_p_cul;
+    win->w_p_cuc = cp_wininfo.save_w_p_cuc;
+
+    update_topline(win);
+  }
+
+  cmdmod = cpinfo->save_cmdmod;                // Restore cmdmod
+  p_hls = cpinfo->save_hls;                    // Restore 'hlsearch'
+  restore_search_patterns();           // Restore search patterns
+  win_size_restore(&cpinfo->save_view);        // Restore window sizes
+
+  ga_clear(&cpinfo->save_view);
+  kv_destroy(cpinfo->win_info);
+  kv_destroy(cpinfo->buf_info);
+}
+
 /// Show 'inccommand' preview if command is previewable. It works like this:
 ///    1. Store current undo information so we can revert to current state later.
 ///    2. Execute the preview callback with the parsed command, preview buffer number and preview
@@ -2440,35 +2585,18 @@ static bool cmdpreview_may_show(CommandLineState *s)
     ea.line2 = lnum;
   }
 
-  time_t save_b_u_time_cur = curbuf->b_u_time_cur;
-  long save_b_u_seq_cur = curbuf->b_u_seq_cur;
-  u_header_T *save_b_u_newhead = curbuf->b_u_newhead;
-  long save_b_p_ul = curbuf->b_p_ul;
-  int save_b_changed = curbuf->b_changed;
-  int save_w_p_cul = curwin->w_p_cul;
-  int save_w_p_cuc = curwin->w_p_cuc;
-  bool save_hls = p_hls;
-  varnumber_T save_changedtick = buf_get_changedtick(curbuf);
+  CpInfo cpinfo;
   bool icm_split = *p_icm == 's';  // inccommand=split
   buf_T *cmdpreview_buf;
   win_T *cmdpreview_win;
-  cmdmod_T save_cmdmod = cmdmod;
 
-  cmdpreview = true;
   emsg_silent++;                 // Block error reporting as the command may be incomplete,
                                  // but still update v:errmsg
   msg_silent++;                  // Block messages, namely ones that prompt
   block_autocmds();              // Block events
-  garray_T save_view;
-  win_size_save(&save_view);     // Save current window sizes
-  save_search_patterns();        // Save search patterns
-  curbuf->b_p_ul = LONG_MAX;     // Make sure we can undo all changes
-  curwin->w_p_cul = false;       // Disable 'cursorline' so it doesn't mess up the highlights
-  curwin->w_p_cuc = false;       // Disable 'cursorcolumn' so it doesn't mess up the highlights
-  p_hls = false;                 // Don't show search highlighting during live substitution
-  cmdmod.cmod_split = 0;         // Disable :leftabove/botright modifiers
-  cmdmod.cmod_tab = 0;           // Disable :tab modifier
-  cmdmod.cmod_flags |= CMOD_NOSWAPFILE;  // Disable swap for preview buffer
+
+  // Save current state and prepare for command preview.
+  cmdpreview_prepare(&cpinfo);
 
   // Open preview buffer if inccommand=split.
   if (!icm_split) {
@@ -2476,11 +2604,13 @@ static bool cmdpreview_may_show(CommandLineState *s)
   } else if ((cmdpreview_buf = cmdpreview_open_buf()) == NULL) {
     abort();
   }
-
   // Setup preview namespace if it's not already set.
   if (!cmdpreview_ns) {
     cmdpreview_ns = (int)nvim_create_namespace((String)STRING_INIT);
   }
+
+  // Set cmdpreview state.
+  cmdpreview = true;
 
   // Execute the preview callback and use its return value to determine whether to show preview or
   // open the preview window. The preview callback also handles doing the changes and highlights for
@@ -2500,7 +2630,7 @@ static bool cmdpreview_may_show(CommandLineState *s)
     cmdpreview_type = 1;
   }
 
-  // If preview callback is nonzero, update screen now.
+  // If preview callback return value is nonzero, update screen now.
   if (cmdpreview_type != 0) {
     int save_rd = RedrawingDisabled;
     RedrawingDisabled = 0;
@@ -2512,44 +2642,13 @@ static bool cmdpreview_may_show(CommandLineState *s)
   if (icm_split && cmdpreview_type == 2 && cmdpreview_win != NULL) {
     cmdpreview_close_win();
   }
-  // Clear preview highlights.
-  extmark_clear(curbuf, (uint32_t)cmdpreview_ns, 0, 0, MAXLNUM, MAXCOL);
 
-  curbuf->b_changed = save_b_changed;  // Preserve 'modified' during preview
+  // Restore state.
+  cmdpreview_restore_state(&cpinfo);
 
-  if (curbuf->b_u_seq_cur != save_b_u_seq_cur) {
-    // Undo invisibly. This also moves the cursor!
-    while (curbuf->b_u_seq_cur != save_b_u_seq_cur) {
-      if (!u_undo_and_forget(1)) {
-        abort();
-      }
-    }
-    // Restore newhead. It is meaningless when curhead is valid, but we must
-    // restore it so that undotree() is identical before/after the preview.
-    curbuf->b_u_newhead = save_b_u_newhead;
-    curbuf->b_u_time_cur = save_b_u_time_cur;
-  }
-  if (save_changedtick != buf_get_changedtick(curbuf)) {
-    buf_set_changedtick(curbuf, save_changedtick);
-  }
-
-  cmdmod = save_cmdmod;                // Restore cmdmod
-  p_hls = save_hls;                    // Restore 'hlsearch'
-  curwin->w_p_cul = save_w_p_cul;      // Restore 'cursorline'
-  curwin->w_p_cuc = save_w_p_cuc;      // Restore 'cursorcolumn'
-  curbuf->b_p_ul = save_b_p_ul;        // Restore 'undolevels'
-  restore_search_patterns();           // Restore search patterns
-  win_size_restore(&save_view);        // Restore window sizes
-  ga_clear(&save_view);
   unblock_autocmds();                  // Unblock events
   msg_silent--;                        // Unblock messages
   emsg_silent--;                       // Unblock error reporting
-
-  // Restore the window "view".
-  curwin->w_cursor   = s->is_state.save_cursor;
-  restore_viewstate(&s->is_state.old_viewstate);
-  update_topline(curwin);
-
   redrawcmdline();
 end:
   xfree(cmdline);
@@ -2682,7 +2781,7 @@ char *getcmdline_prompt(const int firstc, const char *const prompt, const int at
     save_cmdline(&save_ccline);
     did_save_ccline = true;
   } else {
-    memset(&ccline, 0, sizeof(struct cmdline_info));
+    CLEAR_FIELD(ccline);
   }
   ccline.prompt_id = last_prompt_id++;
   ccline.cmdprompt = (char_u *)prompt;
@@ -3592,7 +3691,7 @@ void put_on_cmdline(char_u *str, int len, int redraw)
       msg_col -= i;
       if (msg_col < 0) {
         msg_col += Columns;
-        --msg_row;
+        msg_row--;
       }
     }
   }
@@ -3645,7 +3744,7 @@ void put_on_cmdline(char_u *str, int len, int redraw)
 static void save_cmdline(struct cmdline_info *ccp)
 {
   *ccp = ccline;
-  memset(&ccline, 0, sizeof(struct cmdline_info));
+  CLEAR_FIELD(ccline);
   ccline.prev_ccline = ccp;
   ccline.cmdbuff = NULL;  // signal that ccline is not in use
 }
@@ -3669,7 +3768,7 @@ static void restore_cmdline(struct cmdline_info *ccp)
 /// @returns FAIL for failure, OK otherwise
 static bool cmdline_paste(int regname, bool literally, bool remcr)
 {
-  char_u *arg;
+  char *arg;
   char_u *p;
   bool allocated;
 
@@ -3702,7 +3801,7 @@ static bool cmdline_paste(int regname, bool literally, bool remcr)
 
     // When 'incsearch' is set and CTRL-R CTRL-W used: skip the duplicate
     // part of the word.
-    p = arg;
+    p = (char_u *)arg;
     if (p_is && regname == Ctrl_W) {
       char_u *w;
       int len;
@@ -4138,9 +4237,9 @@ char_u *ExpandOne(expand_T *xp, char_u *str, char_u *orig, int options, int mode
         if (findex == -1) {
           findex = xp->xp_numfiles;
         }
-        --findex;
+        findex--;
       } else {  // mode == WILD_NEXT
-        ++findex;
+        findex++;
       }
 
       /*
@@ -4880,7 +4979,7 @@ char_u *addstar(char_u *fname, size_t len, int context)
         && vim_strchr((char *)retval, '`') == NULL) {
       retval[len++] = '*';
     } else if (len > 0 && retval[len - 1] == '$') {
-      --len;
+      len--;
     }
     retval[len] = NUL;
   }
@@ -5026,58 +5125,6 @@ int expand_cmdline(expand_T *xp, char_u *str, int col, int *matchcount, char ***
   xfree(file_str);
 
   return EXPAND_OK;
-}
-
-// Cleanup matches for help tags:
-// Remove "@ab" if the top of 'helplang' is "ab" and the language of the first
-// tag matches it.  Otherwise remove "@en" if "en" is the only language.
-static void cleanup_help_tags(int num_file, char **file)
-{
-  char_u buf[4];
-  char_u *p = buf;
-
-  if (p_hlg[0] != NUL && (p_hlg[0] != 'e' || p_hlg[1] != 'n')) {
-    *p++ = '@';
-    *p++ = p_hlg[0];
-    *p++ = p_hlg[1];
-  }
-  *p = NUL;
-
-  for (int i = 0; i < num_file; i++) {
-    int len = (int)STRLEN(file[i]) - 3;
-    if (len <= 0) {
-      continue;
-    }
-    if (STRCMP(file[i] + len, "@en") == 0) {
-      // Sorting on priority means the same item in another language may
-      // be anywhere.  Search all items for a match up to the "@en".
-      int j;
-      for (j = 0; j < num_file; j++) {
-        if (j != i
-            && (int)STRLEN(file[j]) == len + 3
-            && STRNCMP(file[i], file[j], len + 1) == 0) {
-          break;
-        }
-      }
-      if (j == num_file) {
-        // item only exists with @en, remove it
-        file[i][len] = NUL;
-      }
-    }
-  }
-
-  if (*buf != NUL) {
-    for (int i = 0; i < num_file; i++) {
-      int len = (int)STRLEN(file[i]) - 3;
-      if (len <= 0) {
-        continue;
-      }
-      if (STRCMP(file[i] + len, buf) == 0) {
-        // remove the default language
-        file[i][len] = NUL;
-      }
-    }
-  }
 }
 
 typedef char *(*ExpandFunc)(expand_T *, int);
@@ -5289,8 +5336,8 @@ static int ExpandFromContext(expand_T *xp, char_u *pat, int *num_file, char ***f
       { EXPAND_SYNTAX, get_syntax_name, true, true },
       { EXPAND_SYNTIME, get_syntime_arg, true, true },
       { EXPAND_HIGHLIGHT, (ExpandFunc)get_highlight_name, true, true },
-      { EXPAND_EVENTS, expand_get_event_name, true, true },
-      { EXPAND_AUGROUP, expand_get_augroup_name, true, true },
+      { EXPAND_EVENTS, expand_get_event_name, true, false },
+      { EXPAND_AUGROUP, expand_get_augroup_name, true, false },
       { EXPAND_CSCOPE, get_cscope_name, true, true },
       { EXPAND_SIGN, get_sign_name, true, true },
       { EXPAND_PROFILE, get_profile_name, true, true },
@@ -5521,7 +5568,7 @@ static void expand_shellcmd(char_u *filepat, int *num_file, char ***file, int fl
       }
     }
     if (*e != NUL) {
-      ++e;
+      e++;
     }
   }
   *file = ga.ga_data;
@@ -5674,163 +5721,9 @@ static int ExpandUserLua(expand_T *xp, int *num_file, char ***file)
   return OK;
 }
 
-/// Expand color scheme, compiler or filetype names.
-/// Search from 'runtimepath':
-///   'runtimepath'/{dirnames}/{pat}.vim
-/// When "flags" has DIP_START: search also from 'start' of 'packpath':
-///   'packpath'/pack/ * /start/ * /{dirnames}/{pat}.vim
-/// When "flags" has DIP_OPT: search also from 'opt' of 'packpath':
-///   'packpath'/pack/ * /opt/ * /{dirnames}/{pat}.vim
-/// When "flags" has DIP_LUA: search also performed for .lua files
-/// "dirnames" is an array with one or more directory names.
-static int ExpandRTDir(char_u *pat, int flags, int *num_file, char ***file, char *dirnames[])
-{
-  *num_file = 0;
-  *file = NULL;
-  size_t pat_len = STRLEN(pat);
-
-  garray_T ga;
-  ga_init(&ga, (int)sizeof(char *), 10);
-
-  // TODO(bfredl): this is bullshit, exandpath should not reinvent path logic.
-  for (int i = 0; dirnames[i] != NULL; i++) {
-    size_t size = STRLEN(dirnames[i]) + pat_len + 7;
-    char_u *s = xmalloc(size);
-    snprintf((char *)s, size, "%s/%s*.vim", dirnames[i], pat);
-    globpath(p_rtp, s, &ga, 0);
-    if (flags & DIP_LUA) {
-      snprintf((char *)s, size, "%s/%s*.lua", dirnames[i], pat);
-      globpath(p_rtp, s, &ga, 0);
-    }
-    xfree(s);
-  }
-
-  if (flags & DIP_START) {
-    for (int i = 0; dirnames[i] != NULL; i++) {
-      size_t size = STRLEN(dirnames[i]) + pat_len + 22;
-      char_u *s = xmalloc(size);
-      snprintf((char *)s, size, "pack/*/start/*/%s/%s*.vim", dirnames[i], pat);  // NOLINT
-      globpath(p_pp, s, &ga, 0);
-      if (flags & DIP_LUA) {
-        snprintf((char *)s, size, "pack/*/start/*/%s/%s*.lua", dirnames[i], pat);  // NOLINT
-        globpath(p_pp, s, &ga, 0);
-      }
-      xfree(s);
-    }
-
-    for (int i = 0; dirnames[i] != NULL; i++) {
-      size_t size = STRLEN(dirnames[i]) + pat_len + 22;
-      char_u *s = xmalloc(size);
-      snprintf((char *)s, size, "start/*/%s/%s*.vim", dirnames[i], pat);  // NOLINT
-      globpath(p_pp, s, &ga, 0);
-      if (flags & DIP_LUA) {
-        snprintf((char *)s, size, "start/*/%s/%s*.lua", dirnames[i], pat);  // NOLINT
-        globpath(p_pp, s, &ga, 0);
-      }
-      xfree(s);
-    }
-  }
-
-  if (flags & DIP_OPT) {
-    for (int i = 0; dirnames[i] != NULL; i++) {
-      size_t size = STRLEN(dirnames[i]) + pat_len + 20;
-      char_u *s = xmalloc(size);
-      snprintf((char *)s, size, "pack/*/opt/*/%s/%s*.vim", dirnames[i], pat);  // NOLINT
-      globpath(p_pp, s, &ga, 0);
-      if (flags & DIP_LUA) {
-        snprintf((char *)s, size, "pack/*/opt/*/%s/%s*.lua", dirnames[i], pat);  // NOLINT
-        globpath(p_pp, s, &ga, 0);
-      }
-      xfree(s);
-    }
-
-    for (int i = 0; dirnames[i] != NULL; i++) {
-      size_t size = STRLEN(dirnames[i]) + pat_len + 20;
-      char_u *s = xmalloc(size);
-      snprintf((char *)s, size, "opt/*/%s/%s*.vim", dirnames[i], pat);  // NOLINT
-      globpath(p_pp, s, &ga, 0);
-      if (flags & DIP_LUA) {
-        snprintf((char *)s, size, "opt/*/%s/%s*.lua", dirnames[i], pat);  // NOLINT
-        globpath(p_pp, s, &ga, 0);
-      }
-      xfree(s);
-    }
-  }
-
-  for (int i = 0; i < ga.ga_len; i++) {
-    char_u *match = ((char_u **)ga.ga_data)[i];
-    char_u *s = match;
-    char_u *e = s + STRLEN(s);
-    if (e - s > 4 && (STRNICMP(e - 4, ".vim", 4) == 0
-                      || ((flags & DIP_LUA)
-                          && STRNICMP(e - 4, ".lua", 4) == 0))) {
-      e -= 4;
-      for (s = e; s > match; MB_PTR_BACK(match, s)) {
-        if (vim_ispathsep(*s)) {
-          break;
-        }
-      }
-      s++;
-      *e = NUL;
-      assert((e - s) + 1 >= 0);
-      memmove(match, s, (size_t)(e - s) + 1);
-    }
-  }
-
-  if (GA_EMPTY(&ga)) {
-    return FAIL;
-  }
-
-  /* Sort and remove duplicates which can happen when specifying multiple
-   * directories in dirnames. */
-  ga_remove_duplicate_strings(&ga);
-
-  *file = ga.ga_data;
-  *num_file = ga.ga_len;
-  return OK;
-}
-
-/// Expand loadplugin names:
-/// 'packpath'/pack/ * /opt/{pat}
-static int ExpandPackAddDir(char_u *pat, int *num_file, char ***file)
-{
-  garray_T ga;
-
-  *num_file = 0;
-  *file = NULL;
-  size_t pat_len = STRLEN(pat);
-  ga_init(&ga, (int)sizeof(char *), 10);
-
-  size_t buflen = pat_len + 26;
-  char_u *s = xmalloc(buflen);
-  snprintf((char *)s, buflen, "pack/*/opt/%s*", pat);  // NOLINT
-  globpath(p_pp, s, &ga, 0);
-  snprintf((char *)s, buflen, "opt/%s*", pat);  // NOLINT
-  globpath(p_pp, s, &ga, 0);
-  xfree(s);
-
-  for (int i = 0; i < ga.ga_len; i++) {
-    char_u *match = ((char_u **)ga.ga_data)[i];
-    s = (char_u *)path_tail((char *)match);
-    memmove(match, s, STRLEN(s) + 1);
-  }
-
-  if (GA_EMPTY(&ga)) {
-    return FAIL;
-  }
-
-  // Sort and remove duplicates which can happen when specifying multiple
-  // directories in dirnames.
-  ga_remove_duplicate_strings(&ga);
-
-  *file = ga.ga_data;
-  *num_file = ga.ga_len;
-  return OK;
-}
-
 /// Expand `file` for all comma-separated directories in `path`.
 /// Adds matches to `ga`.
-void globpath(char_u *path, char_u *file, garray_T *ga, int expand_options)
+void globpath(char *path, char_u *file, garray_T *ga, int expand_options)
 {
   expand_T xpc;
   ExpandInit(&xpc);
@@ -5841,7 +5734,7 @@ void globpath(char_u *path, char_u *file, garray_T *ga, int expand_options)
   // Loop over all entries in {path}.
   while (*path != NUL) {
     // Copy one item of the path to buf[] and concatenate the file name.
-    copy_option_part((char **)&path, (char *)buf, MAXPATHL, ",");
+    copy_option_part(&path, (char *)buf, MAXPATHL, ",");
     if (STRLEN(buf) + STRLEN(file) + 2 < MAXPATHL) {
       add_pathsep((char *)buf);
       STRCAT(buf, file);  // NOLINT
@@ -5866,309 +5759,6 @@ void globpath(char_u *path, char_u *file, garray_T *ga, int expand_options)
   }
 
   xfree(buf);
-}
-
-/*********************************
-*  Command line history stuff    *
-*********************************/
-
-/// Translate a history character to the associated type number
-static HistoryType hist_char2type(const int c)
-  FUNC_ATTR_CONST FUNC_ATTR_WARN_UNUSED_RESULT
-{
-  switch (c) {
-  case ':':
-    return HIST_CMD;
-  case '=':
-    return HIST_EXPR;
-  case '@':
-    return HIST_INPUT;
-  case '>':
-    return HIST_DEBUG;
-  case NUL:
-  case '/':
-  case '?':
-    return HIST_SEARCH;
-  default:
-    return HIST_INVALID;
-  }
-  // Silence -Wreturn-type
-  return 0;
-}
-
-/*
- * Table of history names.
- * These names are used in :history and various hist...() functions.
- * It is sufficient to give the significant prefix of a history name.
- */
-
-static char *(history_names[]) =
-{
-  "cmd",
-  "search",
-  "expr",
-  "input",
-  "debug",
-  NULL
-};
-
-/*
- * Function given to ExpandGeneric() to obtain the possible first
- * arguments of the ":history command.
- */
-static char *get_history_arg(expand_T *xp, int idx)
-{
-  static char_u compl[2] = { NUL, NUL };
-  char *short_names = ":=@>?/";
-  int short_names_count = (int)STRLEN(short_names);
-  int history_name_count = ARRAY_SIZE(history_names) - 1;
-
-  if (idx < short_names_count) {
-    compl[0] = (char_u)short_names[idx];
-    return (char *)compl;
-  }
-  if (idx < short_names_count + history_name_count) {
-    return history_names[idx - short_names_count];
-  }
-  if (idx == short_names_count + history_name_count) {
-    return "all";
-  }
-  return NULL;
-}
-
-/// Initialize command line history.
-/// Also used to re-allocate history tables when size changes.
-void init_history(void)
-{
-  assert(p_hi >= 0 && p_hi <= INT_MAX);
-  int newlen = (int)p_hi;
-  int oldlen = hislen;
-
-  // If history tables size changed, reallocate them.
-  // Tables are circular arrays (current position marked by hisidx[type]).
-  // On copying them to the new arrays, we take the chance to reorder them.
-  if (newlen != oldlen) {
-    for (int type = 0; type < HIST_COUNT; type++) {
-      histentry_T *temp = (newlen
-                           ? xmalloc((size_t)newlen * sizeof(*temp))
-                           : NULL);
-
-      int j = hisidx[type];
-      if (j >= 0) {
-        // old array gets partitioned this way:
-        // [0       , i1     ) --> newest entries to be deleted
-        // [i1      , i1 + l1) --> newest entries to be copied
-        // [i1 + l1 , i2     ) --> oldest entries to be deleted
-        // [i2      , i2 + l2) --> oldest entries to be copied
-        int l1 = MIN(j + 1, newlen);             // how many newest to copy
-        int l2 = MIN(newlen, oldlen) - l1;       // how many oldest to copy
-        int i1 = j + 1 - l1;                     // copy newest from here
-        int i2 = MAX(l1, oldlen - newlen + l1);  // copy oldest from here
-
-        // copy as much entries as they fit to new table, reordering them
-        if (newlen) {
-          // copy oldest entries
-          memcpy(&temp[0], &history[type][i2], (size_t)l2 * sizeof(*temp));
-          // copy newest entries
-          memcpy(&temp[l2], &history[type][i1], (size_t)l1 * sizeof(*temp));
-        }
-
-        // delete entries that don't fit in newlen, if any
-        for (int i = 0; i < i1; i++) {
-          hist_free_entry(history[type] + i);
-        }
-        for (int i = i1 + l1; i < i2; i++) {
-          hist_free_entry(history[type] + i);
-        }
-      }
-
-      // clear remaining space, if any
-      int l3 = j < 0 ? 0 : MIN(newlen, oldlen);  // number of copied entries
-      if (newlen) {
-        memset(temp + l3, 0, (size_t)(newlen - l3) * sizeof(*temp));
-      }
-
-      hisidx[type] = l3 - 1;
-      xfree(history[type]);
-      history[type] = temp;
-    }
-    hislen = newlen;
-  }
-}
-
-static inline void hist_free_entry(histentry_T *hisptr)
-  FUNC_ATTR_NONNULL_ALL
-{
-  xfree(hisptr->hisstr);
-  tv_list_unref(hisptr->additional_elements);
-  clear_hist_entry(hisptr);
-}
-
-static inline void clear_hist_entry(histentry_T *hisptr)
-  FUNC_ATTR_NONNULL_ALL
-{
-  memset(hisptr, 0, sizeof(*hisptr));
-}
-
-/// Check if command line 'str' is already in history.
-/// If 'move_to_front' is TRUE, matching entry is moved to end of history.
-///
-/// @param move_to_front  Move the entry to the front if it exists
-static int in_history(int type, char_u *str, int move_to_front, int sep)
-{
-  int i;
-  int last_i = -1;
-  char_u *p;
-
-  if (hisidx[type] < 0) {
-    return FALSE;
-  }
-  i = hisidx[type];
-  do {
-    if (history[type][i].hisstr == NULL) {
-      return FALSE;
-    }
-
-    /* For search history, check that the separator character matches as
-     * well. */
-    p = history[type][i].hisstr;
-    if (STRCMP(str, p) == 0
-        && (type != HIST_SEARCH || sep == p[STRLEN(p) + 1])) {
-      if (!move_to_front) {
-        return TRUE;
-      }
-      last_i = i;
-      break;
-    }
-    if (--i < 0) {
-      i = hislen - 1;
-    }
-  } while (i != hisidx[type]);
-
-  if (last_i >= 0) {
-    list_T *const list = history[type][i].additional_elements;
-    str = history[type][i].hisstr;
-    while (i != hisidx[type]) {
-      if (++i >= hislen) {
-        i = 0;
-      }
-      history[type][last_i] = history[type][i];
-      last_i = i;
-    }
-    tv_list_unref(list);
-    history[type][i].hisnum = ++hisnum[type];
-    history[type][i].hisstr = str;
-    history[type][i].timestamp = os_time();
-    history[type][i].additional_elements = NULL;
-    return true;
-  }
-  return false;
-}
-
-/// Convert history name to its HIST_ equivalent
-///
-/// Names are taken from the table above. When `name` is empty returns currently
-/// active history or HIST_DEFAULT, depending on `return_default` argument.
-///
-/// @param[in]  name            Converted name.
-/// @param[in]  len             Name length.
-/// @param[in]  return_default  Determines whether HIST_DEFAULT should be
-///                             returned or value based on `ccline.cmdfirstc`.
-///
-/// @return Any value from HistoryType enum, including HIST_INVALID. May not
-///         return HIST_DEFAULT unless return_default is true.
-HistoryType get_histtype(const char *const name, const size_t len, const bool return_default)
-  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
-{
-  // No argument: use current history.
-  if (len == 0) {
-    return return_default ? HIST_DEFAULT : hist_char2type(ccline.cmdfirstc);
-  }
-
-  for (HistoryType i = 0; history_names[i] != NULL; i++) {
-    if (STRNICMP(name, history_names[i], len) == 0) {
-      return i;
-    }
-  }
-
-  if (vim_strchr(":=@>?/", name[0]) != NULL && len == 1) {
-    return hist_char2type(name[0]);
-  }
-
-  return HIST_INVALID;
-}
-
-static int last_maptick = -1;           // last seen maptick
-
-/// Add the given string to the given history.  If the string is already in the
-/// history then it is moved to the front.  "histype" may be one of the HIST_
-/// values.
-///
-/// @parma in_map  consider maptick when inside a mapping
-/// @param sep     separator character used (search hist)
-void add_to_history(int histype, char_u *new_entry, int in_map, int sep)
-{
-  histentry_T *hisptr;
-
-  if (hislen == 0 || histype == HIST_INVALID) {  // no history
-    return;
-  }
-  assert(histype != HIST_DEFAULT);
-
-  if ((cmdmod.cmod_flags & CMOD_KEEPPATTERNS) && histype == HIST_SEARCH) {
-    return;
-  }
-
-  /*
-   * Searches inside the same mapping overwrite each other, so that only
-   * the last line is kept.  Be careful not to remove a line that was moved
-   * down, only lines that were added.
-   */
-  if (histype == HIST_SEARCH && in_map) {
-    if (maptick == last_maptick && hisidx[HIST_SEARCH] >= 0) {
-      // Current line is from the same mapping, remove it
-      hisptr = &history[HIST_SEARCH][hisidx[HIST_SEARCH]];
-      hist_free_entry(hisptr);
-      --hisnum[histype];
-      if (--hisidx[HIST_SEARCH] < 0) {
-        hisidx[HIST_SEARCH] = hislen - 1;
-      }
-    }
-    last_maptick = -1;
-  }
-  if (!in_history(histype, new_entry, true, sep)) {
-    if (++hisidx[histype] == hislen) {
-      hisidx[histype] = 0;
-    }
-    hisptr = &history[histype][hisidx[histype]];
-    hist_free_entry(hisptr);
-
-    // Store the separator after the NUL of the string.
-    size_t len = STRLEN(new_entry);
-    hisptr->hisstr = vim_strnsave(new_entry, len + 2);
-    hisptr->timestamp = os_time();
-    hisptr->additional_elements = NULL;
-    hisptr->hisstr[len + 1] = (char_u)sep;
-
-    hisptr->hisnum = ++hisnum[histype];
-    if (histype == HIST_SEARCH && in_map) {
-      last_maptick = maptick;
-    }
-  }
-}
-
-/*
- * Get identifier of newest history entry.
- * "histype" may be one of the HIST_ values.
- */
-int get_history_idx(int histype)
-{
-  if (hislen == 0 || histype < 0 || histype >= HIST_COUNT
-      || hisidx[histype] < 0) {
-    return -1;
-  }
-
-  return history[histype][hisidx[histype]].hisnum;
 }
 
 /// Get pointer to the command line info to use. save_cmdline() may clear
@@ -6292,168 +5882,10 @@ int get_cmdline_type(void)
   return p->cmdfirstc;
 }
 
-/*
- * Calculate history index from a number:
- *   num > 0: seen as identifying number of a history entry
- *   num < 0: relative position in history wrt newest entry
- * "histype" may be one of the HIST_ values.
- */
-static int calc_hist_idx(int histype, int num)
+/// Return the first character of the current command line.
+int get_cmdline_firstc(void)
 {
-  int i;
-  histentry_T *hist;
-  int wrapped = FALSE;
-
-  if (hislen == 0 || histype < 0 || histype >= HIST_COUNT
-      || (i = hisidx[histype]) < 0 || num == 0) {
-    return -1;
-  }
-
-  hist = history[histype];
-  if (num > 0) {
-    while (hist[i].hisnum > num) {
-      if (--i < 0) {
-        if (wrapped) {
-          break;
-        }
-        i += hislen;
-        wrapped = TRUE;
-      }
-    }
-    if (i >= 0 && hist[i].hisnum == num && hist[i].hisstr != NULL) {
-      return i;
-    }
-  } else if (-num <= hislen) {
-    i += num + 1;
-    if (i < 0) {
-      i += hislen;
-    }
-    if (hist[i].hisstr != NULL) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/*
- * Get a history entry by its index.
- * "histype" may be one of the HIST_ values.
- */
-char_u *get_history_entry(int histype, int idx)
-{
-  idx = calc_hist_idx(histype, idx);
-  if (idx >= 0) {
-    return history[histype][idx].hisstr;
-  } else {
-    return (char_u *)"";
-  }
-}
-
-/// Clear all entries in a history
-///
-/// @param[in]  histype  One of the HIST_ values.
-///
-/// @return OK if there was something to clean and histype was one of HIST_
-///         values, FAIL otherwise.
-int clr_history(const int histype)
-{
-  if (hislen != 0 && histype >= 0 && histype < HIST_COUNT) {
-    histentry_T *hisptr = history[histype];
-    for (int i = hislen; i--; hisptr++) {
-      hist_free_entry(hisptr);
-    }
-    hisidx[histype] = -1;  // mark history as cleared
-    hisnum[histype] = 0;   // reset identifier counter
-    return OK;
-  }
-  return FAIL;
-}
-
-/*
- * Remove all entries matching {str} from a history.
- * "histype" may be one of the HIST_ values.
- */
-int del_history_entry(int histype, char_u *str)
-{
-  regmatch_T regmatch;
-  histentry_T *hisptr;
-  int idx;
-  int i;
-  int last;
-  bool found = false;
-
-  regmatch.regprog = NULL;
-  regmatch.rm_ic = FALSE;       // always match case
-  if (hislen != 0
-      && histype >= 0
-      && histype < HIST_COUNT
-      && *str != NUL
-      && (idx = hisidx[histype]) >= 0
-      && (regmatch.regprog = vim_regcomp((char *)str, RE_MAGIC + RE_STRING))
-      != NULL) {
-    i = last = idx;
-    do {
-      hisptr = &history[histype][i];
-      if (hisptr->hisstr == NULL) {
-        break;
-      }
-      if (vim_regexec(&regmatch, (char *)hisptr->hisstr, (colnr_T)0)) {
-        found = true;
-        hist_free_entry(hisptr);
-      } else {
-        if (i != last) {
-          history[histype][last] = *hisptr;
-          clear_hist_entry(hisptr);
-        }
-        if (--last < 0) {
-          last += hislen;
-        }
-      }
-      if (--i < 0) {
-        i += hislen;
-      }
-    } while (i != idx);
-    if (history[histype][idx].hisstr == NULL) {
-      hisidx[histype] = -1;
-    }
-  }
-  vim_regfree(regmatch.regprog);
-  return found;
-}
-
-/*
- * Remove an indexed entry from a history.
- * "histype" may be one of the HIST_ values.
- */
-int del_history_idx(int histype, int idx)
-{
-  int i, j;
-
-  i = calc_hist_idx(histype, idx);
-  if (i < 0) {
-    return FALSE;
-  }
-  idx = hisidx[histype];
-  hist_free_entry(&history[histype][i]);
-
-  /* When deleting the last added search string in a mapping, reset
-   * last_maptick, so that the last added search string isn't deleted again.
-   */
-  if (histype == HIST_SEARCH && maptick == last_maptick && i == idx) {
-    last_maptick = -1;
-  }
-
-  while (i != idx) {
-    j = (i + 1) % hislen;
-    history[histype][i] = history[histype][j];
-    i = j;
-  }
-  clear_hist_entry(&history[histype][idx]);
-  if (--i < 0) {
-    i += hislen;
-  }
-  hisidx[histype] = i;
-  return TRUE;
+  return ccline.cmdfirstc;
 }
 
 /// Get indices that specify a range within a list (not a range of text lines
@@ -6464,26 +5896,26 @@ int del_history_idx(int histype, int idx)
 /// @param num2 to
 ///
 /// @return OK if parsed successfully, otherwise FAIL.
-int get_list_range(char_u **str, int *num1, int *num2)
+int get_list_range(char **str, int *num1, int *num2)
 {
   int len;
   int first = false;
   varnumber_T num;
 
-  *str = (char_u *)skipwhite((char *)(*str));
+  *str = skipwhite((*str));
   if (**str == '-' || ascii_isdigit(**str)) {  // parse "from" part of range
-    vim_str2nr(*str, NULL, &len, 0, &num, NULL, 0, false);
+    vim_str2nr((char_u *)(*str), NULL, &len, 0, &num, NULL, 0, false);
     *str += len;
     *num1 = (int)num;
     first = true;
   }
-  *str = (char_u *)skipwhite((char *)(*str));
+  *str = skipwhite((*str));
   if (**str == ',') {                   // parse "to" part of range
-    *str = (char_u *)skipwhite((char *)(*str) + 1);
-    vim_str2nr(*str, NULL, &len, 0, &num, NULL, 0, false);
+    *str = skipwhite((*str) + 1);
+    vim_str2nr((char_u *)(*str), NULL, &len, 0, &num, NULL, 0, false);
     if (len > 0) {
       *num2 = (int)num;
-      *str = (char_u *)skipwhite((char *)(*str) + len);
+      *str = skipwhite((*str) + len);
     } else if (!first) {                  // no number given at all
       return FAIL;
     }
@@ -6493,118 +5925,9 @@ int get_list_range(char_u **str, int *num1, int *num2)
   return OK;
 }
 
-/*
- * :history command - print a history
- */
-void ex_history(exarg_T *eap)
-{
-  histentry_T *hist;
-  int histype1 = HIST_CMD;
-  int histype2 = HIST_CMD;
-  int hisidx1 = 1;
-  int hisidx2 = -1;
-  int idx;
-  int i, j, k;
-  char_u *end;
-  char_u *arg = (char_u *)eap->arg;
-
-  if (hislen == 0) {
-    msg(_("'history' option is zero"));
-    return;
-  }
-
-  if (!(ascii_isdigit(*arg) || *arg == '-' || *arg == ',')) {
-    end = arg;
-    while (ASCII_ISALPHA(*end)
-           || vim_strchr(":=@>/?", *end) != NULL) {
-      end++;
-    }
-    histype1 = get_histtype((const char *)arg, (size_t)(end - arg), false);
-    if (histype1 == HIST_INVALID) {
-      if (STRNICMP(arg, "all", end - arg) == 0) {
-        histype1 = 0;
-        histype2 = HIST_COUNT - 1;
-      } else {
-        semsg(_(e_trailing_arg), arg);
-        return;
-      }
-    } else {
-      histype2 = histype1;
-    }
-  } else {
-    end = arg;
-  }
-  if (!get_list_range(&end, &hisidx1, &hisidx2) || *end != NUL) {
-    semsg(_(e_trailing_arg), end);
-    return;
-  }
-
-  for (; !got_int && histype1 <= histype2; ++histype1) {
-    STRCPY(IObuff, "\n      #  ");
-    assert(history_names[histype1] != NULL);
-    STRCAT(STRCAT(IObuff, history_names[histype1]), " history");
-    msg_puts_title((char *)IObuff);
-    idx = hisidx[histype1];
-    hist = history[histype1];
-    j = hisidx1;
-    k = hisidx2;
-    if (j < 0) {
-      j = (-j > hislen) ? 0 : hist[(hislen + j + idx + 1) % hislen].hisnum;
-    }
-    if (k < 0) {
-      k = (-k > hislen) ? 0 : hist[(hislen + k + idx + 1) % hislen].hisnum;
-    }
-    if (idx >= 0 && j <= k) {
-      for (i = idx + 1; !got_int; ++i) {
-        if (i == hislen) {
-          i = 0;
-        }
-        if (hist[i].hisstr != NULL
-            && hist[i].hisnum >= j && hist[i].hisnum <= k) {
-          msg_putchar('\n');
-          snprintf((char *)IObuff, IOSIZE, "%c%6d  ", i == idx ? '>' : ' ',
-                   hist[i].hisnum);
-          if (vim_strsize((char *)hist[i].hisstr) > Columns - 10) {
-            trunc_string((char *)hist[i].hisstr, (char *)IObuff + STRLEN(IObuff),
-                         Columns - 10, IOSIZE - (int)STRLEN(IObuff));
-          } else {
-            STRCAT(IObuff, hist[i].hisstr);
-          }
-          msg_outtrans((char *)IObuff);
-          ui_flush();
-        }
-        if (i == idx) {
-          break;
-        }
-      }
-    }
-  }
-}
-
-/// Translate a history type number to the associated character
-int hist_type2char(int type)
-  FUNC_ATTR_CONST
-{
-  switch (type) {
-  case HIST_CMD:
-    return ':';
-  case HIST_SEARCH:
-    return '/';
-  case HIST_EXPR:
-    return '=';
-  case HIST_INPUT:
-    return '@';
-  case HIST_DEBUG:
-    return '>';
-  default:
-    abort();
-  }
-  return NUL;
-}
-
 void cmdline_init(void)
 {
-  memset(&ccline, 0, sizeof(struct cmdline_info));
+  CLEAR_FIELD(ccline);
 }
 
 /// Open a window on the current command line and history.  Allow editing in
@@ -6688,18 +6011,18 @@ static int open_cmdwin(void)
 
   // Fill the buffer with the history.
   init_history();
-  if (hislen > 0 && histtype != HIST_INVALID) {
-    i = hisidx[histtype];
+  if (get_hislen() > 0 && histtype != HIST_INVALID) {
+    i = *get_hisidx(histtype);
     if (i >= 0) {
       lnum = 0;
       do {
-        if (++i == hislen) {
+        if (++i == get_hislen()) {
           i = 0;
         }
-        if (history[histtype][i].hisstr != NULL) {
-          ml_append(lnum++, (char *)history[histtype][i].hisstr, (colnr_T)0, false);
+        if (get_histentry(histtype)[i].hisstr != NULL) {
+          ml_append(lnum++, (char *)get_histentry(histtype)[i].hisstr, (colnr_T)0, false);
         }
-      } while (i != hisidx[histtype]);
+      } while (i != *get_hisidx(histtype));
     }
   }
 
@@ -6902,90 +6225,6 @@ char *script_get(exarg_T *const eap, size_t *const lenp)
   }
 
   return (char *)ga.ga_data;
-}
-
-/// Iterate over history items
-///
-/// @warning No history-editing functions must be run while iteration is in
-///          progress.
-///
-/// @param[in]   iter          Pointer to the last history entry.
-/// @param[in]   history_type  Type of the history (HIST_*). Ignored if iter
-///                            parameter is not NULL.
-/// @param[in]   zero          If true then zero (but not free) returned items.
-///
-///                            @warning When using this parameter user is
-///                                     responsible for calling clr_history()
-///                                     itself after iteration is over. If
-///                                     clr_history() is not called behaviour is
-///                                     undefined. No functions that work with
-///                                     history must be called during iteration
-///                                     in this case.
-/// @param[out]  hist          Next history entry.
-///
-/// @return Pointer used in next iteration or NULL to indicate that iteration
-///         was finished.
-const void *hist_iter(const void *const iter, const uint8_t history_type, const bool zero,
-                      histentry_T *const hist)
-  FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ARG(4)
-{
-  *hist = (histentry_T) {
-    .hisstr = NULL
-  };
-  if (hisidx[history_type] == -1) {
-    return NULL;
-  }
-  histentry_T *const hstart = &(history[history_type][0]);
-  histentry_T *const hlast = (
-                              &(history[history_type][hisidx[history_type]]));
-  const histentry_T *const hend = &(history[history_type][hislen - 1]);
-  histentry_T *hiter;
-  if (iter == NULL) {
-    histentry_T *hfirst = hlast;
-    do {
-      hfirst++;
-      if (hfirst > hend) {
-        hfirst = hstart;
-      }
-      if (hfirst->hisstr != NULL) {
-        break;
-      }
-    } while (hfirst != hlast);
-    hiter = hfirst;
-  } else {
-    hiter = (histentry_T *)iter;
-  }
-  if (hiter == NULL) {
-    return NULL;
-  }
-  *hist = *hiter;
-  if (zero) {
-    memset(hiter, 0, sizeof(*hiter));
-  }
-  if (hiter == hlast) {
-    return NULL;
-  }
-  hiter++;
-  return (const void *)((hiter > hend) ? hstart : hiter);
-}
-
-/// Get array of history items
-///
-/// @param[in]   history_type  Type of the history to get array for.
-/// @param[out]  new_hisidx    Location where last index in the new array should
-///                            be saved.
-/// @param[out]  new_hisnum    Location where last history number in the new
-///                            history should be saved.
-///
-/// @return Pointer to the array or NULL.
-histentry_T *hist_get_array(const uint8_t history_type, int **const new_hisidx,
-                            int **const new_hisnum)
-  FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
-{
-  init_history();
-  *new_hisidx = &(hisidx[history_type]);
-  *new_hisnum = &(hisnum[history_type]);
-  return history[history_type];
 }
 
 static void set_search_match(pos_T *t)

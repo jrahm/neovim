@@ -23,7 +23,7 @@
 #include "nvim/memory.h"
 #include "nvim/menu.h"
 #include "nvim/message.h"
-#include "nvim/popupmnu.h"
+#include "nvim/popupmenu.h"
 #include "nvim/screen.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -952,7 +952,7 @@ char *set_context_in_menu_cmd(expand_T *xp, const char *cmd, char *arg, bool for
   }
 
   while (*p != NUL && ascii_iswhite(*p)) {
-    ++p;
+    p++;
   }
 
   arg = after_dot = p;
@@ -1659,26 +1659,19 @@ void ex_emenu(exarg_T *eap)
   if (arg[0] && ascii_iswhite(arg[1])) {
     switch (arg[0]) {
     case 'n':
-      mode_idx = MENU_INDEX_NORMAL;
-      break;
+      mode_idx = MENU_INDEX_NORMAL; break;
     case 'v':
-      mode_idx = MENU_INDEX_VISUAL;
-      break;
+      mode_idx = MENU_INDEX_VISUAL; break;
     case 's':
-      mode_idx = MENU_INDEX_SELECT;
-      break;
+      mode_idx = MENU_INDEX_SELECT; break;
     case 'o':
-      mode_idx = MENU_INDEX_OP_PENDING;
-      break;
+      mode_idx = MENU_INDEX_OP_PENDING; break;
     case 't':
-      mode_idx = MENU_INDEX_TERMINAL;
-      break;
+      mode_idx = MENU_INDEX_TERMINAL; break;
     case 'i':
-      mode_idx = MENU_INDEX_INSERT;
-      break;
+      mode_idx = MENU_INDEX_INSERT; break;
     case 'c':
-      mode_idx = MENU_INDEX_CMDLINE;
-      break;
+      mode_idx = MENU_INDEX_CMDLINE; break;
     default:
       semsg(_(e_invarg2), arg);
       return;
@@ -1814,9 +1807,9 @@ static char *menu_skip_part(char *p)
 {
   while (*p != NUL && *p != '.' && !ascii_iswhite(*p)) {
     if ((*p == '\\' || *p == Ctrl_V) && p[1] != NUL) {
-      ++p;
+      p++;
     }
-    ++p;
+    p++;
   }
   return p;
 }

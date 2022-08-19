@@ -199,6 +199,7 @@ enum { FOLD_TEXT_LEN = 51, };  //!< buffer size for get_foldtext()
 // Size in bytes of the hash used in the undo file.
 #define UNDO_HASH_SIZE 32
 
+#define CLEAR_FIELD(field)  memset(&(field), 0, sizeof(field))
 #define CLEAR_POINTER(ptr)  memset((ptr), 0, sizeof(*(ptr)))
 
 // defines to avoid typecasts from (char_u *) to (char *) and back
@@ -274,8 +275,8 @@ enum { FOLD_TEXT_LEN = 51, };  //!< buffer size for get_foldtext()
                                           (const char *)(y), \
                                           (size_t)(n))
 
-// Enums need a typecast to be used as array index (for Ultrix).
-#define HL_ATTR(n)      highlight_attr[(int)(n)]
+// Enums need a typecast to be used as array index.
+#define HL_ATTR(n)      hl_attr_active[(int)(n)]
 
 /// Maximum number of bytes in a multi-byte character.  It can be one 32-bit
 /// character of up to 6 bytes, or one 16-bit character of up to three bytes

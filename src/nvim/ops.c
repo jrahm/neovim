@@ -17,6 +17,7 @@
 #include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
+#include "nvim/drawscreen.h"
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
@@ -25,7 +26,6 @@
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
-#include "nvim/fileio.h"
 #include "nvim/fold.h"
 #include "nvim/getchar.h"
 #include "nvim/globals.h"
@@ -48,7 +48,6 @@
 #include "nvim/os/time.h"
 #include "nvim/path.h"
 #include "nvim/plines.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -1177,14 +1176,14 @@ static int stuff_yank(int regname, char_u *p)
   }
   yankreg_T *reg = get_yank_register(regname, YREG_YANK);
   if (is_append_register(regname) && reg->y_array != NULL) {
-    char_u **pp = (char_u **)&(reg->y_array[reg->y_size - 1]);
+    char **pp = &(reg->y_array[reg->y_size - 1]);
     char_u *lp = xmalloc(STRLEN(*pp) + STRLEN(p) + 1);
     STRCPY(lp, *pp);
     // TODO(philix): use xstpcpy() in stuff_yank()
     STRCAT(lp, p);
     xfree(p);
     xfree(*pp);
-    *pp = lp;
+    *pp = (char *)lp;
   } else {
     free_register(reg);
     set_yreg_additional_data(reg, NULL);
@@ -1459,7 +1458,7 @@ int insert_reg(int regname, bool literally_arg)
     return FAIL;
   }
 
-  char_u *arg;
+  char *arg;
   if (regname == '.') {  // Insert last inserted text.
     retval = stuff_inserted(NUL, 1L, true);
   } else if (get_spec_reg(regname, &arg, &allocated, true)) {
@@ -1523,15 +1522,6 @@ static void stuffescaped(const char *arg, bool literally)
     }
   }
 }
-
-/// If "regname" is a special register, return true and store a pointer to its
-/// value in "argp".
-///
-/// @param allocated  return: true when value was allocated
-/// @param errmsg     give error message when failing
-///
-/// @return  true if "regname" is a special register,
-bool get_spec_reg(int regname, char_u **argp, bool *allocated, bool errmsg);
 
 /// Converts a yankreg to a dict which can be used as an argument to the
 // userregfunc.
@@ -1606,14 +1596,14 @@ static int eval_yank_userreg(const char_u *ufn, int regname, yankreg_T *reg)
   return ret;
 }
 
-// If "regname" is a special register, return true and store a pointer to its
-// value in "argp".
-bool get_spec_reg(
-    int regname,
-    char_u **argp,
-    bool *allocated,        // return: true when value was allocated
-    bool errmsg             // give error message when failing
-)
+/// If "regname" is a special register, return true and store a pointer to its
+/// value in "argp".
+///
+/// @param allocated  return: true when value was allocated
+/// @param errmsg     give error message when failing
+///
+/// @return  true if "regname" is a special register,
+bool get_spec_reg(int regname, char **argp, bool *allocated, bool errmsg)
 {
   size_t cnt;
 
@@ -1624,15 +1614,15 @@ bool get_spec_reg(
     if (errmsg) {
       check_fname();            // will give emsg if not set
     }
-    *argp = (char_u *)curbuf->b_fname;
+    *argp = curbuf->b_fname;
     return true;
 
   case '#':                       // alternate file name
-    *argp = (char_u *)getaltfname(errmsg);  // may give emsg if not set
+    *argp = getaltfname(errmsg);  // may give emsg if not set
     return true;
 
   case '=':                     // result of expression
-    *argp = get_expr_line();
+    *argp = (char *)get_expr_line();
     *allocated = true;
     return true;
 
@@ -1640,18 +1630,18 @@ bool get_spec_reg(
     if (last_cmdline == NULL && errmsg) {
       emsg(_(e_nolastcmd));
     }
-    *argp = last_cmdline;
+    *argp = (char *)last_cmdline;
     return true;
 
   case '/':                     // last search-pattern
     if (last_search_pat() == NULL && errmsg) {
       emsg(_(e_noprevre));
     }
-    *argp = last_search_pat();
+    *argp = (char *)last_search_pat();
     return true;
 
   case '.':                     // last inserted text
-    *argp = get_last_insert_save();
+    *argp = (char *)get_last_insert_save();
     *allocated = true;
     if (*argp == NULL && errmsg) {
       emsg(_(e_noinstext));
@@ -1663,8 +1653,9 @@ bool get_spec_reg(
     if (!errmsg) {
       return false;
     }
-    *argp = file_name_at_cursor(FNAME_MESS | FNAME_HYP | (regname == Ctrl_P ? FNAME_EXP : 0),
-                                1L, NULL);
+    *argp
+      = (char *)file_name_at_cursor(FNAME_MESS | FNAME_HYP | (regname == Ctrl_P ? FNAME_EXP : 0),
+                                    1L, NULL);
     *allocated = true;
     return true;
 
@@ -1676,7 +1667,7 @@ bool get_spec_reg(
     cnt = find_ident_under_cursor(argp, (regname == Ctrl_W
                                          ? (FIND_IDENT|FIND_STRING)
                                          : FIND_STRING));
-    *argp = cnt ? vim_strnsave(*argp, cnt) : NULL;
+    *argp = cnt ? xstrnsave(*argp, cnt) : NULL;
     *allocated = true;
     return true;
 
@@ -1685,11 +1676,11 @@ bool get_spec_reg(
       return false;
     }
 
-    *argp = ml_get_buf(curwin->w_buffer, curwin->w_cursor.lnum, false);
+    *argp = (char *)ml_get_buf(curwin->w_buffer, curwin->w_cursor.lnum, false);
     return true;
 
   case '_':                     // black hole: always empty
-    *argp = (char_u *)"";
+    *argp = "";
     return true;
 
   default:                     /* User-defined registers. */
@@ -2202,8 +2193,8 @@ static int op_replace(oparg_T *oap, int c)
       // times.
       if (utf_char2cells(c) > 1) {
         if ((numc & 1) && !bd.is_short) {
-          ++bd.endspaces;
-          ++n;
+          bd.endspaces++;
+          n++;
         }
         numc = numc / 2;
       }
@@ -3259,7 +3250,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
   int delcount;
   int incr = 0;
   struct block_def bd;
-  char_u **y_array = NULL;
+  char **y_array = NULL;
   linenr_T nr_lines = 0;
   pos_T new_cursor;
   int indent;
@@ -3268,7 +3259,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
   bool first_indent = true;
   int lendiff = 0;
   pos_T old_pos;
-  char_u *insert_string = NULL;
+  char *insert_string = NULL;
   bool allocated = false;
   long cnt;
   const pos_T orig_start = curbuf->b_op_start;
@@ -3391,10 +3382,10 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
        * Loop twice: count the number of lines and save them. */
       for (;;) {
         y_size = 0;
-        ptr = insert_string;
+        ptr = (char_u *)insert_string;
         while (ptr != NULL) {
           if (y_array != NULL) {
-            y_array[y_size] = ptr;
+            y_array[y_size] = (char *)ptr;
           }
           y_size++;
           ptr = (char_u *)vim_strchr((char *)ptr, '\n');
@@ -3402,7 +3393,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
             if (y_array != NULL) {
               *ptr = NUL;
             }
-            ++ptr;
+            ptr++;
             // A trailing '\n' makes the register linewise.
             if (*ptr == NUL) {
               y_type = kMTLineWise;
@@ -3413,7 +3404,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
         if (y_array != NULL) {
           break;
         }
-        y_array = (char_u **)xmalloc(y_size * sizeof(char_u *));
+        y_array = xmalloc(y_size * sizeof(char_u *));
       }
     } else {
       y_size = 1;               // use fake one-line yank register
@@ -3434,7 +3425,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
     y_type = reg->y_type;
     y_width = reg->y_width;
     y_size = reg->y_size;
-    y_array = (char_u **)reg->y_array;
+    y_array = reg->y_array;
   }
 
   if (curbuf->terminal) {
@@ -3643,7 +3634,7 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
         // block
         spaces = y_width + 1;
         for (int j = 0; j < yanklen; j++) {
-          spaces -= lbr_chartabsize(NULL, &y_array[i][j], 0);
+          spaces -= lbr_chartabsize(NULL, (char_u *)(&y_array[i][j]), 0);
         }
         if (spaces < 0) {
           spaces = 0;
@@ -3744,12 +3735,9 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
         }
       }
       curbuf->b_op_start = curwin->w_cursor;
-    }
-    /*
-     * Line mode: BACKWARD is the same as FORWARD on the previous line
-     */
-    else if (dir == BACKWARD) {
-      --lnum;
+    } else if (dir == BACKWARD) {
+      // Line mode: BACKWARD is the same as FORWARD on the previous line
+      lnum--;
     }
     new_cursor = curwin->w_cursor;
 
@@ -3882,13 +3870,13 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
 
         for (; i < y_size; i++) {
           if ((y_type != kMTCharWise || i < y_size - 1)) {
-            if (ml_append(lnum, (char *)y_array[i], (colnr_T)0, false) == FAIL) {
+            if (ml_append(lnum, y_array[i], (colnr_T)0, false) == FAIL) {
               goto error;
             }
             new_lnum++;
           }
           lnum++;
-          ++nr_lines;
+          nr_lines++;
           if (flags & PUT_FIXINDENT) {
             old_pos = curwin->w_cursor;
             curwin->w_cursor.lnum = lnum;
@@ -3972,8 +3960,8 @@ error:
       if (col > 1) {
         curbuf->b_op_end.col = col - 1;
         if (len > 0) {
-          curbuf->b_op_end.col -= utf_head_off(y_array[y_size - 1],
-                                               y_array[y_size - 1] + len - 1);
+          curbuf->b_op_end.col -= utf_head_off((char_u *)y_array[y_size - 1],
+                                               (char_u *)y_array[y_size - 1] + len - 1);
         }
       } else {
         curbuf->b_op_end.col = 0;
@@ -4264,9 +4252,9 @@ static void dis_msg(const char_u *p, bool skip_esc)
 ///  comment.
 char_u *skip_comment(char_u *line, bool process, bool include_space, bool *is_comment)
 {
-  char_u *comment_flags = NULL;
+  char *comment_flags = NULL;
   int lead_len;
-  int leader_offset = get_last_leader_offset((char *)line, (char **)&comment_flags);
+  int leader_offset = get_last_leader_offset((char *)line, &comment_flags);
 
   *is_comment = false;
   if (leader_offset != -1) {
@@ -4288,7 +4276,7 @@ char_u *skip_comment(char_u *line, bool process, bool include_space, bool *is_co
     return line;
   }
 
-  lead_len = get_leader_len((char *)line, (char **)&comment_flags, false, include_space);
+  lead_len = get_leader_len((char *)line, &comment_flags, false, include_space);
 
   if (lead_len == 0) {
     return line;
@@ -4303,7 +4291,7 @@ char_u *skip_comment(char_u *line, bool process, bool include_space, bool *is_co
         || *comment_flags == ':') {
       break;
     }
-    ++comment_flags;
+    comment_flags++;
   }
 
   // If we found a colon, it means that we are not processing a line
@@ -4587,7 +4575,7 @@ static int same_leader(linenr_T lnum, int leader1_len, char_u *leader1_flags, in
       }
     } else {
       while (ascii_iswhite(line1[idx1])) {
-        ++idx1;
+        idx1++;
       }
     }
   }
@@ -5000,7 +4988,7 @@ static int fmt_check_par(linenr_T lnum, int *leader_len, char_u **leader_flags, 
      */
     flags = *leader_flags;
     while (*flags && *flags != ':' && *flags != COM_END) {
-      ++flags;
+      flags++;
     }
   }
 
@@ -5759,16 +5747,16 @@ void *get_reg_contents(int regname, int flags)
     return NULL;
   }
 
-  char_u *retval;
+  char *retval;
   bool allocated;
   if (get_spec_reg(regname, &retval, &allocated, false)) {
     if (retval == NULL) {
       return NULL;
     }
     if (allocated) {
-      return get_reg_wrap_one_line(retval, flags);
+      return get_reg_wrap_one_line((char_u *)retval, flags);
     }
-    return get_reg_wrap_one_line(vim_strsave(retval), flags);
+    return get_reg_wrap_one_line(vim_strsave((char_u *)retval), flags);
   }
 
   yankreg_T *reg = get_yank_register(regname, YREG_PASTE);
@@ -5863,11 +5851,11 @@ void write_reg_contents(int name, const char_u *str, ssize_t len, int must_appen
   write_reg_contents_ex(name, str, len, must_append, kMTUnknown, 0L);
 }
 
-void write_reg_contents_lst(int name, char_u **strings, bool must_append, MotionType yank_type,
+void write_reg_contents_lst(int name, char **strings, bool must_append, MotionType yank_type,
                             colnr_T block_len)
 {
   if (name == '/' || name == '=') {
-    char_u *s = strings[0];
+    char_u *s = (char_u *)strings[0];
     if (strings[0] == NULL) {
       s = (char_u *)"";
     } else if (strings[1] != NULL) {
@@ -5889,7 +5877,7 @@ void write_reg_contents_lst(int name, char_u **strings, bool must_append, Motion
     return;
   }
 
-  str_to_reg(reg, yank_type, (char_u *)strings, STRLEN((char_u *)strings),
+  str_to_reg(reg, yank_type, (char *)strings, STRLEN((char_u *)strings),
              block_len, true);
   finish_write_reg(name, reg, old_y_previous);
 }
@@ -5977,7 +5965,7 @@ void write_reg_contents_ex(int name, const char_u *str, ssize_t len, bool must_a
   if (!(reg = init_write_reg(name, &old_y_previous, must_append))) {
     return;
   }
-  str_to_reg(reg, yank_type, str, (size_t)len, block_len, false);
+  str_to_reg(reg, yank_type, (char *)str, (size_t)len, block_len, false);
   finish_write_reg(name, reg, old_y_previous);
 }
 
@@ -5991,7 +5979,7 @@ void write_reg_contents_ex(int name, const char_u *str, ssize_t len, bool must_a
 /// @param len length of the string (Ignored when str_list=true.)
 /// @param blocklen width of visual block, or -1 for "I don't know."
 /// @param str_list True if str is `char_u **`.
-static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char_u *str, size_t len,
+static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char *str, size_t len,
                        colnr_T blocklen, bool str_list)
   FUNC_ATTR_NONNULL_ALL
 {
@@ -6033,9 +6021,8 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char_u *str
   }
 
   // Grow the register array to hold the pointers to the new lines.
-  char_u **pp = xrealloc(y_ptr->y_array,
-                         (y_ptr->y_size + newlines) * sizeof(char_u *));
-  y_ptr->y_array = (char **)pp;
+  char **pp = xrealloc(y_ptr->y_array, (y_ptr->y_size + newlines) * sizeof(char_u *));
+  y_ptr->y_array = pp;
 
   size_t lnum = y_ptr->y_size;  // The current line number.
 
@@ -6053,7 +6040,7 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char_u *str
     }
   } else {
     size_t line_len;
-    for (const char_u *start = str, *end = str + len;
+    for (const char_u *start = (char_u *)str, *end = (char_u *)str + len;
          start < end + extraline;
          start += line_len + 1, lnum++) {
       assert(end - start >= 0);
@@ -6076,7 +6063,7 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char_u *str
         xfree(pp[lnum]);
         append = false;  // only first line is appended
       }
-      pp[lnum] = (char_u *)s;
+      pp[lnum] = s;
 
       // Convert NULs to '\n' to prevent truncation.
       memchrsub(pp[lnum], NUL, '\n', s_len);
@@ -6095,7 +6082,7 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char_u *str
 
 void clear_oparg(oparg_T *oap)
 {
-  memset(oap, 0, sizeof(oparg_T));
+  CLEAR_POINTER(oap);
 }
 
 ///  Count the number of bytes, characters and "words" in a line.

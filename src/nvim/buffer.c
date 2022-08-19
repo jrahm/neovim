@@ -25,8 +25,10 @@
 #include <string.h>
 
 #include "nvim/api/private/helpers.h"
+#include "nvim/arglist.h"
 #include "nvim/ascii.h"
 #include "nvim/assert.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/buffer_updates.h"
 #include "nvim/change.h"
@@ -36,6 +38,7 @@
 #include "nvim/decoration.h"
 #include "nvim/diff.h"
 #include "nvim/digraph.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/eval/vars.h"
 #include "nvim/ex_cmds.h"
@@ -50,6 +53,7 @@
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
 #include "nvim/hashtab.h"
+#include "nvim/help.h"
 #include "nvim/highlight_group.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
@@ -69,7 +73,7 @@
 #include "nvim/plines.h"
 #include "nvim/quickfix.h"
 #include "nvim/regexp.h"
-#include "nvim/screen.h"
+#include "nvim/runtime.h"
 #include "nvim/sign.h"
 #include "nvim/spell.h"
 #include "nvim/strings.h"
@@ -793,8 +797,8 @@ static void free_buffer(buf_T *buf)
   if (autocmd_busy) {
     // Do not free the buffer structure while autocommands are executing,
     // it's still needed. Free it when autocmd_busy is reset.
-    memset(&buf->b_namedm[0], 0, sizeof(buf->b_namedm));
-    memset(&buf->b_changelist[0], 0, sizeof(buf->b_changelist));
+    CLEAR_FIELD(buf->b_namedm);
+    CLEAR_FIELD(buf->b_changelist);
     buf->b_next = au_pending_free_buf;
     au_pending_free_buf = buf;
   } else {
@@ -1532,6 +1536,15 @@ void set_curbuf(buf_T *buf, int action)
 /// be pointing to freed memory.
 void enter_buffer(buf_T *buf)
 {
+  // when closing the current buffer stop Visual mode
+  if (VIsual_active
+#if defined(EXITFREE)
+      && !entered_free_all_mem
+#endif
+      ) {
+    end_visual_mode();
+  }
+
   // Get the buffer in the current window.
   curwin->w_buffer = buf;
   curbuf = buf;
@@ -2595,7 +2608,7 @@ void get_winopts(buf_T *buf)
   }
 
   if (curwin->w_float_config.style == kWinStyleMinimal) {
-    didset_window_options(curwin);
+    didset_window_options(curwin, false);
     win_set_minimal_style(curwin);
   }
 
@@ -2603,7 +2616,7 @@ void get_winopts(buf_T *buf)
   if (p_fdls >= 0) {
     curwin->w_p_fdl = p_fdls;
   }
-  didset_window_options(curwin);
+  didset_window_options(curwin, false);
 }
 
 /// Find the mark for the buffer 'buf' for the current window.
@@ -4628,279 +4641,6 @@ void fname_expand(buf_T *buf, char **ffname, char **sfname)
 #endif
 }
 
-/// Get the file name for an argument list entry.
-char *alist_name(aentry_T *aep)
-{
-  buf_T *bp;
-
-  // Use the name from the associated buffer if it exists.
-  bp = buflist_findnr(aep->ae_fnum);
-  if (bp == NULL || bp->b_fname == NULL) {
-    return (char *)aep->ae_fname;
-  }
-  return bp->b_fname;
-}
-
-/// do_arg_all(): Open up to 'count' windows, one for each argument.
-///
-/// @param forceit  hide buffers in current windows
-/// @param keep_tabs  keep current tabs, for ":tab drop file"
-void do_arg_all(int count, int forceit, int keep_tabs)
-{
-  uint8_t *opened;         // Array of weight for which args are open:
-                           //  0: not opened
-                           //  1: opened in other tab
-                           //  2: opened in curtab
-                           //  3: opened in curtab and curwin
-
-  int opened_len;               // length of opened[]
-  int use_firstwin = false;     // use first window for arglist
-  bool tab_drop_empty_window = false;
-  int split_ret = OK;
-  bool p_ea_save;
-  alist_T *alist;           // argument list to be used
-  buf_T *buf;
-  tabpage_T *tpnext;
-  int had_tab = cmdmod.cmod_tab;
-  win_T *old_curwin, *last_curwin;
-  tabpage_T *old_curtab, *last_curtab;
-  win_T *new_curwin = NULL;
-  tabpage_T *new_curtab = NULL;
-
-  assert(firstwin != NULL);  // satisfy coverity
-
-  if (ARGCOUNT <= 0) {
-    // Don't give an error message.  We don't want it when the ":all" command is in the .vimrc.
-    return;
-  }
-  setpcmark();
-
-  opened_len = ARGCOUNT;
-  opened = xcalloc((size_t)opened_len, 1);
-
-  // Autocommands may do anything to the argument list.  Make sure it's not
-  // freed while we are working here by "locking" it.  We still have to
-  // watch out for its size to be changed.
-  alist = curwin->w_alist;
-  alist->al_refcount++;
-
-  old_curwin = curwin;
-  old_curtab = curtab;
-
-  // Try closing all windows that are not in the argument list.
-  // Also close windows that are not full width;
-  // When 'hidden' or "forceit" set the buffer becomes hidden.
-  // Windows that have a changed buffer and can't be hidden won't be closed.
-  // When the ":tab" modifier was used do this for all tab pages.
-  if (had_tab > 0) {
-    goto_tabpage_tp(first_tabpage, true, true);
-  }
-  for (;;) {
-    win_T *wpnext = NULL;
-    tpnext = curtab->tp_next;
-    for (win_T *wp = firstwin; wp != NULL; wp = wpnext) {
-      int i;
-      wpnext = wp->w_next;
-      buf = wp->w_buffer;
-      if (buf->b_ffname == NULL
-          || (!keep_tabs && (buf->b_nwindows > 1 || wp->w_width != Columns))) {
-        i = opened_len;
-      } else {
-        // check if the buffer in this window is in the arglist
-        for (i = 0; i < opened_len; i++) {
-          if (i < alist->al_ga.ga_len
-              && (AARGLIST(alist)[i].ae_fnum == buf->b_fnum
-                  || path_full_compare(alist_name(&AARGLIST(alist)[i]),
-                                       buf->b_ffname,
-                                       true, true) & kEqualFiles)) {
-            int weight = 1;
-
-            if (old_curtab == curtab) {
-              weight++;
-              if (old_curwin == wp) {
-                weight++;
-              }
-            }
-
-            if (weight > (int)opened[i]) {
-              opened[i] = (uint8_t)weight;
-              if (i == 0) {
-                if (new_curwin != NULL) {
-                  new_curwin->w_arg_idx = opened_len;
-                }
-                new_curwin = wp;
-                new_curtab = curtab;
-              }
-            } else if (keep_tabs) {
-              i = opened_len;
-            }
-
-            if (wp->w_alist != alist) {
-              // Use the current argument list for all windows containing a file from it.
-              alist_unlink(wp->w_alist);
-              wp->w_alist = alist;
-              wp->w_alist->al_refcount++;
-            }
-            break;
-          }
-        }
-      }
-      wp->w_arg_idx = i;
-
-      if (i == opened_len && !keep_tabs) {    // close this window
-        if (buf_hide(buf) || forceit || buf->b_nwindows > 1
-            || !bufIsChanged(buf)) {
-          // If the buffer was changed, and we would like to hide it, try autowriting.
-          if (!buf_hide(buf) && buf->b_nwindows <= 1 && bufIsChanged(buf)) {
-            bufref_T bufref;
-            set_bufref(&bufref, buf);
-            (void)autowrite(buf, false);
-            // Check if autocommands removed the window.
-            if (!win_valid(wp) || !bufref_valid(&bufref)) {
-              wpnext = firstwin;  // Start all over...
-              continue;
-            }
-          }
-          // don't close last window
-          if (ONE_WINDOW
-              && (first_tabpage->tp_next == NULL || !had_tab)) {
-            use_firstwin = true;
-          } else {
-            win_close(wp, !buf_hide(buf) && !bufIsChanged(buf), false);
-            // check if autocommands removed the next window
-            if (!win_valid(wpnext)) {
-              // start all over...
-              wpnext = firstwin;
-            }
-          }
-        }
-      }
-    }
-
-    // Without the ":tab" modifier only do the current tab page.
-    if (had_tab == 0 || tpnext == NULL) {
-      break;
-    }
-
-    // check if autocommands removed the next tab page
-    if (!valid_tabpage(tpnext)) {
-      tpnext = first_tabpage;           // start all over...
-    }
-    goto_tabpage_tp(tpnext, true, true);
-  }
-
-  // Open a window for files in the argument list that don't have one.
-  // ARGCOUNT may change while doing this, because of autocommands.
-  if (count > opened_len || count <= 0) {
-    count = opened_len;
-  }
-
-  // Don't execute Win/Buf Enter/Leave autocommands here.
-  autocmd_no_enter++;
-  autocmd_no_leave++;
-  last_curwin = curwin;
-  last_curtab = curtab;
-  win_enter(lastwin, false);
-  // ":tab drop file" should re-use an empty window to avoid "--remote-tab"
-  // leaving an empty tab page when executed locally.
-  if (keep_tabs && buf_is_empty(curbuf) && curbuf->b_nwindows == 1
-      && curbuf->b_ffname == NULL && !curbuf->b_changed) {
-    use_firstwin = true;
-    tab_drop_empty_window = true;
-  }
-
-  for (int i = 0; i < count && !got_int; i++) {
-    if (alist == &global_alist && i == global_alist.al_ga.ga_len - 1) {
-      arg_had_last = true;
-    }
-    if (opened[i] > 0) {
-      // Move the already present window to below the current window
-      if (curwin->w_arg_idx != i) {
-        FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
-          if (wp->w_arg_idx == i) {
-            if (keep_tabs) {
-              new_curwin = wp;
-              new_curtab = curtab;
-            } else if (wp->w_frame->fr_parent != curwin->w_frame->fr_parent) {
-              emsg(_("E249: window layout changed unexpectedly"));
-              i = count;
-              break;
-            } else {
-              win_move_after(wp, curwin);
-            }
-            break;
-          }
-        }
-      }
-    } else if (split_ret == OK) {
-      // trigger events for tab drop
-      if (tab_drop_empty_window && i == count - 1) {
-        autocmd_no_enter--;
-      }
-      if (!use_firstwin) {              // split current window
-        p_ea_save = p_ea;
-        p_ea = true;                    // use space from all windows
-        split_ret = win_split(0, WSP_ROOM | WSP_BELOW);
-        p_ea = p_ea_save;
-        if (split_ret == FAIL) {
-          continue;
-        }
-      } else {      // first window: do autocmd for leaving this buffer
-        autocmd_no_leave--;
-      }
-
-      // edit file "i"
-      curwin->w_arg_idx = i;
-      if (i == 0) {
-        new_curwin = curwin;
-        new_curtab = curtab;
-      }
-      (void)do_ecmd(0, alist_name(&AARGLIST(alist)[i]), NULL, NULL, ECMD_ONE,
-                    ((buf_hide(curwin->w_buffer)
-                      || bufIsChanged(curwin->w_buffer))
-                     ? ECMD_HIDE : 0) + ECMD_OLDBUF,
-                    curwin);
-      if (tab_drop_empty_window && i == count - 1) {
-        autocmd_no_enter++;
-      }
-      if (use_firstwin) {
-        autocmd_no_leave++;
-      }
-      use_firstwin = false;
-    }
-    os_breakcheck();
-
-    // When ":tab" was used open a new tab for a new window repeatedly.
-    if (had_tab > 0 && tabpage_index(NULL) <= p_tpm) {
-      cmdmod.cmod_tab = 9999;
-    }
-  }
-
-  // Remove the "lock" on the argument list.
-  alist_unlink(alist);
-
-  autocmd_no_enter--;
-  // restore last referenced tabpage's curwin
-  if (last_curtab != new_curtab) {
-    if (valid_tabpage(last_curtab)) {
-      goto_tabpage_tp(last_curtab, true, true);
-    }
-    if (win_valid(last_curwin)) {
-      win_enter(last_curwin, false);
-    }
-  }
-  // to window with first arg
-  if (valid_tabpage(new_curtab)) {
-    goto_tabpage_tp(new_curtab, true, true);
-  }
-  if (win_valid(new_curwin)) {
-    win_enter(new_curwin, false);
-  }
-
-  autocmd_no_leave--;
-  xfree(opened);
-}
-
 /// @return  true if "buf" is a prompt buffer.
 bool bt_prompt(buf_T *buf)
   FUNC_ATTR_PURE
@@ -5139,8 +4879,6 @@ static int chk_modeline(linenr_T lnum, int flags)
   intmax_t vers;
   int end;
   int retval = OK;
-  char *save_sourcing_name;
-  linenr_T save_sourcing_lnum;
 
   prev = -1;
   for (s = (char *)ml_get(lnum); *s != NUL; s++) {
@@ -5185,10 +4923,8 @@ static int chk_modeline(linenr_T lnum, int flags)
 
   s = linecopy = xstrdup(s);      // copy the line, it will change
 
-  save_sourcing_lnum = sourcing_lnum;
-  save_sourcing_name = sourcing_name;
-  sourcing_lnum = lnum;               // prepare for emsg()
-  sourcing_name = "modelines";
+  // prepare for emsg()
+  estack_push(ETYPE_MODELINE, "modelines", lnum);
 
   end = false;
   while (end == false) {
@@ -5228,7 +4964,7 @@ static int chk_modeline(linenr_T lnum, int flags)
       const sctx_T save_current_sctx = current_sctx;
       current_sctx.sc_sid = SID_MODELINE;
       current_sctx.sc_seq = 0;
-      current_sctx.sc_lnum = 0;
+      current_sctx.sc_lnum = lnum;
       // Make sure no risky things are executed as a side effect.
       secure = 1;
 
@@ -5243,9 +4979,7 @@ static int chk_modeline(linenr_T lnum, int flags)
     s = e + 1;                        // advance to next part
   }
 
-  sourcing_lnum = save_sourcing_lnum;
-  sourcing_name = save_sourcing_name;
-
+  estack_pop();
   xfree(linecopy);
 
   return retval;
