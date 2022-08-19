@@ -2921,7 +2921,10 @@ bool op_yank(oparg_T *oap, bool message)
   op_yank_reg(oap, message, reg, is_append_register(oap->regname));
 
   if (get_userreg(oap->regname) != -1) {
-    return eval_yank_userreg(curbuf->b_p_urf, oap->regname, reg) != -1;
+    if (eval_yank_userreg(curbuf->b_p_urf, oap->regname, reg) == -1) {
+      beep_flush();
+      return false;
+    }
   }
 
   set_clipboard(oap->regname, reg);
@@ -3176,13 +3179,13 @@ static void do_autocmd_textyankpost(oparg_T *oap, yankreg_T *reg)
   FUNC_ATTR_NONNULL_ALL
 {
   static bool recursive = false;
+  int len;
 
   if (recursive || !has_event(EVENT_TEXTYANKPOST)) {
     // No autocommand was defined, or we yanked from this autocommand.
     return;
   }
 
-  recursive = true;
 
   save_v_event_T save_v_event;
   // Set the v:event dictionary with information about the yank.
@@ -3197,13 +3200,15 @@ static void do_autocmd_textyankpost(oparg_T *oap, yankreg_T *reg)
   (void)tv_dict_add_list(dict, S_LEN("regcontents"), list);
 
   // Register type.
-  char buf[NUMBUFLEN + 2];
+  char buf[NUMBUFLEN + 6];
   format_reg_type(reg->y_type, reg->y_width, buf, ARRAY_SIZE(buf));
   (void)tv_dict_add_str(dict, S_LEN("regtype"), buf);
 
   // Name of requested register, or empty string for unnamed operation.
-  buf[0] = (char)oap->regname;
-  buf[1] = NUL;
+  len = (*utf_char2len)(oap->regname);
+  buf[len] = 0;
+  utf_char2bytes(oap->regname, buf);
+  recursive = true;
   (void)tv_dict_add_str(dict, S_LEN("regname"), buf);
 
   // Motion type: inclusive or exclusive.
@@ -5837,12 +5842,12 @@ static yankreg_T *init_write_reg(int name, yankreg_T **old_y_previous, bool must
 
 static void finish_write_reg(int name, yankreg_T *reg, yankreg_T *old_y_previous)
 {
-  // Send text of clipboard register to the clipboard.
-  set_clipboard(name, reg);
-
   if (get_userreg(name) != -1) {
     eval_yank_userreg(curbuf->b_p_urf, name, reg);
   }
+
+  // Send text of clipboard register to the clipboard.
+  set_clipboard(name, reg);
 
   // ':let @" = "val"' should change the meaning of the "" register
   if (name != '"') {
