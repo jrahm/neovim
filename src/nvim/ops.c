@@ -3105,7 +3105,11 @@ static void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
       if (oap->regname == NUL) {
         *namebuf = NUL;
       } else {
-        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%c"), oap->regname);
+        char buf[5];
+        int len = (*utf_char2len) (oap->regname);
+        utf_char2bytes(oap->regname, buf);
+        buf[len] = 0;
+        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%s"), buf);
       }
 
       // redisplay now, so message is not deleted

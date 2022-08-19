@@ -4149,7 +4149,7 @@ msgid "E748: No previously used register"
 msgstr "E748: Daha önce kullanılan bir yazmaç yok"
 
 #, c-format
-msgid " into \"%c"
+msgid " into \"%s"
 msgstr " \"%c"
 
 #, c-format
