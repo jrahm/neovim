@@ -56,6 +56,7 @@
 #include "nvim/normal.h"
 #include "nvim/ops.h"
 #include "nvim/option.h"
+#include "nvim/optionstr.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
 #include "nvim/os/shell.h"
@@ -3976,7 +3977,7 @@ static int do_sub(exarg_T *eap, proftime_T timeout, long cmdpreview_ns, handle_T
                         _("replace with %s (y/n/a/q/l/^E/^Y)?"), sub);
               msg_no_more = false;
               msg_scroll = (int)i;
-              showruler(true);
+              show_cursor_info(true);
               ui_cursor_goto(msg_row, msg_col);
               RedrawingDisabled = temp;
 

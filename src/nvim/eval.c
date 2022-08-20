@@ -28,6 +28,7 @@
 #include "nvim/eval/typval.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/eval/vars.h"
+#include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
@@ -41,6 +42,7 @@
 #include "nvim/move.h"
 #include "nvim/ops.h"
 #include "nvim/option.h"
+#include "nvim/optionstr.h"
 #include "nvim/os/input.h"
 #include "nvim/os/shell.h"
 #include "nvim/path.h"
@@ -5840,7 +5842,17 @@ bool callback_call(Callback *const callback, const int argcount_in, typval_T *co
   switch (callback->type) {
   case kCallbackFuncref:
     name = callback->data.funcref;
-    partial = NULL;
+    int len = (int)STRLEN(name);
+    if (len >= 6 && !memcmp(name, "v:lua.", 6)) {
+      name += 6;
+      len = check_luafunc_name(name, false);
+      if (len == 0) {
+        return false;
+      }
+      partial = vvlua_partial;
+    } else {
+      partial = NULL;
+    }
     break;
 
   case kCallbackPartial:
