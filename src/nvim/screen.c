@@ -1335,7 +1335,7 @@ char *set_chars_option(win_T *wp, char_u **varp, bool set)
     { &wp->w_p_fcs_chars.diff,       "diff",      '-' },
     { &wp->w_p_fcs_chars.msgsep,     "msgsep",    ' ' },
     { &wp->w_p_fcs_chars.eob,        "eob",       '~' },
-    { &wp->w_p_fcs_chars.colorcol,   "colorcol",  ' ' },
+    { &wp->w_p_fcs_chars.colorc,     "colorc",  ' ' },
   };
   struct chars_tab lcs_tab[] = {
     { &wp->w_p_lcs_chars.eol,     "eol",      NUL },
