@@ -3660,6 +3660,7 @@ static void f_has(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     "title",
     "user-commands",        // was accidentally included in 5.4
     "user_commands",
+    "usermarks",
     "vartabs",
     "vertsplit",
     "vimscript-1",
