@@ -388,7 +388,7 @@ const char *skip_var_list(const char *arg, int *var_count, int *semicolon)
 static const char *skip_var_one(const char *arg)
 {
   if (*arg == '@' && arg[1] != NUL) {
-    return arg + 2;
+    return arg + 1 + utfc_ptr2len(arg + 1);
   }
   return (char *)find_name_end(*arg == '$' || *arg == '&' ? arg + 1 : arg,
                                NULL, NULL, FNE_INCL_BR | FNE_CHECK_START);
@@ -692,10 +692,14 @@ static char *ex_let_one(char *arg, typval_T *const tv, const bool copy, const bo
       return NULL;
     }
     arg++;
+
+    int regname = utf_ptr2char(arg);
+    int mblen = utf_ptr2len(arg);
+
     if (op != NULL && vim_strchr("+-*/%", *op) != NULL) {
       semsg(_(e_letwrong), op);
     } else if (endchars != NULL
-               && vim_strchr(endchars, *skipwhite(arg + 1)) == NULL) {
+               && vim_strchr(endchars, *skipwhite(arg + mblen)) == NULL) {
       emsg(_(e_letunexp));
     } else {
       char *s;
@@ -703,7 +707,7 @@ static char *ex_let_one(char *arg, typval_T *const tv, const bool copy, const bo
       char *ptofree = NULL;
       const char *p = tv_get_string_chk(tv);
       if (p != NULL && op != NULL && *op == '.') {
-        s = get_reg_contents(*arg == '@' ? '"' : *arg, kGRegExprSrc);
+        s = get_reg_contents(*arg == '@' ? '"' : regname, kGRegExprSrc);
         if (s != NULL) {
           ptofree = (char *)concat_str((char_u *)s, (const char_u *)p);
           p = (const char *)ptofree;
@@ -711,9 +715,9 @@ static char *ex_let_one(char *arg, typval_T *const tv, const bool copy, const bo
         }
       }
       if (p != NULL) {
-        write_reg_contents(*arg == '@' ? '"' : *arg,
+        write_reg_contents(*arg == '@' ? '"' : regname,
                            (const char_u *)p, (ssize_t)STRLEN(p), false);
-        arg_end = arg + 1;
+        arg_end = arg + mblen;
       }
       xfree(ptofree);
     }

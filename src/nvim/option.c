@@ -4094,6 +4094,8 @@ static char_u *get_varp(vimoption_T *p)
     return (char_u *)&(curbuf->b_p_cfu);
   case PV_OFU:
     return (char_u *)&(curbuf->b_p_ofu);
+  case PV_URF:
+    return (char_u *)&(curbuf->b_p_urf);
   case PV_EOL:
     return (char_u *)&(curbuf->b_p_eol);
   case PV_FIXEOL:
@@ -4503,6 +4505,8 @@ void buf_copy_options(buf_T *buf, int flags)
       COPY_OPT_SCTX(buf, BV_CFU);
       buf->b_p_ofu = vim_strsave(p_ofu);
       COPY_OPT_SCTX(buf, BV_OFU);
+      buf->b_p_urf = vim_strsave(p_urf);
+      COPY_OPT_SCTX(buf, BV_URF);
       buf->b_p_tfu = vim_strsave(p_tfu);
       COPY_OPT_SCTX(buf, BV_TFU);
       buf->b_p_sts = p_sts;

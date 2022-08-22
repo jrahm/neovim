@@ -4410,7 +4410,7 @@ msgid "freeing %ld lines"
 msgstr "libération de %ld lignes"
 
 #, c-format
-msgid " into \"%c"
+msgid " into \"%s"
 msgstr " dans \"%c"
 
 #, c-format

@@ -3061,12 +3061,10 @@ static int eval7(char **arg, typval_T *rettv, int evaluate, int want_string)
   // Register contents: @r.
   case '@':
     (*arg)++;
+    int regname = mb_cptr2char_adv((const char_u**) arg);
     if (evaluate) {
       rettv->v_type = VAR_STRING;
-      rettv->vval.v_string = get_reg_contents(**arg, kGRegExprSrc);
-    }
-    if (**arg != NUL) {
-      (*arg)++;
+      rettv->vval.v_string = get_reg_contents(regname, kGRegExprSrc);
     }
     break;
 
@@ -4166,7 +4164,7 @@ bool garbage_collect(bool testing)
 
   // registers (ShaDa additional data)
   {
-    const void *reg_iter = NULL;
+    iter_register_T reg_iter = ITER_REGISTER_NULL;
     do {
       yankreg_T reg;
       char name = NUL;
@@ -4175,7 +4173,7 @@ bool garbage_collect(bool testing)
       if (name != NUL) {
         ABORTING(set_ref_dict)(reg.additional_data, copyID);
       }
-    } while (reg_iter != NULL);
+    } while (reg_iter != ITER_REGISTER_NULL);
   }
 
   // global marks (ShaDa additional data)

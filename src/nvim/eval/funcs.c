@@ -3673,6 +3673,7 @@ static void f_has(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     "winaltkeys",
     "writebackup",
     "nvim",
+    "userreg",
   };
 
   // XXX: eval_has_provider() may shell out :(

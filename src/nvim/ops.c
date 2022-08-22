@@ -21,6 +21,7 @@
 #include "nvim/edit.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/userfunc.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_getln.h"
@@ -55,8 +56,24 @@
 #include "nvim/undo.h"
 #include "nvim/vim.h"
 #include "nvim/window.h"
+#include "nvim/yankmap.h"
 
-static yankreg_T y_regs[NUM_REGISTERS] = { 0 };
+struct yank_registers {
+  yankmap_T inner;
+};
+
+yank_registers_T y_regs;
+
+static yankreg_T *get_reg(yank_registers_T *regs, int idx) 
+{
+  return yankmap_get(&regs->inner, idx);
+
+}
+
+static yankreg_T *get_global_reg(int idx)
+{
+  return get_reg(&y_regs, idx);
+}
 
 static yankreg_T *y_previous = NULL;  // ptr to last written yankreg
 
@@ -769,6 +786,24 @@ char_u *get_expr_line_src(void)
   return vim_strsave(expr_line);
 }
 
+
+int get_userreg(int regname)
+{
+  if ((regname >= 'a' && regname <= 'z')
+      || (regname >= 'A' && regname <= 'Z')
+      || (regname >= '0' && regname <= '9')
+      || (regname <= 127 && strchr("\"-:.%#=*+_/", regname))
+      || regname == Ctrl_F
+      || regname == Ctrl_P
+      || regname == Ctrl_W
+      || regname == Ctrl_A
+      || (regname + USER_REGISTERS_START) < regname) {
+    return -1;
+  }
+
+  return regname + USER_REGISTERS_START;
+}
+
 /// @return  whether `regname` is a valid name of a yank register.
 ///
 /// @note: There is no check for 0 (default register), caller should do this.
@@ -785,10 +820,150 @@ bool valid_yank_reg(int regname, bool writing)
       || regname == '-'
       || regname == '_'
       || regname == '*'
-      || regname == '+') {
+      || regname == '+'
+      || get_userreg(regname) != -1) {
     return true;
   }
   return false;
+}
+
+static int call_userreg_put(const char* urf, int regname, typval_T* out)
+{
+  char regname_str[5];
+  int len;
+
+  len = (*utf_char2len)(regname);
+  regname_str[len] = 0;
+  utf_char2bytes(regname, regname_str);
+
+  typval_T args[3];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_NUMBER;
+
+  args[0].vval.v_string = "put";
+  args[1].vval.v_string = regname_str;
+  args[2].vval.v_number = 0;
+
+  funcexe_T funcexe = FUNCEXE_INIT;
+  funcexe.evaluate = true;
+
+  return call_func(
+        urf,
+        -1,
+        out,
+        /* argcount_in = */ 3,
+        args,
+        &funcexe);
+}
+
+// Converts a typval returned from the userregfunction to a register.
+static void typval_to_yankreg(yankreg_T* yankreg, typval_T* val)
+{
+  if (!yankreg || !val) return;
+
+  char* type;
+  dict_T* dict;
+  typval_T tv;
+  size_t i;
+  size_t sz;
+
+  free_register(yankreg);
+  memset(yankreg, 0, sizeof(*yankreg));
+
+  switch (val->v_type) {
+
+  case VAR_DICT:
+    dict = val->vval.v_dict;
+    type = tv_dict_get_string(dict, "type", false);
+
+    if (!strcmp(type, "block")) {
+      yankreg->y_width = (int) tv_dict_get_number(dict, "width");
+      yankreg->y_type = kMTBlockWise;
+    } else if (!strcmp(type, "line")) {
+      yankreg->y_type = kMTLineWise;
+    } else {
+      yankreg->y_type = kMTCharWise;
+    }
+
+    if (tv_dict_get_tv(dict, "lines", &tv) == OK) {
+      if (tv.v_type == VAR_STRING) {
+        yankreg->y_array = xcalloc(sizeof(char*), 1);
+        yankreg->y_array[0] = strdup(tv.vval.v_string);
+      } else if (tv.v_type == VAR_LIST) {
+        yankreg->y_array =
+          xcalloc(sizeof(char*), (size_t) tv_list_len(tv.vval.v_list));
+
+        i = 0;
+        TV_LIST_ITER_CONST(tv.vval.v_list, li, {
+          if (li->li_tv.v_type == VAR_STRING) {
+            yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
+          } else {
+            yankreg->y_array[i] = NULL;
+          }
+          ++ i;
+        });
+
+        yankreg->y_size = i;
+      }
+    } else {
+      yankreg->y_array = NULL;
+    }
+
+    if (tv_dict_get_tv(dict, "additional_data", &tv) == OK) {
+      if (tv.v_type == VAR_DICT) {
+        yankreg->additional_data = tv.vval.v_dict;
+      }
+    }
+    break;
+
+  case VAR_LIST:
+    yankreg->y_type = kMTLineWise;
+    sz = (size_t) tv_list_len(val->vval.v_list);
+    yankreg->y_array = xcalloc(sizeof(char*), sz);
+    yankreg->y_size = sz;
+    i = 0;
+    TV_LIST_ITER_CONST(val->vval.v_list, li, {
+      yankreg->y_array[i] = strdup(tv_get_string(&li->li_tv));
+      i ++;
+    });
+    break;
+
+  default:
+    yankreg->y_type = kMTCharWise;
+    yankreg->y_size = 1;
+
+    if (val->vval.v_string) {
+      yankreg->y_array = xcalloc(sizeof(char*), 1);
+      yankreg->y_array[0] = strdup(tv_get_string(val));
+    } else {
+      yankreg->y_array = NULL;
+    }
+
+    break;
+
+  }
+
+  yankreg->timestamp = os_time();
+}
+
+static void copy_userreg(yankreg_T* into, int regname)
+{
+  if (!into) return;
+
+  if (!curbuf->b_p_urf || strlen((char *) curbuf->b_p_urf) == 0)
+    return;
+
+
+  typval_T* ret = xmalloc(sizeof(typval_T));
+
+  if (call_userreg_put((const char*) curbuf->b_p_urf, regname, ret) == FAIL) {
+    return;
+  }
+
+  typval_to_yankreg(into, ret);
+
+  tv_free(ret);
 }
 
 /// @return yankreg_T to use, according to the value of `regname`.
@@ -828,7 +1003,11 @@ yankreg_T *get_yank_register(int regname, int mode)
   if (i == -1) {
     i = 0;
   }
-  reg = &y_regs[i];
+  reg = get_global_reg(i);
+  if (get_userreg(regname) != -1 && mode != YREG_YANK) {
+    // If the mode is not yank, copy the userreg data to the reg.
+    copy_userreg(reg, regname);
+  }
 
   if (mode == YREG_YANK) {
     // remember the written register for unnamed paste
@@ -897,8 +1076,7 @@ int do_record(int c)
 
   if (reg_recording == 0) {
     // start recording
-    // registers 0-9, a-z and " are allowed
-    if (c < 0 || (!ASCII_ISALNUM(c) && c != '"')) {
+    if (c < 0) {
       retval = FAIL;
     } else {
       reg_recording = c;
@@ -930,9 +1108,10 @@ int do_record(int c)
     }
 
     // Name of requested register, or empty string for unnamed operation.
-    char buf[NUMBUFLEN + 2];
-    buf[0] = (char)regname;
-    buf[1] = NUL;
+    char buf[NUMBUFLEN + 5];
+    int len = (*utf_char2len)(regname);
+    utf_char2bytes(regname, buf);
+    buf[len] = NUL;
     (void)tv_dict_add_str(dict, S_LEN("regname"), buf);
     tv_dict_set_keys_readonly(dict);
 
@@ -1013,6 +1192,9 @@ static int stuff_yank(int regname, char_u *p)
     reg->y_type = kMTCharWise;
   }
   reg->timestamp = os_time();
+  if (get_userreg(regname) != -1) {
+    return eval_yank_userreg(curbuf->b_p_urf, regname, reg);
+  }
   return OK;
 }
 
@@ -1339,6 +1521,79 @@ static void stuffescaped(const char *arg, bool literally)
   }
 }
 
+/// Converts a yankreg to a dict which can be used as an argument to the
+// userregfunc.
+static dict_T* yankreg_to_dict(yankreg_T* yankreg) {
+  dict_T *const dict = tv_dict_alloc();
+  dict->dv_refcount = 1;
+  tv_dict_add_nr(dict, S_LEN("width"), yankreg->y_width);
+
+  const char* type;
+
+  switch(yankreg->y_type) {
+    case kMTLineWise:
+      type = "line";
+      break;
+    case kMTCharWise:
+      type = "char";
+      break;
+    case kMTBlockWise:
+      type = "block";
+      break;
+    default:
+      type = "unknown";
+  }
+
+  tv_dict_add_str(dict, S_LEN("type"), type);
+  if (yankreg->additional_data) {
+    tv_dict_add_dict(dict, S_LEN("additional_data"), yankreg->additional_data);
+  }
+
+  list_T *const lines = tv_list_alloc(yankreg->y_size);
+
+  size_t i;
+  for (i = 0; i < yankreg->y_size; ++ i) {
+    tv_list_append_string(
+        lines, yankreg->y_array[i], strlen(yankreg->y_array[i]));
+  }
+
+  tv_dict_add_list(dict, S_LEN("lines"), lines);
+
+  return dict;
+}
+
+/*
+ * Executes the yank() function on a user-defined register to set the contents
+ * of that register.
+ */
+static int eval_yank_userreg(const char_u *ufn, int regname, yankreg_T *reg)
+{
+  if (!reg)
+    return -1;
+
+  int ret, len;
+  char regname_str[5];
+
+  len = (*utf_char2len)(regname);
+  regname_str[len] = 0;
+  utf_char2bytes(regname, regname_str);
+
+  typval_T args[4];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_DICT;
+  args[3].v_type = VAR_UNKNOWN;
+
+  args[0].vval.v_string = "yank";
+  args[1].vval.v_string = regname_str;
+  args[2].vval.v_dict = yankreg_to_dict(reg);
+
+  char *dup_ufn = strdup((char *)ufn);
+  ret = (int)call_func_retnr(dup_ufn, 3, args);
+  xfree(dup_ufn);
+  return ret;
+}
+
 /// If "regname" is a special register, return true and store a pointer to its
 /// value in "argp".
 ///
@@ -1425,6 +1680,9 @@ bool get_spec_reg(int regname, char **argp, bool *allocated, bool errmsg)
   case '_':                     // black hole: always empty
     *argp = "";
     return true;
+
+  default:
+    break;
   }
 
   return false;
@@ -1471,14 +1729,14 @@ bool cmdline_paste_reg(int regname, bool literally_arg, bool remcr)
 /// Shift the delete registers: "9 is cleared, "8 becomes "9, etc.
 static void shift_delete_registers(bool y_append)
 {
-  free_register(&y_regs[9]);  // free register "9
+  free_register(get_global_reg(9));  // free register "9
   for (int n = 9; n > 1; n--) {
-    y_regs[n] = y_regs[n - 1];
+    *get_global_reg(n) = *get_global_reg(n - 1);
   }
   if (!y_append) {
-    y_previous = &y_regs[1];
+    y_previous = get_global_reg(1);
   }
-  y_regs[1].y_array = NULL;  // set register "1 to empty
+  get_global_reg(1)->y_array = NULL;  // set register "1 to empty
 }
 
 /// Handle a delete operation.
@@ -1579,7 +1837,7 @@ int op_delete(oparg_T *oap)
     // compatible)
     if (oap->motion_type == kMTLineWise || oap->line_count > 1 || oap->use_reg_one) {
       shift_delete_registers(is_append_register(oap->regname));
-      reg = &y_regs[1];
+      reg = get_global_reg(1);
       op_yank_reg(oap, false, reg, false);
       did_yank = true;
     }
@@ -2584,13 +2842,22 @@ int op_change(oparg_T *oap)
   return retval;
 }
 
+
+/*
+ * set all the yank registers to empty (called from main())
+ */
+void init_yank(void)
+{
+  init_yankmap(&y_regs.inner);
+}
+
 #if defined(EXITFREE)
 void clear_registers(void)
 {
   int i;
 
   for (i = 0; i < NUM_REGISTERS; i++) {
-    free_register(&y_regs[i]);
+    free_register(get_global_reg(i));
   }
 }
 
@@ -2634,6 +2901,14 @@ bool op_yank(oparg_T *oap, bool message)
 
   yankreg_T *reg = get_yank_register(oap->regname, YREG_YANK);
   op_yank_reg(oap, message, reg, is_append_register(oap->regname));
+
+  if (get_userreg(oap->regname) != -1) {
+    if (eval_yank_userreg(curbuf->b_p_urf, oap->regname, reg) == -1) {
+      beep_flush();
+      return false;
+    }
+  }
+
   set_clipboard(oap->regname, reg);
   do_autocmd_textyankpost(oap, reg);
 
@@ -2815,7 +3090,11 @@ static void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
       if (oap->regname == NUL) {
         *namebuf = NUL;
       } else {
-        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%c"), oap->regname);
+        char buf[5];
+        int len = (*utf_char2len) (oap->regname);
+        utf_char2bytes(oap->regname, buf);
+        buf[len] = 0;
+        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%s"), buf);
       }
 
       // redisplay now, so message is not deleted
@@ -2882,6 +3161,7 @@ static void do_autocmd_textyankpost(oparg_T *oap, yankreg_T *reg)
   FUNC_ATTR_NONNULL_ALL
 {
   static bool recursive = false;
+  int len;
 
   if (recursive || !has_event(EVENT_TEXTYANKPOST)) {
     // No autocommand was defined, or we yanked from this autocommand.
@@ -2903,13 +3183,15 @@ static void do_autocmd_textyankpost(oparg_T *oap, yankreg_T *reg)
   (void)tv_dict_add_list(dict, S_LEN("regcontents"), list);
 
   // Register type.
-  char buf[NUMBUFLEN + 2];
+  char buf[NUMBUFLEN + 6];
   format_reg_type(reg->y_type, reg->y_width, buf, ARRAY_SIZE(buf));
   (void)tv_dict_add_str(dict, S_LEN("regtype"), buf);
 
   // Name of requested register, or empty string for unnamed operation.
-  buf[0] = (char)oap->regname;
-  buf[1] = NUL;
+  len = (*utf_char2len)(oap->regname);
+  buf[len] = 0;
+  utf_char2bytes(oap->regname, buf);
+  recursive = true;
   (void)tv_dict_add_str(dict, S_LEN("regname"), buf);
 
   // Motion type: inclusive or exclusive.
@@ -3126,6 +3408,10 @@ void do_put(int regname, yankreg_T *reg, int dir, long count, int flags)
     // just restoring the deleted text.
     if (reg == NULL) {
       reg = get_yank_register(regname, YREG_PASTE);
+    }
+
+    if (get_userreg(regname) != -1)  {
+      copy_userreg(reg, regname);
     }
 
     y_type = reg->y_type;
@@ -3780,7 +4066,7 @@ int get_register_name(int num)
 /// @return the index of the register "" points to.
 int get_unname_register(void)
 {
-  return y_previous == NULL ? -1 : (int)(y_previous - &y_regs[0]);
+  return yankmap_find(&y_regs.inner, y_previous);
 }
 
 /// ":dis" and ":registers": Display the contents of the yank registers.
@@ -3819,10 +4105,10 @@ void ex_display(exarg_T *eap)
       if (y_previous != NULL) {
         yb = y_previous;
       } else {
-        yb = &(y_regs[0]);
+        yb = get_global_reg(0);
       }
     } else {
-      yb = &(y_regs[i]);
+      yb = get_global_reg(i);
     }
 
     get_clipboard(name, &yb, true);
@@ -5536,6 +5822,10 @@ static yankreg_T *init_write_reg(int name, yankreg_T **old_y_previous, bool must
 
 static void finish_write_reg(int name, yankreg_T *reg, yankreg_T *old_y_previous)
 {
+  if (get_userreg(name) != -1) {
+    eval_yank_userreg(curbuf->b_p_urf, name, reg);
+  }
+
   // Send text of clipboard register to the clipboard.
   set_clipboard(name, reg);
 
@@ -6962,7 +7252,7 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
   }
 
   if (explicit_cb_reg) {
-    target = &y_regs[*name == '*' ? STAR_REGISTER : PLUS_REGISTER];
+    target = get_global_reg(*name == '*' ? STAR_REGISTER : PLUS_REGISTER);
     if (writing && (cb_flags & (*name == '*' ? CB_UNNAMED : CB_UNNAMEDPLUS))) {
       clipboard_needs_update = false;
     }
@@ -6979,10 +7269,10 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
 
     if (cb_flags & CB_UNNAMEDPLUS) {
       *name = (cb_flags & CB_UNNAMED && writing) ? '"': '+';
-      target = &y_regs[PLUS_REGISTER];
+      target = get_global_reg(PLUS_REGISTER);
     } else {
       *name = '*';
-      target = &y_regs[STAR_REGISTER];
+      target = get_global_reg(STAR_REGISTER);
     }
     goto end;
   }
@@ -7298,11 +7588,11 @@ static inline bool reg_empty(const yankreg_T *const reg)
 /// Iterate over global registers.
 ///
 /// @see op_register_iter
-const void *op_global_reg_iter(const void *const iter, char *const name, yankreg_T *const reg,
-                               bool *is_unnamed)
+iter_register_T op_global_reg_iter(iter_register_T iter, char *const name,
+                               yankreg_T *const reg, bool *is_unnamed)
   FUNC_ATTR_NONNULL_ARG(2, 3, 4) FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  return op_reg_iter(iter, y_regs, name, reg, is_unnamed);
+  return op_reg_iter(iter, &y_regs, name, reg, is_unnamed);
 }
 
 /// Iterate over registers `regs`.
@@ -7314,30 +7604,31 @@ const void *op_global_reg_iter(const void *const iter, char *const name, yankreg
 ///
 /// @return Pointer that must be passed to next `op_register_iter` call or
 ///         NULL if iteration is over.
-const void *op_reg_iter(const void *const iter, const yankreg_T *const regs, char *const name,
-                        yankreg_T *const reg, bool *is_unnamed)
+iter_register_T op_reg_iter(iter_register_T iter, yank_registers_T *regs,
+                        char *const name, yankreg_T *const reg,
+                        bool *is_unnamed)
   FUNC_ATTR_NONNULL_ARG(3, 4, 5) FUNC_ATTR_WARN_UNUSED_RESULT
 {
   *name = NUL;
-  const yankreg_T *iter_reg = (iter == NULL
-                               ? &(regs[0])
-                               : (const yankreg_T *const)iter);
-  while (iter_reg - &(regs[0]) < NUM_SAVED_REGISTERS && reg_empty(iter_reg)) {
-    iter_reg++;
-  }
-  if (iter_reg - &(regs[0]) == NUM_SAVED_REGISTERS || reg_empty(iter_reg)) {
-    return NULL;
-  }
-  int iter_off = (int)(iter_reg - &(regs[0]));
-  *name = (char)get_register_name(iter_off);
-  *reg = *iter_reg;
-  *is_unnamed = (iter_reg == y_previous);
-  while (++iter_reg - &(regs[0]) < NUM_SAVED_REGISTERS) {
-    if (!reg_empty(iter_reg)) {
-      return (void *)iter_reg;
+  int iter_idx = (int)(iter == ITER_REGISTER_NULL ? 0 : iter - 1);
+
+  while (iter_idx < NUM_SAVED_REGISTERS && reg_empty(get_reg(regs, iter_idx)))
+    ++iter_idx;
+
+  if (iter_idx >= NUM_SAVED_REGISTERS || reg_empty(get_reg(regs, iter_idx)))
+    return ITER_REGISTER_NULL;
+
+  *reg = *get_reg(regs, iter_idx);
+  *name = (char)get_register_name((int)iter_idx);
+  *is_unnamed = (get_reg(regs, iter_idx) == y_previous);
+
+  while (++iter_idx < NUM_SAVED_REGISTERS) {
+    if (!reg_empty(get_reg(regs, iter_idx))) {
+      return (iter_register_T)(iter_idx + 1);
     }
   }
-  return NULL;
+
+  return ITER_REGISTER_NULL;
 }
 
 /// Get a number of non-empty registers
@@ -7345,8 +7636,8 @@ size_t op_reg_amount(void)
   FUNC_ATTR_WARN_UNUSED_RESULT
 {
   size_t ret = 0;
-  for (size_t i = 0; i < NUM_SAVED_REGISTERS; i++) {
-    if (!reg_empty(y_regs + i)) {
+  for (int i = 0; i < NUM_SAVED_REGISTERS; i++) {
+    if (!reg_empty(get_global_reg(i))) {
       ret++;
     }
   }
@@ -7366,11 +7657,11 @@ bool op_reg_set(const char name, const yankreg_T reg, bool is_unnamed)
   if (i == -1) {
     return false;
   }
-  free_register(&y_regs[i]);
-  y_regs[i] = reg;
+  free_register(get_global_reg(i));
+  *get_global_reg(i) = reg;
 
   if (is_unnamed) {
-    y_previous = &y_regs[i];
+    y_previous = get_global_reg(i);
   }
   return true;
 }
@@ -7386,7 +7677,7 @@ const yankreg_T *op_reg_get(const char name)
   if (i == -1) {
     return NULL;
   }
-  return &y_regs[i];
+  return get_global_reg(i);
 }
 
 /// Set the previous yank register
@@ -7401,7 +7692,7 @@ bool op_reg_set_previous(const char name)
     return false;
   }
 
-  y_previous = &y_regs[i];
+  y_previous = get_global_reg(i);
   return true;
 }
 

@@ -4142,7 +4142,7 @@ msgid "freeing %ld lines"
 msgstr "frigør %ld linjer"
 
 #, c-format
-msgid " into \"%c"
+msgid " into \"%s"
 msgstr " i \"%c"
 
 #, c-format
