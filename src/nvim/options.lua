@@ -2691,6 +2691,13 @@ return {
       defaults={if_true=4000}
     },
     {
+      full_name='usermarkfunc', abbreviation='umf',
+      short_desc=N_("function used to perform jumps/sets to user marks."),
+      type='string', scope={'buffer'},
+      varname='p_umf',
+      defaults={if_true=""}
+    },
+    {
       full_name='varsofttabstop', abbreviation='vsts',
       short_desc=N_("list of numbers of spaces that <Tab> uses while editing"),
       type='string', list='comma', scope={'buffer'},

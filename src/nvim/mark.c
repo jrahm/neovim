@@ -17,11 +17,13 @@
 #include "nvim/diff.h"
 #include "nvim/edit.h"
 #include "nvim/eval.h"
+#include "nvim/eval/typval.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/extmark.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
 #include "nvim/mark.h"
+#include "nvim/mark_defs.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -39,6 +41,8 @@
 #include "nvim/strings.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
+#include "nvim/map.h"
+#include "nvim/eval/userfunc.h"
 
 /*
  * This file contains routines to maintain and manipulate marks.
@@ -54,6 +58,32 @@
 
 /// Global marks (marks with file number or name)
 static xfmark_T namedfm[NGLOBALMARKS];
+
+static struct {
+  Map(int, ptr_t) named;
+} usermarks;
+bool usermarks_init;
+
+static xfmark_T* lookup_user_mark(int mark)
+{
+  if (!usermarks_init) {
+    map_init(int, ptr_t, &usermarks.named);
+    usermarks_init = 1;
+  }
+
+  xfmark_T **ret =
+    (xfmark_T**) map_ref(int, ptr_t)(&usermarks.named, mark, true);
+
+  if (ret) {
+    if (! (*ret)) {
+      *ret = xcalloc(sizeof(xfmark_T), 1);
+    }
+
+    return *ret;
+  }
+
+  return NULL;  
+}
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "mark.c.generated.h"
@@ -164,7 +194,8 @@ int setmark_pos(int c, pos_T *pos, int fnum, fmarkv_T *view_pt)
     RESET_XFMARK(namedfm + i, *pos, fnum, view, NULL);
     return OK;
   }
-  return FAIL;
+
+  return mark_set_user(buf, c);
 }
 
 /*
@@ -349,6 +380,15 @@ fmark_T *mark_get(buf_T *buf, win_T *win, fmark_T *fmp, MarkGet flag, int name)
     // Local Marks
     fm = mark_get_local(buf, win, name);
   }
+
+  if (!fm) {
+    // Get usermark.
+    xfmark_T* xm = mark_get_user(buf, name);
+    if (xm) {
+      fm = &xm->fmark;
+    }
+  }
+
   if (fmp != NULL && fm != NULL) {
     *fmp = *fm;
     return fmp;
@@ -435,6 +475,123 @@ fmark_T *mark_get_local(buf_T *buf, win_T *win, int name)
   }
 
   return mark;
+}
+
+/// Loads the mark 'out' with the results from calling the usermarkfunc.
+///
+/// @param umf String for the usermarkfunc
+/// @param name name for the mark
+/// @param[out] out the mark to write the results to.
+static int call_umf(
+    const char* umf, int name, typval_T* out, const char* get_or_set_a)
+{
+  char markname_str[5];
+  char get_or_set[4];
+  int len;
+
+  strncpy(get_or_set, get_or_set_a, sizeof(get_or_set));
+  get_or_set[3] = 0;
+
+  len = (*utf_char2len)(name);
+  markname_str[len] = 0;
+  utf_char2bytes(name, markname_str);
+
+  typval_T args[3];
+  args[0].v_type = VAR_STRING;
+  args[1].v_type = VAR_STRING;
+  args[2].v_type = VAR_UNKNOWN;
+
+  args[0].vval.v_string = get_or_set;
+  args[1].vval.v_string = markname_str;
+
+  funcexe_T funcexe = FUNCEXE_INIT;
+  funcexe.evaluate = true;
+
+  return call_func(umf, -1, out, 2, args, &funcexe);
+}
+
+static int typval_to_xfmark(buf_T* buf, xfmark_T* out, typval_T* in)
+{
+  varnumber_T line;
+  varnumber_T col;
+  char* filename = NULL;
+
+  switch (in->v_type) {
+  case VAR_DICT:
+    line = tv_dict_get_number(in->vval.v_dict, "line");
+    col = tv_dict_get_number(in->vval.v_dict, "col");
+    filename = tv_dict_get_string(in->vval.v_dict, "file", true);
+    break;
+
+  case VAR_NUMBER:
+    line = in->vval.v_number;
+    col = 1;
+    break;
+
+  default:
+    return -1;
+  }
+
+  free_xfmark(*out);
+  memset(out, 0, sizeof(*out));
+
+  out->fname = filename;
+  out->fmark.mark.col = (int) col;
+  out->fmark.mark.lnum = (int) line;
+  out->fmark.fnum = 0;
+  out->fmark.timestamp = os_time();
+
+  return 0;
+}
+
+/// Gets marks that are defined by the user.
+///
+/// @param buf the buffer
+/// @param name name fo the mark
+xfmark_T *mark_get_user(buf_T* buf, int name)
+{
+  const char* umf = (const char*) buf->b_p_umf;
+
+  if (!umf) {
+    return NULL;
+  }
+
+  xfmark_T* mark = lookup_user_mark(name);
+  if (mark) {
+    typval_T* typval = xcalloc(sizeof(typval_T), 1);
+    call_umf(umf, name, typval, "get");
+    typval_to_xfmark(buf, mark, typval);
+    tv_free(typval);
+
+    if (mark->fname) {
+      buf_T* buffer =
+        buflist_new(
+            mark->fname, NULL, mark->fmark.mark.lnum, BLN_CURBUF | BLN_LISTED);
+
+      if (buffer) {
+        mark->fmark.fnum = buffer->b_fnum;
+      }
+    } else {
+      mark->fmark.fnum = buf->b_fnum;
+    }
+  }
+
+  return mark;
+}
+
+int mark_set_user(buf_T* buf, int name)
+{
+  const char* umf = (const char*) buf->b_p_umf;
+
+  if (!umf) {
+    return FAIL;
+  }
+
+  typval_T* out = xcalloc(sizeof(typval_T), 1);
+  call_umf(umf, name, out, "set");
+  tv_free(out);
+
+  return OK;
 }
 
 /// Get marks that are actually motions but return them as marks

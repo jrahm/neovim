@@ -4017,7 +4017,7 @@ char *skip_range(const char *cmd, int *ctx)
       }
     }
     if (*cmd != NUL) {
-      ++cmd;
+      cmd += utf_ptr2len(cmd);
     }
   }
 
@@ -4162,13 +4162,13 @@ static linenr_T get_address(exarg_T *eap, char **ptr, cmd_addr_T addr_type, int 
         goto error;
       }
       if (skip) {
-        ++cmd;
+        cmd += utfc_ptr2len(cmd);
       } else {
         // Only accept a mark in another file when it is
         // used by itself: ":'M".
         MarkGet flag = to_other_file && cmd[1] == NUL ? kMarkAll : kMarkBufLocal;
-        fmark_T *fm = mark_get(curbuf, curwin, NULL, flag, *cmd);
-        cmd++;
+        fmark_T *fm = mark_get(curbuf, curwin, NULL, flag, utf_ptr2char(cmd));
+        cmd += utf_ptr2len(cmd);
         if (fm != NULL && fm->fnum != curbuf->handle) {
           // Jumped to another file.
           lnum = curwin->w_cursor.lnum;
