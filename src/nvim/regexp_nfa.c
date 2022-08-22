@@ -5055,7 +5055,7 @@ skip_add:
 
     // avoid compiler warnings
     save_ptr = NULL;
-    memset(&save_multipos, 0, sizeof(save_multipos));
+    CLEAR_FIELD(save_multipos);
 
     // Set the position (with "off" added) in the subexpression.  Save
     // and restore it when it was in use.  Otherwise fill any gap.
@@ -5180,7 +5180,7 @@ skip_add:
       save_ptr = sub->list.line[subidx].end;
       sub->list.line[subidx].end = rex.input + off;
       // avoid compiler warnings
-      memset(&save_multipos, 0, sizeof(save_multipos));
+      CLEAR_FIELD(save_multipos);
     }
 
     subs = addstate(l, state->out, subs, pim, off_arg);
@@ -5488,7 +5488,7 @@ static void nfa_save_listids(nfa_regprog_T *prog, int *list)
   for (i = prog->nstate; --i >= 0;) {
     list[i] = p->lastlist[1];
     p->lastlist[1] = 0;
-    ++p;
+    p++;
   }
 }
 
@@ -5503,7 +5503,7 @@ static void nfa_restore_listids(nfa_regprog_T *prog, int *list)
   p = &prog->state[0];
   for (i = prog->nstate; --i >= 0;) {
     p->lastlist[1] = list[i];
-    ++p;
+    p++;
   }
 }
 

@@ -25,6 +25,7 @@
 #include "nvim/os/shell.h"
 #include "nvim/os/signal.h"
 #include "nvim/path.h"
+#include "nvim/profile.h"
 #include "nvim/screen.h"
 #include "nvim/strings.h"
 #include "nvim/tag.h"
@@ -248,10 +249,16 @@ int os_expand_wildcards(int num_pat, char **pat, int *num_file, char ***file, in
     }
     STRCAT(command, ">");
   } else {
-    if (flags & EW_NOTFOUND) {
-      STRCPY(command, "set nonomatch; ");
-    } else {
-      STRCPY(command, "unset nonomatch; ");
+    STRCPY(command, "");
+    if (shell_style == STYLE_GLOB) {
+      // Assume the nonomatch option is valid only for csh like shells,
+      // otherwise, this may set the positional parameters for the shell,
+      // e.g. "$*".
+      if (flags & EW_NOTFOUND) {
+        STRCAT(command, "set nonomatch; ");
+      } else {
+        STRCAT(command, "unset nonomatch; ");
+      }
     }
     if (shell_style == STYLE_GLOB) {
       STRCAT(command, "glob >");

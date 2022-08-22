@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "nvim/arglist.h"
 #include "nvim/ascii.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer.h"
@@ -16,6 +17,7 @@
 #include "nvim/decoration.h"
 #include "nvim/decoration_provider.h"
 #include "nvim/diff.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
@@ -50,6 +52,7 @@
 #include "nvim/normal.h"
 #include "nvim/ops.h"
 #include "nvim/option.h"
+#include "nvim/optionstr.h"
 #include "nvim/os/fileio.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
@@ -57,10 +60,10 @@
 #include "nvim/os/time.h"
 #include "nvim/os_unix.h"
 #include "nvim/path.h"
-#include "nvim/popupmnu.h"
+#include "nvim/popupmenu.h"
 #include "nvim/profile.h"
 #include "nvim/quickfix.h"
-#include "nvim/screen.h"
+#include "nvim/runtime.h"
 #include "nvim/shada.h"
 #include "nvim/sign.h"
 #include "nvim/state.h"
@@ -159,6 +162,7 @@ bool event_teardown(void)
 void early_init(mparm_T *paramp)
 {
   env_init();
+  estack_init();
   cmdline_init();
   eval_init();          // init global variables
   init_path(argv0 ? argv0 : "nvim");
@@ -1242,8 +1246,8 @@ static void command_line_scan(mparm_T *parmp)
             } else if (argv[0][0] == '-') {
               // "-S" followed by another option: use default session file.
               a = SESSION_FILE;
-              ++argc;
-              --argv;
+              argc++;
+              argv--;
             } else {
               a = argv[0];
             }
@@ -1418,7 +1422,7 @@ scripterror:
  * copied, so that they can be changed. */
 static void init_params(mparm_T *paramp, int argc, char **argv)
 {
-  memset(paramp, 0, sizeof(*paramp));
+  CLEAR_POINTER(paramp);
   paramp->argc = argc;
   paramp->argv = argv;
   paramp->use_debug_break_level = -1;
@@ -1613,9 +1617,9 @@ static void create_windows(mparm_T *parmp)
     // Watch out for autocommands that delete a window.
     //
     // Don't execute Win/Buf Enter/Leave autocommands here
-    ++autocmd_no_enter;
-    ++autocmd_no_leave;
-    dorewind = TRUE;
+    autocmd_no_enter++;
+    autocmd_no_leave++;
+    dorewind = true;
     while (done++ < 1000) {
       if (dorewind) {
         if (parmp->window_layout == WIN_TABS) {
@@ -1677,8 +1681,8 @@ static void create_windows(mparm_T *parmp)
       curwin = firstwin;
     }
     curbuf = curwin->w_buffer;
-    --autocmd_no_enter;
-    --autocmd_no_leave;
+    autocmd_no_enter--;
+    autocmd_no_leave--;
   }
 }
 
@@ -1695,8 +1699,8 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
   /*
    * Don't execute Win/Buf Enter/Leave autocommands here
    */
-  ++autocmd_no_enter;
-  ++autocmd_no_leave;
+  autocmd_no_enter++;
+  autocmd_no_leave++;
 
   // When w_arg_idx is -1 remove the window (see create_windows()).
   if (curwin->w_arg_idx == -1) {
@@ -1782,7 +1786,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
   if (parmp->window_layout == WIN_TABS) {
     goto_tabpage(1);
   }
-  --autocmd_no_enter;
+  autocmd_no_enter--;
 
   // make the first window the current window
   win = firstwin;
@@ -1796,7 +1800,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
   }
   win_enter(win, false);
 
-  --autocmd_no_leave;
+  autocmd_no_leave--;
   TIME_MSG("editing files in windows");
   if (parmp->window_count > 1 && parmp->window_layout != WIN_TABS) {
     win_equal(curwin, false, 'b');      // adjust heights
@@ -1814,12 +1818,12 @@ static void exe_pre_commands(mparm_T *parmp)
 
   if (cnt > 0) {
     curwin->w_cursor.lnum = 0;     // just in case..
-    sourcing_name = _("pre-vimrc command line");
+    estack_push(ETYPE_ARGS, _("pre-vimrc command line"), 0);
     current_sctx.sc_sid = SID_CMDARG;
     for (i = 0; i < cnt; i++) {
       do_cmdline_cmd(cmds[i]);
     }
-    sourcing_name = NULL;
+    estack_pop();
     current_sctx.sc_sid = 0;
     TIME_MSG("--cmd commands");
   }
@@ -1841,7 +1845,7 @@ static void exe_commands(mparm_T *parmp)
   if (parmp->tagname == NULL && curwin->w_cursor.lnum <= 1) {
     curwin->w_cursor.lnum = 0;
   }
-  sourcing_name = "command line";
+  estack_push(ETYPE_ARGS, "command line", 0);
   current_sctx.sc_sid = SID_CARG;
   current_sctx.sc_seq = 0;
   for (i = 0; i < parmp->n_commands; i++) {
@@ -1850,7 +1854,7 @@ static void exe_commands(mparm_T *parmp)
       xfree(parmp->commands[i]);
     }
   }
-  sourcing_name = NULL;
+  estack_pop();
   current_sctx.sc_sid = 0;
   if (curwin->w_cursor.lnum == 0) {
     curwin->w_cursor.lnum = 1;
@@ -2059,17 +2063,14 @@ static int execute_env(char *env)
 {
   const char *initstr = os_getenv(env);
   if (initstr != NULL) {
-    char_u *save_sourcing_name = (char_u *)sourcing_name;
-    linenr_T save_sourcing_lnum = sourcing_lnum;
-    sourcing_name = env;
-    sourcing_lnum = 0;
+    estack_push(ETYPE_ENV, env, 0);
     const sctx_T save_current_sctx = current_sctx;
     current_sctx.sc_sid = SID_ENV;
     current_sctx.sc_seq = 0;
     current_sctx.sc_lnum = 0;
     do_cmdline_cmd((char *)initstr);
-    sourcing_name = (char *)save_sourcing_name;
-    sourcing_lnum = save_sourcing_lnum;
+
+    estack_pop();
     current_sctx = save_current_sctx;
     return OK;
   }

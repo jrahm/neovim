@@ -14,12 +14,13 @@
 #include "nvim/ascii.h"
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
+#include "nvim/drawscreen.h"
+#include "nvim/grid.h"
 #include "nvim/iconv.h"
 #include "nvim/lua/executor.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
-#include "nvim/screen.h"
 #include "nvim/strings.h"
 #include "nvim/version.h"
 #include "nvim/vim.h"
@@ -2063,7 +2064,7 @@ static void list_features(void)
 /// List string items nicely aligned in columns.
 /// When "size" is < 0 then the last entry is marked with NULL.
 /// The entry with index "current" is inclosed in [].
-void list_in_columns(char_u **items, int size, int current)
+void list_in_columns(char **items, int size, int current)
 {
   int item_count = 0;
   int width = 0;

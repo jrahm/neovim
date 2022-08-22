@@ -144,25 +144,6 @@ bool os_isdir(const char_u *name)
   return true;
 }
 
-/// Check if the given path is a directory and is executable.
-/// Gives the same results as `os_isdir()` on Windows.
-///
-/// @return `true` if `name` is a directory and executable.
-bool os_isdir_executable(const char *name)
-  FUNC_ATTR_NONNULL_ALL
-{
-  int32_t mode = os_getperm(name);
-  if (mode < 0) {
-    return false;
-  }
-
-#ifdef WIN32
-  return (S_ISDIR(mode));
-#else
-  return (S_ISDIR(mode) && (S_IXUSR & mode));
-#endif
-}
-
 /// Check what `name` is:
 /// @return NODE_NORMAL: file or directory (or doesn't exist)
 ///         NODE_WRITABLE: writable device, socket, fifo, etc.
@@ -339,7 +320,7 @@ static bool is_executable_ext(const char *name, char **abspath)
 
     const char *ext_end = ext;
     size_t ext_len =
-      copy_option_part((char_u **)&ext_end, (char_u *)buf_end,
+      copy_option_part(&ext_end, (char_u *)buf_end,
                        sizeof(os_buf) - (size_t)(buf_end - os_buf), ENV_SEPSTR);
     if (ext_len != 0) {
       bool in_pathext = nameext_len == ext_len
@@ -1051,7 +1032,7 @@ int os_remove(const char *path)
 bool os_fileinfo(const char *path, FileInfo *file_info)
   FUNC_ATTR_NONNULL_ARG(2)
 {
-  memset(file_info, 0, sizeof(*file_info));
+  CLEAR_POINTER(file_info);
   return os_stat(path, &(file_info->stat)) == kLibuvSuccess;
 }
 
@@ -1063,7 +1044,7 @@ bool os_fileinfo(const char *path, FileInfo *file_info)
 bool os_fileinfo_link(const char *path, FileInfo *file_info)
   FUNC_ATTR_NONNULL_ARG(2)
 {
-  memset(file_info, 0, sizeof(*file_info));
+  CLEAR_POINTER(file_info);
   if (path == NULL) {
     return false;
   }
@@ -1087,7 +1068,7 @@ bool os_fileinfo_fd(int file_descriptor, FileInfo *file_info)
   FUNC_ATTR_NONNULL_ALL
 {
   uv_fs_t request;
-  memset(file_info, 0, sizeof(*file_info));
+  CLEAR_POINTER(file_info);
   fs_loop_lock();
   bool ok = uv_fs_fstat(&fs_loop,
                         &request,

@@ -14,6 +14,7 @@
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/diff.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_session.h"
@@ -31,7 +32,7 @@
 #include "nvim/option.h"
 #include "nvim/os/input.h"
 #include "nvim/plines.h"
-#include "nvim/screen.h"
+#include "nvim/search.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/undo.h"
@@ -247,7 +248,7 @@ bool hasFoldingWin(win_T *const win, const linenr_T lnum, linenr_T *const firstp
 
 // foldLevel() {{{2
 /// @return  fold level at line number "lnum" in the current window.
-int foldLevel(linenr_T lnum)
+static int foldLevel(linenr_T lnum)
 {
   // While updating the folds lines between invalid_top and invalid_bot have
   // an undefined fold level.  Otherwise update the folds first.
@@ -862,7 +863,7 @@ int foldMoveTo(const bool updown, const int dir, const long count)
           if (fp - (fold_T *)gap->ga_data >= gap->ga_len) {
             break;
           }
-          --fp;
+          fp--;
         } else {
           if (fp == (fold_T *)gap->ga_data) {
             break;
@@ -1786,13 +1787,13 @@ char_u *get_foldtext(win_T *wp, linenr_T lnum, linenr_T lnume, foldinfo_T foldin
 
 // foldtext_cleanup() {{{2
 /// Remove 'foldmarker' and 'commentstring' from "str" (in-place).
-void foldtext_cleanup(char_u *str)
+static void foldtext_cleanup(char_u *str)
 {
   // Ignore leading and trailing white space in 'commentstring'.
   char_u *cms_start = (char_u *)skipwhite((char *)curbuf->b_p_cms);
   size_t cms_slen = STRLEN(cms_start);
   while (cms_slen > 0 && ascii_iswhite(cms_start[cms_slen - 1])) {
-    --cms_slen;
+    cms_slen--;
   }
 
   // locate "%s" in 'commentstring', use the part before and after it.
@@ -1804,7 +1805,7 @@ void foldtext_cleanup(char_u *str)
 
     // exclude white space before "%s"
     while (cms_slen > 0 && ascii_iswhite(cms_start[cms_slen - 1])) {
-      --cms_slen;
+      cms_slen--;
     }
 
     // skip "%s" and white space after it
@@ -3190,3 +3191,119 @@ static int put_fold_open_close(FILE *fd, fold_T *fp, linenr_T off)
 }
 
 // }}}1
+
+/// "foldclosed()" and "foldclosedend()" functions
+static void foldclosed_both(typval_T *argvars, typval_T *rettv, int end)
+{
+  const linenr_T lnum = tv_get_lnum(argvars);
+  if (lnum >= 1 && lnum <= curbuf->b_ml.ml_line_count) {
+    linenr_T first;
+    linenr_T last;
+    if (hasFoldingWin(curwin, lnum, &first, &last, false, NULL)) {
+      if (end) {
+        rettv->vval.v_number = (varnumber_T)last;
+      } else {
+        rettv->vval.v_number = (varnumber_T)first;
+      }
+      return;
+    }
+  }
+  rettv->vval.v_number = -1;
+}
+
+/// "foldclosed()" function
+void f_foldclosed(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  foldclosed_both(argvars, rettv, false);
+}
+
+/// "foldclosedend()" function
+void f_foldclosedend(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  foldclosed_both(argvars, rettv, true);
+}
+
+/// "foldlevel()" function
+void f_foldlevel(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  const linenr_T lnum = tv_get_lnum(argvars);
+  if (lnum >= 1 && lnum <= curbuf->b_ml.ml_line_count) {
+    rettv->vval.v_number = foldLevel(lnum);
+  }
+}
+
+/// "foldtext()" function
+void f_foldtext(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  rettv->v_type = VAR_STRING;
+  rettv->vval.v_string = NULL;
+
+  linenr_T foldstart = (linenr_T)get_vim_var_nr(VV_FOLDSTART);
+  linenr_T foldend = (linenr_T)get_vim_var_nr(VV_FOLDEND);
+  char_u *dashes = (char_u *)get_vim_var_str(VV_FOLDDASHES);
+  if (foldstart > 0 && foldend <= curbuf->b_ml.ml_line_count) {
+    // Find first non-empty line in the fold.
+    linenr_T lnum;
+    for (lnum = foldstart; lnum < foldend; lnum++) {
+      if (!linewhite(lnum)) {
+        break;
+      }
+    }
+
+    // Find interesting text in this line.
+    char_u *s = (char_u *)skipwhite((char *)ml_get(lnum));
+    // skip C comment-start
+    if (s[0] == '/' && (s[1] == '*' || s[1] == '/')) {
+      s = (char_u *)skipwhite((char *)s + 2);
+      if (*skipwhite((char *)s) == NUL && lnum + 1 < foldend) {
+        s = (char_u *)skipwhite((char *)ml_get(lnum + 1));
+        if (*s == '*') {
+          s = (char_u *)skipwhite((char *)s + 1);
+        }
+      }
+    }
+    int count = foldend - foldstart + 1;
+    char *txt = NGETTEXT("+-%s%3ld line: ", "+-%s%3ld lines: ", count);
+    size_t len = STRLEN(txt)
+                 + STRLEN(dashes)  // for %s
+                 + 20              // for %3ld
+                 + STRLEN(s);      // concatenated
+    char_u *r = xmalloc(len);
+    snprintf((char *)r, len, txt, dashes, count);
+    len = STRLEN(r);
+    STRCAT(r, s);
+    // remove 'foldmarker' and 'commentstring'
+    foldtext_cleanup(r + len);
+    rettv->vval.v_string = (char *)r;
+  }
+}
+
+/// "foldtextresult(lnum)" function
+void f_foldtextresult(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  char_u buf[FOLD_TEXT_LEN];
+  static bool entered = false;
+
+  rettv->v_type = VAR_STRING;
+  rettv->vval.v_string = NULL;
+  if (entered) {
+    return;  // reject recursive use
+  }
+  entered = true;
+  linenr_T lnum = tv_get_lnum(argvars);
+  // Treat illegal types and illegal string values for {lnum} the same.
+  if (lnum < 0) {
+    lnum = 0;
+  }
+
+  foldinfo_T info = fold_info(curwin, lnum);
+  if (info.fi_lines > 0) {
+    char_u *text = get_foldtext(curwin, lnum, lnum + info.fi_lines - 1, info, buf);
+    if (text == buf) {
+      text = vim_strsave(text);
+    }
+    rettv->vval.v_string = (char *)text;
+  }
+
+  entered = false;
+}

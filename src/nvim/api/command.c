@@ -11,6 +11,7 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/autocmd.h"
 #include "nvim/ex_docmd.h"
+#include "nvim/ex_eval.h"
 #include "nvim/lua/executor.h"
 #include "nvim/ops.h"
 #include "nvim/regexp.h"
@@ -300,10 +301,10 @@ String nvim_cmd(uint64_t channel_id, Dict(cmd) *cmd, Dict(cmd_opts) *opts, Error
   FUNC_API_SINCE(10)
 {
   exarg_T ea;
-  memset(&ea, 0, sizeof(ea));
+  CLEAR_FIELD(ea);
 
   CmdParseInfo cmdinfo;
-  memset(&cmdinfo, 0, sizeof(cmdinfo));
+  CLEAR_FIELD(cmdinfo);
 
   char *cmdline = NULL;
   char *cmdname = NULL;
@@ -625,6 +626,7 @@ String nvim_cmd(uint64_t channel_id, Dict(cmd) *cmd, Dict(cmd_opts) *opts, Error
   garray_T capture_local;
   const int save_msg_silent = msg_silent;
   garray_T * const save_capture_ga = capture_ga;
+  const int save_msg_col = msg_col;
 
   if (output) {
     ga_init(&capture_local, 1, 80);
@@ -635,6 +637,7 @@ String nvim_cmd(uint64_t channel_id, Dict(cmd) *cmd, Dict(cmd_opts) *opts, Error
     try_start();
     if (output) {
       msg_silent++;
+      msg_col = 0;  // prevent leading spaces
     }
 
     WITH_SCRIPT_CONTEXT(channel_id, {
@@ -644,6 +647,8 @@ String nvim_cmd(uint64_t channel_id, Dict(cmd) *cmd, Dict(cmd_opts) *opts, Error
     if (output) {
       capture_ga = save_capture_ga;
       msg_silent = save_msg_silent;
+      // Put msg_col back where it was, since nothing should have been written.
+      msg_col = save_msg_col;
     }
 
     try_end(err);
@@ -819,9 +824,12 @@ static void build_cmdline_str(char **cmdlinep, exarg_T *eap, CmdParseInfo *cmdin
   char *p = replace_makeprg(eap, eap->arg, cmdlinep);
   if (p != eap->arg) {
     // If replace_makeprg modified the cmdline string, correct the argument pointers.
-    assert(argc == 1);
     eap->arg = p;
-    eap->args[0] = p;
+    // We can only know the position of the first argument because the argument list can be used
+    // multiple times in makeprg / grepprg.
+    if (argc >= 1) {
+      eap->args[0] = p;
+    }
   }
 }
 

@@ -44,9 +44,11 @@
 #include <string.h>
 
 #include "nvim/ascii.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/change.h"
 #include "nvim/cursor.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/fileio.h"
 #include "nvim/func_attr.h"
@@ -65,7 +67,6 @@
 #include "nvim/os/process.h"
 #include "nvim/os_unix.h"
 #include "nvim/path.h"
-#include "nvim/screen.h"
 #include "nvim/sha256.h"
 #include "nvim/spell.h"
 #include "nvim/strings.h"
@@ -383,7 +384,7 @@ void ml_setname(buf_T *buf)
   bool success = false;
   memfile_T *mfp;
   char_u *fname;
-  char_u *dirp;
+  char *dirp;
 
   mfp = buf->b_ml.ml_mfp;
   if (mfp->mf_fd < 0) {             // there is no swap file yet
@@ -397,17 +398,14 @@ void ml_setname(buf_T *buf)
     return;
   }
 
-  /*
-   * Try all directories in the 'directory' option.
-   */
-  dirp = p_dir;
+  // Try all directories in the 'directory' option.
+  dirp = (char *)p_dir;
   bool found_existing_dir = false;
   for (;;) {
     if (*dirp == NUL) {             // tried all directories, fail
       break;
     }
-    fname = (char_u *)findswapname(buf, (char **)&dirp, (char *)mfp->mf_fname,
-                                   &found_existing_dir);
+    fname = (char_u *)findswapname(buf, &dirp, (char *)mfp->mf_fname, &found_existing_dir);
     // alloc's fname
     if (dirp == NULL) {             // out of memory
       break;
@@ -472,7 +470,7 @@ void ml_open_file(buf_T *buf)
 {
   memfile_T *mfp;
   char_u *fname;
-  char_u *dirp;
+  char *dirp;
 
   mfp = buf->b_ml.ml_mfp;
   if (mfp == NULL || mfp->mf_fd >= 0 || !buf->b_p_swf
@@ -491,10 +489,8 @@ void ml_open_file(buf_T *buf)
     return;
   }
 
-  /*
-   * Try all directories in 'directory' option.
-   */
-  dirp = p_dir;
+  // Try all directories in 'directory' option.
+  dirp = (char *)p_dir;
   bool found_existing_dir = false;
   for (;;) {
     if (*dirp == NUL) {
@@ -503,8 +499,7 @@ void ml_open_file(buf_T *buf)
     // There is a small chance that between choosing the swap file name
     // and creating it, another Vim creates the file.  In that case the
     // creation will fail and we will use another directory.
-    fname = (char_u *)findswapname(buf, (char **)&dirp, NULL,
-                                   &found_existing_dir);
+    fname = (char_u *)findswapname(buf, &dirp, NULL, &found_existing_dir);
     if (dirp == NULL) {
       break;        // out of memory
     }
@@ -1141,7 +1136,7 @@ void ml_recover(bool checkext)
             if (txt_start <= (int)HEADER_SIZE
                 || txt_start >= (int)dp->db_txt_end) {
               p = (char_u *)"???";
-              ++error;
+              error++;
             } else {
               p = (char_u *)dp + txt_start;
             }
@@ -1210,10 +1205,10 @@ void ml_recover(bool checkext)
   if (got_int) {
     emsg(_("E311: Recovery Interrupted"));
   } else if (error) {
-    ++no_wait_return;
+    no_wait_return++;
     msg(">>>>>>>>>>>>>");
     emsg(_("E312: Errors detected while recovering; look for lines starting with ???"));
-    --no_wait_return;
+    no_wait_return--;
     msg(_("See \":help E312\" for more information."));
     msg(">>>>>>>>>>>>>");
   } else {
@@ -1272,7 +1267,7 @@ int recover_names(char_u *fname, int list, int nr, char_u **fname_out)
   int num_files;
   int file_count = 0;
   char **files;
-  char_u *dirp;
+  char *dirp;
   char_u *dir_name;
   char_u *fname_res = NULL;
 #ifdef HAVE_READLINK
@@ -1299,12 +1294,12 @@ int recover_names(char_u *fname, int list, int nr, char_u **fname_out)
   // Do the loop for every directory in 'directory'.
   // First allocate some memory to put the directory name in.
   dir_name = xmalloc(STRLEN(p_dir) + 1);
-  dirp = p_dir;
+  dirp = (char *)p_dir;
   while (*dirp) {
     // Isolate a directory name from *dirp and put it in dir_name (we know
     // it is large enough, so use 31000 for length).
     // Advance dirp to next directory name.
-    (void)copy_option_part((char **)&dirp, (char *)dir_name, 31000, ",");
+    (void)copy_option_part(&dirp, (char *)dir_name, 31000, ",");
 
     if (dir_name[0] == '.' && dir_name[1] == NUL) {     // check current dir
       if (fname == NULL) {
@@ -1395,7 +1390,7 @@ int recover_names(char_u *fname, int list, int nr, char_u **fname_out)
       file_count += num_files;
       if (nr <= file_count) {
         *fname_out = vim_strsave((char_u *)files[nr - 1 + num_files - file_count]);
-        dirp = (char_u *)"";                        // stop searching
+        dirp = "";                        // stop searching
       }
     } else if (list) {
       if (dir_name[0] == '.' && dir_name[1] == NUL) {
@@ -1660,12 +1655,12 @@ static int recov_file_names(char **names, char_u *path, int prepend_dot)
       p += i;               // file name has been expanded to full path
     }
     if (STRCMP(p, names[num_names]) != 0) {
-      ++num_names;
+      num_names++;
     } else {
       xfree(names[num_names]);
     }
   } else {
-    ++num_names;
+    num_names++;
   }
 
   return num_names;
@@ -2184,7 +2179,7 @@ static int ml_append_int(buf_T *buf, linenr_T lnum, char_u *line, colnr_T len, b
 
       memmove((char *)dp_right + dp_right->db_txt_start,
               line, (size_t)len);
-      ++line_count_right;
+      line_count_right++;
     }
     /*
      * may move lines from the left/old block to the right/new one.
@@ -2224,7 +2219,7 @@ static int ml_append_int(buf_T *buf, linenr_T lnum, char_u *line, colnr_T len, b
       }
       memmove((char *)dp_left + dp_left->db_txt_start,
               line, (size_t)len);
-      ++line_count_left;
+      line_count_left++;
     }
 
     if (db_idx < 0) {           // left block is new
@@ -2998,9 +2993,9 @@ static bhdr_T *ml_find_line(buf_T *buf, linenr_T lnum, int action)
      * update high for insert/delete
      */
     if (action == ML_INSERT) {
-      ++high;
+      high++;
     } else if (action == ML_DELETE) {
-      --high;
+      high--;
     }
 
     dp = hp->bh_data;
@@ -3304,7 +3299,7 @@ static void attention_message(buf_T *buf, char_u *fname)
 {
   assert(buf->b_fname != NULL);
 
-  ++no_wait_return;
+  no_wait_return++;
   (void)emsg(_("E325: ATTENTION"));
   msg_puts(_("\nFound a swap file by the name \""));
   msg_home_replace(fname);
@@ -3339,7 +3334,7 @@ static void attention_message(buf_T *buf, char_u *fname)
   msg_outtrans((char *)fname);
   msg_puts(_("\"\n    to avoid this message.\n"));
   cmdline_row = msg_row;
-  --no_wait_return;
+  no_wait_return--;
 }
 
 /// Trigger the SwapExists autocommands.

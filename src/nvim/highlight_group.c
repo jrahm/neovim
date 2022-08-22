@@ -9,7 +9,10 @@
 #include "nvim/autocmd.h"
 #include "nvim/charset.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/drawscreen.h"
+#include "nvim/eval.h"
 #include "nvim/eval/vars.h"
+#include "nvim/ex_docmd.h"
 #include "nvim/fold.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
@@ -17,7 +20,6 @@
 #include "nvim/match.h"
 #include "nvim/option.h"
 #include "nvim/runtime.h"
-#include "nvim/screen.h"
 
 /// \addtogroup SG_SET
 /// @{
@@ -689,14 +691,14 @@ void set_hl_group(int id, HlAttrs attrs, Dict(highlight) *dict, int link_id)
     g->sg_cleared = false;
     g->sg_link = link_id;
     g->sg_script_ctx = current_sctx;
-    g->sg_script_ctx.sc_lnum += sourcing_lnum;
+    g->sg_script_ctx.sc_lnum += SOURCING_LNUM;
     g->sg_set |= SG_LINK;
     if (is_default) {
       g->sg_deflink = link_id;
       g->sg_deflink_sctx = current_sctx;
-      g->sg_deflink_sctx.sc_lnum += sourcing_lnum;
+      g->sg_deflink_sctx.sc_lnum += SOURCING_LNUM;
     }
-    return;
+    goto update;
   }
 
   g->sg_cleared = false;
@@ -733,7 +735,7 @@ void set_hl_group(int id, HlAttrs attrs, Dict(highlight) *dict, int link_id)
   g->sg_blend = attrs.hl_blend;
 
   g->sg_script_ctx = current_sctx;
-  g->sg_script_ctx.sc_lnum += sourcing_lnum;
+  g->sg_script_ctx.sc_lnum += SOURCING_LNUM;
 
   g->sg_attr = hl_get_syn_attr(0, id, attrs);
 
@@ -751,6 +753,12 @@ void set_hl_group(int id, HlAttrs attrs, Dict(highlight) *dict, int link_id)
       ui_mode_info_set();
     }
   }
+
+update:
+  if (!updating_screen) {
+    redraw_all_later(NOT_VALID);
+  }
+  need_highlight_changed = true;
 }
 
 /// Handle ":highlight" command
@@ -861,7 +869,7 @@ void do_highlight(const char *line, const bool forceit, const bool init)
       if (dodefault && (forceit || hlgroup->sg_deflink == 0)) {
         hlgroup->sg_deflink = to_id;
         hlgroup->sg_deflink_sctx = current_sctx;
-        hlgroup->sg_deflink_sctx.sc_lnum += sourcing_lnum;
+        hlgroup->sg_deflink_sctx.sc_lnum += SOURCING_LNUM;
         nlua_set_sctx(&hlgroup->sg_deflink_sctx);
       }
     }
@@ -871,7 +879,7 @@ void do_highlight(const char *line, const bool forceit, const bool init)
       // for the group, unless '!' is used
       if (to_id > 0 && !forceit && !init
           && hl_has_settings(from_id - 1, dodefault)) {
-        if (sourcing_name == NULL && !dodefault) {
+        if (SOURCING_NAME == NULL && !dodefault) {
           emsg(_("E414: group has settings, highlight link ignored"));
         }
       } else if (hlgroup->sg_link != to_id
@@ -882,7 +890,7 @@ void do_highlight(const char *line, const bool forceit, const bool init)
         }
         hlgroup->sg_link = to_id;
         hlgroup->sg_script_ctx = current_sctx;
-        hlgroup->sg_script_ctx.sc_lnum += sourcing_lnum;
+        hlgroup->sg_script_ctx.sc_lnum += SOURCING_LNUM;
         nlua_set_sctx(&hlgroup->sg_script_ctx);
         hlgroup->sg_cleared = false;
         redraw_all_later(SOME_VALID);
@@ -1272,7 +1280,7 @@ void do_highlight(const char *line, const bool forceit, const bool init)
     set_hl_attr(idx);
   }
   hl_table[idx].sg_script_ctx = current_sctx;
-  hl_table[idx].sg_script_ctx.sc_lnum += sourcing_lnum;
+  hl_table[idx].sg_script_ctx.sc_lnum += SOURCING_LNUM;
   nlua_set_sctx(&hl_table[idx].sg_script_ctx);
 
   // Only call highlight_changed() once, after a sequence of highlight
@@ -1765,7 +1773,7 @@ static int syn_add_group(const char *name, size_t len)
 
   // Append another syntax_highlight entry.
   HlGroup *hlgp = GA_APPEND_VIA_PTR(HlGroup, &highlight_ga);
-  memset(hlgp, 0, sizeof(*hlgp));
+  CLEAR_POINTER(hlgp);
   hlgp->sg_name = (char_u *)arena_memdupz(&highlight_arena, name, len);
   hlgp->sg_rgb_bg = -1;
   hlgp->sg_rgb_fg = -1;
@@ -1788,11 +1796,18 @@ static int syn_add_group(const char *name, size_t len)
 /// @see syn_attr2entry
 int syn_id2attr(int hl_id)
 {
-  hl_id = syn_get_final_id(hl_id);
+  return syn_ns_id2attr(-1, hl_id, false);
+}
+
+int syn_ns_id2attr(int ns_id, int hl_id, bool optional)
+{
+  hl_id = syn_ns_get_final_id(&ns_id, hl_id);
   HlGroup *sgp = &hl_table[hl_id - 1];  // index is ID minus one
 
-  int attr = ns_get_hl(-1, hl_id, false, sgp->sg_set);
-  if (attr >= 0) {
+  int attr = ns_get_hl(&ns_id, hl_id, false, sgp->sg_set);
+
+  // if a highlight group is optional, don't use the global value
+  if (attr >= 0 || (optional && ns_id > 0)) {
     return attr;
   }
   return sgp->sg_attr;
@@ -1801,10 +1816,16 @@ int syn_id2attr(int hl_id)
 /// Translate a group ID to the final group ID (following links).
 int syn_get_final_id(int hl_id)
 {
+  int id = curwin->w_ns_hl_active;
+  return syn_ns_get_final_id(&id, hl_id);
+}
+
+int syn_ns_get_final_id(int *ns_id, int hl_id)
+{
   int count;
 
   if (hl_id > highlight_ga.ga_len || hl_id < 1) {
-    return 0;                           // Can be called from eval!!
+    return 0;  // Can be called from eval!!
   }
 
   // Follow links until there is no more.
@@ -1812,10 +1833,10 @@ int syn_get_final_id(int hl_id)
   for (count = 100; --count >= 0;) {
     HlGroup *sgp = &hl_table[hl_id - 1];  // index is ID minus one
 
-    // ACHTUNG: when using "tmp" attribute (no link) the function might be
+    // TODO(bfredl): when using "tmp" attribute (no link) the function might be
     // called twice. it needs be smart enough to remember attr only to
     // syn_id2attr time
-    int check = ns_get_hl(-1, hl_id, true, sgp->sg_set);
+    int check = ns_get_hl(ns_id, hl_id, true, sgp->sg_set);
     if (check == 0) {
       return hl_id;  // how dare! it broke the link!
     } else if (check > 0) {
@@ -1863,7 +1884,7 @@ static void combine_stl_hlt(int id, int id_S, int id_alt, int hlcnt, int i, int 
   HlGroup *const hlt = hl_table;
 
   if (id_alt == 0) {
-    memset(&hlt[hlcnt + i], 0, sizeof(HlGroup));
+    CLEAR_POINTER(&hlt[hlcnt + i]);
     hlt[hlcnt + i].sg_cterm = highlight_attr[hlf];
     hlt[hlcnt + i].sg_gui = highlight_attr[hlf];
   } else {
@@ -1913,25 +1934,31 @@ void highlight_changed(void)
     if (id == 0) {
       abort();
     }
-    int final_id = syn_get_final_id(id);
+    int ns_id = -1;
+    int final_id = syn_ns_get_final_id(&ns_id, id);
     if (hlf == HLF_SNC) {
       id_SNC = final_id;
     } else if (hlf == HLF_S) {
       id_S = final_id;
     }
 
-    highlight_attr[hlf] = hl_get_ui_attr(hlf, final_id,
+    highlight_attr[hlf] = hl_get_ui_attr(ns_id, hlf, final_id,
                                          (hlf == HLF_INACTIVE || hlf == HLF_LC));
 
     if (highlight_attr[hlf] != highlight_attr_last[hlf]) {
       if (hlf == HLF_MSG) {
         clear_cmdline = true;
+        HlAttrs attrs = syn_attr2entry(highlight_attr[hlf]);
+        msg_grid.blending = attrs.hl_blend > -1;
       }
       ui_call_hl_group_set(cstr_as_string((char *)hlf_names[hlf]),
                            highlight_attr[hlf]);
       highlight_attr_last[hlf] = highlight_attr[hlf];
     }
   }
+
+  // sentinel value. used when no hightlight namespace is active
+  highlight_attr[HLF_COUNT] = 0;
 
   //
   // Setup the user highlights
@@ -1945,7 +1972,7 @@ void highlight_changed(void)
   hlcnt = highlight_ga.ga_len;
   if (id_S == -1) {
     // Make sure id_S is always valid to simplify code below. Use the last entry
-    memset(&hl_table[hlcnt + 9], 0, sizeof(HlGroup));
+    CLEAR_POINTER(&hl_table[hlcnt + 9]);
     id_S = hlcnt + 10;
   }
   for (int i = 0; i < 9; i++) {

@@ -14,12 +14,13 @@
 
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/eval/vars.h"
-#include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
@@ -36,13 +37,14 @@
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/option.h"
+#include "nvim/optionstr.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
 #include "nvim/os/time.h"
 #include "nvim/os_unix.h"
 #include "nvim/path.h"
+#include "nvim/profile.h"
 #include "nvim/regexp.h"
-#include "nvim/screen.h"
 #include "nvim/sign.h"
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
@@ -378,7 +380,7 @@ void syntax_start(win_T *wp, linenr_T lnum)
       && current_lnum < syn_buf->b_ml.ml_line_count) {
     (void)syn_finish_line(false);
     if (!current_state_stored) {
-      ++current_lnum;
+      current_lnum++;
       (void)store_current_state();
     }
 
@@ -723,7 +725,7 @@ static void syn_sync(win_T *wp, linenr_T start_lnum, synstate_T *last_valid)
             } else if (found_m_endpos.col > current_col) {
               current_col = found_m_endpos.col;
             } else {
-              ++current_col;
+              current_col++;
             }
 
             // syn_current_attr() will have skipped the check for
@@ -731,7 +733,7 @@ static void syn_sync(win_T *wp, linenr_T start_lnum, synstate_T *last_valid)
             // careful not to go past the NUL.
             prev_current_col = current_col;
             if (syn_getcurline()[current_col] != NUL) {
-              ++current_col;
+              current_col++;
             }
             check_state_ends();
             current_col = prev_current_col;
@@ -1029,7 +1031,7 @@ static void syn_stack_alloc(void)
       // Move the states from the old array to the new one.
       for (from = syn_block->b_sst_first; from != NULL;
            from = from->sst_next) {
-        ++to;
+        to++;
         *to = *from;
         to->sst_next = to + 1;
       }
@@ -1500,7 +1502,7 @@ bool syntax_check_changed(linenr_T lnum)
       /*
        * Store the current state in b_sst_array[] for later use.
        */
-      ++current_lnum;
+      current_lnum++;
       (void)store_current_state();
     }
   }
@@ -2095,9 +2097,9 @@ static int syn_current_attr(const bool syncing, const bool displaying, bool *con
       check_state_ends();
       if (!GA_EMPTY(&current_state)
           && syn_getcurline()[current_col] != NUL) {
-        ++current_col;
+        current_col++;
         check_state_ends();
-        --current_col;
+        current_col--;
       }
     }
   } else if (can_spell != NULL) {
@@ -2506,7 +2508,7 @@ static void update_si_end(stateitem_T *sip, int startcol, bool force)
 static void push_current_state(int idx)
 {
   stateitem_T *p = GA_APPEND_VIA_PTR(stateitem_T, &current_state);
-  memset(p, 0, sizeof(*p));
+  CLEAR_POINTER(p);
   p->si_idx = idx;
 }
 
@@ -2582,7 +2584,7 @@ static void find_endpos(int idx, lpos_T *startpos, lpos_T *m_endpos, lpos_T *hl_
     if (spp->sp_type != SPTYPE_START) {
       break;
     }
-    ++idx;
+    idx++;
   }
 
   /*
@@ -2590,7 +2592,7 @@ static void find_endpos(int idx, lpos_T *startpos, lpos_T *m_endpos, lpos_T *hl_
    */
   if (spp->sp_type == SPTYPE_SKIP) {
     spp_skip = spp;
-    ++idx;
+    idx++;
   } else {
     spp_skip = NULL;
   }
@@ -3653,7 +3655,7 @@ static void syn_list_one(const int id, const bool syncing, const bool link_only)
              && SYN_ITEMS(curwin->w_s)[idx].sp_type == SPTYPE_END) {
         put_pattern("end", '=', &SYN_ITEMS(curwin->w_s)[idx++], attr);
       }
-      --idx;
+      idx--;
       msg_putchar(' ');
     }
     syn_list_flags(namelist1, spp->sp_flags, attr);
@@ -3927,7 +3929,7 @@ static void syn_clear_keyword(int id, hashtab_T *ht)
     if (HASHITEM_EMPTY(hi)) {
       continue;
     }
-    --todo;
+    todo--;
     kp_prev = NULL;
     for (kp = HI2KE(hi); kp != NULL;) {
       if (kp->k_syn.id == id) {
@@ -3967,7 +3969,7 @@ static void clear_keywtab(hashtab_T *ht)
   todo = (int)ht->ht_used;
   for (hi = ht->ht_array; todo > 0; ++hi) {
     if (!HASHITEM_EMPTY(hi)) {
-      --todo;
+      todo--;
       for (kp = HI2KE(hi); kp != NULL; kp = kp_next) {
         kp_next = kp->ke_next;
         xfree(kp->next_list);
@@ -4257,7 +4259,7 @@ static void syn_cmd_include(exarg_T *eap, int syncing)
   }
 
   if (arg[0] == '@') {
-    ++arg;
+    arg++;
     rest = get_group_name(arg, &group_name_end);
     if (rest == NULL) {
       emsg(_("E397: Filename required"));
@@ -4453,7 +4455,7 @@ static void syn_cmd_match(exarg_T *eap, int syncing)
 
   // get the pattern.
   init_syn_patterns();
-  memset(&item, 0, sizeof(item));
+  CLEAR_FIELD(item);
   rest = get_syn_pattern(rest, &item);
   if (vim_regcomp_had_eol() && !(syn_opt_arg.flags & HL_EXCLUDENL)) {
     syn_opt_arg.flags |= HL_HAS_EOL;
@@ -4583,7 +4585,7 @@ static void syn_cmd_region(exarg_T *eap, int syncing)
     // must be a pattern or matchgroup then
     key_end = rest;
     while (*key_end && !ascii_iswhite(*key_end) && *key_end != '=') {
-      ++key_end;
+      key_end++;
     }
     xfree(key);
     key = vim_strnsave_up(rest, (size_t)(key_end - rest));
@@ -4708,8 +4710,8 @@ static void syn_cmd_region(exarg_T *eap, int syncing)
               SYN_ITEMS(curwin->w_s)[idx].sp_next_list =
                 syn_opt_arg.next_list;
             }
-            ++curwin->w_s->b_syn_patterns.ga_len;
-            ++idx;
+            curwin->w_s->b_syn_patterns.ga_len++;
+            idx++;
             if (syn_opt_arg.flags & HL_FOLD) {
               ++curwin->w_s->b_syn_folditems;
             }
@@ -4945,7 +4947,7 @@ static int syn_add_cluster(char_u *name)
 
   syn_cluster_T *scp = GA_APPEND_VIA_PTR(syn_cluster_T,
                                          &curwin->w_s->b_syn_clusters);
-  memset(scp, 0, sizeof(*scp));
+  CLEAR_POINTER(scp);
   scp->scl_name = name;
   scp->scl_name_u = vim_strsave_up(name);
   scp->scl_list = NULL;
@@ -5048,7 +5050,7 @@ static void init_syn_patterns(void)
  */
 static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
 {
-  char_u *end;
+  char *end;
   int *p;
   int idx;
   char *cpo_save;
@@ -5058,13 +5060,13 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
     return NULL;
   }
 
-  end = skip_regexp(arg + 1, *arg, TRUE, NULL);
-  if (*end != *arg) {                       // end delimiter not found
+  end = (char *)skip_regexp(arg + 1, *arg, true, NULL);
+  if (*end != (char)(*arg)) {                       // end delimiter not found
     semsg(_("E401: Pattern delimiter not found: %s"), arg);
     return NULL;
   }
   // store the pattern and compiled regexp program
-  ci->sp_pattern = vim_strnsave(arg + 1, (size_t)(end - arg) - 1);
+  ci->sp_pattern = vim_strnsave(arg + 1, (size_t)(end - (char *)arg) - 1);
 
   // Make 'cpoptions' empty, to avoid the 'l' flag
   cpo_save = p_cpo;
@@ -5081,7 +5083,7 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
   /*
    * Check for a match, highlight or region offset.
    */
-  ++end;
+  end++;
   do {
     for (idx = SPO_COUNT; --idx >= 0;) {
       if (STRNCMP(end, spo_name_tab[idx], 3) == 0) {
@@ -5106,7 +5108,7 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
         ci->sp_off_flags |= (int16_t)(1 << idx);
         if (idx == SPO_LC_OFF) {            // lc=99
           end += 3;
-          *p = getdigits_int((char **)&end, true, 0);
+          *p = getdigits_int(&end, true, 0);
 
           // "lc=" offset automatically sets "ms=" offset
           if (!(ci->sp_off_flags & (1 << SPO_MS_OFF))) {
@@ -5117,16 +5119,16 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
           end += 4;
           if (*end == '+') {
             end++;
-            *p = getdigits_int((char **)&end, true, 0);    // positive offset
+            *p = getdigits_int(&end, true, 0);    // positive offset
           } else if (*end == '-') {
             end++;
-            *p = -getdigits_int((char **)&end, true, 0);   // negative offset
+            *p = -getdigits_int(&end, true, 0);   // negative offset
           }
         }
         if (*end != ',') {
           break;
         }
-        ++end;
+        end++;
       }
     }
   } while (idx >= 0);
@@ -5135,7 +5137,7 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
     semsg(_("E402: Garbage after pattern: %s"), arg);
     return NULL;
   }
-  return (char_u *)skipwhite((char *)end);
+  return (char_u *)skipwhite(end);
 }
 
 /*
@@ -5144,7 +5146,7 @@ static char_u *get_syn_pattern(char_u *arg, synpat_T *ci)
 static void syn_cmd_sync(exarg_T *eap, int syncing)
 {
   char_u *arg_start = (char_u *)eap->arg;
-  char_u *arg_end;
+  char *arg_end;
   char_u *key = NULL;
   char_u *next_arg;
   int illegal = false;
@@ -5157,21 +5159,21 @@ static void syn_cmd_sync(exarg_T *eap, int syncing)
   }
 
   while (!ends_excmd(*arg_start)) {
-    arg_end = skiptowhite(arg_start);
-    next_arg = (char_u *)skipwhite((char *)arg_end);
+    arg_end = (char *)skiptowhite(arg_start);
+    next_arg = (char_u *)skipwhite(arg_end);
     xfree(key);
-    key = vim_strnsave_up(arg_start, (size_t)(arg_end - arg_start));
+    key = vim_strnsave_up(arg_start, (size_t)(arg_end - (char *)arg_start));
     if (STRCMP(key, "CCOMMENT") == 0) {
       if (!eap->skip) {
         curwin->w_s->b_syn_sync_flags |= SF_CCOMMENT;
       }
       if (!ends_excmd(*next_arg)) {
-        arg_end = skiptowhite(next_arg);
+        arg_end = (char *)skiptowhite(next_arg);
         if (!eap->skip) {
           curwin->w_s->b_syn_sync_id =
-            (int16_t)syn_check_group((char *)next_arg, (size_t)(arg_end - next_arg));
+            (int16_t)syn_check_group((char *)next_arg, (size_t)(arg_end - (char *)next_arg));
         }
-        next_arg = (char_u *)skipwhite((char *)arg_end);
+        next_arg = (char_u *)skipwhite(arg_end);
       } else if (!eap->skip) {
         curwin->w_s->b_syn_sync_id = (int16_t)syn_name2id("Comment");
       }
@@ -5180,17 +5182,17 @@ static void syn_cmd_sync(exarg_T *eap, int syncing)
                || STRNCMP(key, "MAXLINES", 8) == 0
                || STRNCMP(key, "LINEBREAKS", 10) == 0) {
       if (key[4] == 'S') {
-        arg_end = key + 6;
+        arg_end = (char *)key + 6;
       } else if (key[0] == 'L') {
-        arg_end = key + 11;
+        arg_end = (char *)key + 11;
       } else {
-        arg_end = key + 9;
+        arg_end = (char *)key + 9;
       }
       if (arg_end[-1] != '=' || !ascii_isdigit(*arg_end)) {
         illegal = TRUE;
         break;
       }
-      linenr_T n = getdigits_int32((char **)&arg_end, false, 0);
+      linenr_T n = getdigits_int32(&arg_end, false, 0);
       if (!eap->skip) {
         if (key[4] == 'B') {
           curwin->w_s->b_syn_sync_linebreaks = n;
@@ -5215,16 +5217,16 @@ static void syn_cmd_sync(exarg_T *eap, int syncing)
         finished = TRUE;
         break;
       }
-      arg_end = skip_regexp(next_arg + 1, *next_arg, TRUE, NULL);
-      if (*arg_end != *next_arg) {          // end delimiter not found
-        illegal = TRUE;
+      arg_end = (char *)skip_regexp(next_arg + 1, *next_arg, true, NULL);
+      if (*arg_end != (char)(*next_arg)) {          // end delimiter not found
+        illegal = true;
         break;
       }
 
       if (!eap->skip) {
         // store the pattern and compiled regexp program
         curwin->w_s->b_syn_linecont_pat =
-          vim_strnsave(next_arg + 1, (size_t)(arg_end - next_arg) - 1);
+          vim_strnsave(next_arg + 1, (size_t)(arg_end - (char *)next_arg) - 1);
         curwin->w_s->b_syn_linecont_ic = curwin->w_s->b_syn_ic;
 
         // Make 'cpoptions' empty, to avoid the 'l' flag
@@ -5241,7 +5243,7 @@ static void syn_cmd_sync(exarg_T *eap, int syncing)
           break;
         }
       }
-      next_arg = (char_u *)skipwhite((char *)arg_end + 1);
+      next_arg = (char_u *)skipwhite(arg_end + 1);
     } else {
       eap->arg = (char *)next_arg;
       if (STRCMP(key, "MATCH") == 0) {
@@ -5401,7 +5403,7 @@ static int get_id_list(char_u **const arg, const int keylen, int16_t **const lis
             retval[count] = (int16_t)id;
           }
         }
-        ++count;
+        count++;
       }
       p = skipwhite(end);
       if (*p != ',') {
@@ -5477,7 +5479,7 @@ static int in_id_list(stateitem_T *cur_si, int16_t *list, struct sp_syn *ssp, in
     // that we don't go back past the first one.
     while ((cur_si->si_flags & HL_TRANS_CONT)
            && cur_si > (stateitem_T *)(current_state.ga_data)) {
-      --cur_si;
+      cur_si--;
     }
     // cur_si->si_idx is -1 for keywords, these never contain anything.
     if (cur_si->si_idx >= 0 && in_id_list(NULL, ssp->cont_in_list,
@@ -5541,9 +5543,9 @@ static int in_id_list(stateitem_T *cur_si, int16_t *list, struct sp_syn *ssp, in
       // restrict recursiveness to 30 to avoid an endless loop for a
       // cluster that includes itself (indirectly)
       if (scl_list != NULL && depth < 30) {
-        ++depth;
+        depth++;
         r = in_id_list(NULL, scl_list, ssp, contained);
-        --depth;
+        depth--;
         if (r) {
           return retval;
         }
@@ -5614,7 +5616,7 @@ void ex_syntax(exarg_T *eap)
   }
   xfree(subcmd_name);
   if (eap->skip) {
-    --emsg_skip;
+    emsg_skip--;
   }
 }
 
@@ -5624,8 +5626,7 @@ void ex_ownsyntax(exarg_T *eap)
   char_u *new_value;
 
   if (curwin->w_s == &curwin->w_buffer->b_s) {
-    curwin->w_s = xmalloc(sizeof(synblock_T));
-    memset(curwin->w_s, 0, sizeof(synblock_T));
+    curwin->w_s = xcalloc(1, sizeof(synblock_T));
     hash_init(&curwin->w_s->b_keywtab);
     hash_init(&curwin->w_s->b_keywtab_ic);
     // TODO: Keep the spell checking as it was. NOLINT(readability/todo)
