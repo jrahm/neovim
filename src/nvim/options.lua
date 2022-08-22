@@ -2692,10 +2692,8 @@ return {
     },
     {
       full_name='userregfunc', abbreviation='urf',
+      short_desc=N_("Function used to define behavior of user-defined registers."),
       type='string', scope={'buffer'},
-      secure=true,
-      vi_def=true,
-      alloced=true,
       varname='p_urf',
       defaults={if_true=""}
     },
