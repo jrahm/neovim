@@ -1,0 +1,1 @@
+set userregfunc=userreg#func
