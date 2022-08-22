@@ -4,7 +4,7 @@
 --
 -- The default handler behaves just as a normal register would.
 
-local vim = assert("vim")
+local vim = assert(vim)
 local usermark = {}
 
 -- Returns a "default handler" which behaves like normal global marks. When a
@@ -26,10 +26,13 @@ function usermark._default_handler()
     local file = vim.fn.expand("%:p")
 
     self.content = {
-      line: r,
-      col: c,
-      file: file
+      line = r;
+      col = c;
     }
+
+    if file ~= '' then
+      self.content.file = file
+    end
   end
 
   return d
@@ -44,22 +47,22 @@ usermark._marktable = {}
 -- If not handler is registered to a given mark, the default handler is used,
 -- which is a re-implementation of standard mark behavior.
 function usermark.fn(action, mark)
-  if not usermark._marktable[register] then
-    usermark._marktable[register] = usermark._default_handler()
+  if not usermark._marktable[mark] then
+    usermark._marktable[mark] = usermark._default_handler()
   end
 
   if action == "get" then
-    usermark._marktable[register]:get(mark)
-    return nil
+    return usermark._marktable[mark]:get(mark)
   else 
-    return usermark._marktable[register]:set(mark)
+    usermark._marktable[mark]:set(mark)
+    return nil
   end
 end
 
 -- Registers a handler with a mark. Gets and sets will then defer to this
 -- handler when determining the mark's behavior.
-function usermark.register_handler(register, handler) 
-  usermark._marktable[register] = handler
+function usermark.register_handler(mark, handler) 
+  usermark._marktable[mark] = handler
 end
 
 return usermark

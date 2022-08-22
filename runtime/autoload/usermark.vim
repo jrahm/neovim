@@ -2,6 +2,10 @@
 
 lua vim.usermark = require('vim.usermark')
 
-function! userreg#func(action, mark) abort
-  return v:lua.vim.usermark.fn(a:action, a:mark)
+function! usermark#func(action, mark) abort
+  let ret = v:lua.vim.usermark.fn(a:action, a:mark)
+
+  echo "Returning: " . string(ret)
+
+  return ret
 endfunction
