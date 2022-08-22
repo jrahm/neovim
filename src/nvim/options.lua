@@ -2691,11 +2691,16 @@ return {
       defaults={if_true=4000}
     },
     {
-      full_name='userregfunc', abbreviation='urf',
+      full_name='usermarkfunc', abbreviation='umf',
+      short_desc=N_("function used to perform jumps/sets to user marks."),
       type='string', scope={'buffer'},
-      secure=true,
-      vi_def=true,
-      alloced=true,
+      varname='p_umf',
+      defaults={if_true=""}
+    },
+    {
+      full_name='userregfunc', abbreviation='urf',
+      short_desc=N_("Function used to define behavior of user-defined registers."),
+      type='string', scope={'buffer'},
       varname='p_urf',
       defaults={if_true=""}
     },

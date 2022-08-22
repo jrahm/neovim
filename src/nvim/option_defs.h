@@ -825,7 +825,8 @@ EXTERN int p_wa;                // 'writeany'
 EXTERN int p_wb;                // 'writebackup'
 EXTERN long p_wd;               // 'writedelay'
 EXTERN int p_cdh;               // 'cdhome'
-EXTERN char_u *p_urf;           // 'userregister'
+EXTERN char_u *p_urf;           // 'userregfunc'
+EXTERN char_u *p_umf;           // 'usermarkfunc'
 
 EXTERN int p_force_on;          ///< options that cannot be turned off.
 EXTERN int p_force_off;         ///< options that cannot be turned on.
@@ -911,6 +912,7 @@ enum {
   BV_SW,
   BV_SWF,
   BV_TFU,
+  BV_UMF,
   BV_TSRFU,
   BV_TAGS,
   BV_TC,
