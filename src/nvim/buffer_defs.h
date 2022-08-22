@@ -1223,7 +1223,7 @@ struct window_S {
     int diff;
     int msgsep;
     int eob;
-    int colorcol;
+    int colorc;
   } w_p_fcs_chars;
 
   /*
