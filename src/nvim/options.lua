@@ -9678,6 +9678,63 @@ local options = {
       varname = 'p_ur',
     },
     {
+      abbreviation = 'urf',
+      defaults = '',
+      cb = 'did_set_userregfunc',
+      desc = [=[
+      Specifies a function to handle any registers that Neovim does not natively
+      handle. This allows the user to use all characters, including multi-byte ones,
+      as custom register names.
+
+      The function is called whenever a user-defined register is accessed — either
+      when yanking to it ("yank") or putting from it ("put").
+
+      The function must have the following signature:
+
+              function({action}, {register}, {content})
+
+      Parameters:
+              {action} string	"yank" or "put"
+                    "yank" is called when text is yanked into the register.
+                    "put" is called when the register is used for insertion.
+
+              {register} string	A single-character register name. Can be multibyte.
+
+              {content} dict	Only present when {action} is "yank". Contains:
+                     {lines}: list of strings representing the yanked text
+                     {type}:  "char", "line", or "block"
+                     {width}: (optional) present if type is "block"
+                     {additional_data}: (optional) arbitrary user data
+
+      Return value (for "put"):
+      - A string (for "char" mode), or
+      - A dictionary with the same structure as {content}.
+
+      Example (VimL):>vim
+
+	let s:contents = {}
+
+	function! MyUserregFunction(action, register, content) abort
+          if a:register == '?' && a:action ==# 'put' then
+            return strftime("YYYY-MM-DD")
+          end
+	  if a:action ==# 'put'
+	    return get(s:contents, a:register, '')
+	  elseif a:action ==# 'yank'
+	    let s:contents[a:register] = a:content
+	  endif
+	endfunction
+
+	set userregfunc=MyUserregFunction
+      <
+      ]=],
+      full_name = 'userregfunc',
+      scope = { 'global' },
+      short_desc = N_('Dynamically generate register content via VimL functions'),
+      type = 'string',
+      varname = 'p_urf',
+    },
+    {
       abbreviation = 'uc',
       cb = 'did_set_updatecount',
       defaults = 200,
@@ -10642,13 +10699,13 @@ local function preprocess(o)
 
   if type(o.alias) == 'string' then
     o.alias = {
-      o.alias --[[@as string]],
+      o.alias --[[@as string]] ,
     }
   end
 
   if type(o.defaults) ~= 'table' then
     o.defaults = {
-      if_true = o.defaults --[[@as string|boolean|number ]],
+      if_true = o.defaults --[[@as string|boolean|number ]] ,
     }
   end
 end

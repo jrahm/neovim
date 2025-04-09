@@ -96,6 +96,7 @@
 #include "nvim/move.h"
 #include "nvim/normal.h"
 #include "nvim/normal_defs.h"
+#include "nvim/ops.h"
 #include "nvim/option.h"
 #include "nvim/option_vars.h"
 #include "nvim/os/os_defs.h"
@@ -1184,8 +1185,8 @@ static void recording_mode(int hl_id)
   }
 
   msg_puts_hl(_("recording"), hl_id, false);
-  char s[4];
-  snprintf(s, ARRAY_SIZE(s), " @%c", reg_recording);
+  char s[4 + MB_MAXBYTES];
+  snprintf(s, ARRAY_SIZE(s), " @%s", reg_to_mb(reg_recording));
   msg_puts_hl(s, hl_id, false);
 }
 

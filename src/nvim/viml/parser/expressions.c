@@ -557,8 +557,8 @@ LexExprToken viml_pexpr_next_token(ParserState *const pstate, const int flags)
   case '@':
     ret.type = kExprLexRegister;
     if (pline.size > 1) {
-      ret.len++;
-      ret.data.reg.name = (uint8_t)pline.data[1];
+      ret.len += utfc_ptr2len(pline.data + 1);
+      ret.data.reg.name = utf_ptr2char(pline.data + 1);
     } else {
       ret.data.reg.name = -1;
     }

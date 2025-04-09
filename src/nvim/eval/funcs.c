@@ -2858,7 +2858,7 @@ static int getreg_get_regname(typval_T *argvars)
     strregname = get_vim_var_str(VV_REG);
   }
 
-  return *strregname == 0 ? '"' : (uint8_t)(*strregname);
+  return *strregname == 0 ? '"' : utf_ptr2char(strregname);
 }
 
 /// "getreg()" function

@@ -3448,7 +3448,8 @@ static int eval7(char **arg, typval_T *rettv, evalarg_T *const evalarg, bool wan
     (*arg)++;
     if (evaluate) {
       rettv->v_type = VAR_STRING;
-      rettv->vval.v_string = get_reg_contents(**arg, kGRegExprSrc);
+      int regname = mb_cptr2char_adv((const char**) arg);
+      rettv->vval.v_string = get_reg_contents(regname, kGRegExprSrc);
     }
     if (**arg != NUL) {
       (*arg)++;
@@ -7073,16 +7074,17 @@ void set_argv_var(char **argv, int argc)
 /// Set v:register if needed.
 void set_reg_var(int c)
 {
-  char regname;
+  int regname;
 
   if (c == 0 || c == ' ') {
     regname = '"';
   } else {
-    regname = (char)c;
+    regname = c;
   }
+
   // Avoid free/alloc when the value is already right.
   if (vimvars[VV_REG].vv_str == NULL || vimvars[VV_REG].vv_str[0] != c) {
-    set_vim_var_string(VV_REG, &regname, 1);
+    set_vim_var_string(VV_REG, reg_to_mb(regname), -1);
   }
 }
 

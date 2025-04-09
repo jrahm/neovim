@@ -59,7 +59,8 @@ enum {
   // The following registers should not be saved in ShaDa file:
   STAR_REGISTER       = 37,
   PLUS_REGISTER       = 38,
-  NUM_REGISTERS       = 39,
+  USER_REGISTER       = 39,
+  NUM_REGISTERS       = 40,
 };
 
 /// Operator IDs; The order must correspond to opchars[] in ops.c!
@@ -118,6 +119,7 @@ typedef enum {
   YREG_PASTE,
   YREG_YANK,
   YREG_PUT,
+  YREG_NOEVAL = 0x10,
 } yreg_mode_t;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
@@ -133,6 +135,10 @@ typedef enum {
 static inline int op_reg_index(const int regname)
   FUNC_ATTR_CONST
 {
+  if (regname == 0 || regname == '"') {
+    return -1;
+  }
+
   if (ascii_isdigit(regname)) {
     return regname - '0';
   } else if (ASCII_ISLOWER(regname)) {
@@ -146,7 +152,7 @@ static inline int op_reg_index(const int regname)
   } else if (regname == '+') {
     return PLUS_REGISTER;
   } else {
-    return -1;
+    return USER_REGISTER;
   }
 }
 

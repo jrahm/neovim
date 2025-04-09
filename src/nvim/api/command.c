@@ -496,18 +496,14 @@ String nvim_cmd(uint64_t channel_id, Dict(cmd) *cmd, Dict(cmd_opts) *opts, Arena
 
   if (HAS_KEY(cmd, cmd, reg)) {
     VALIDATE_MOD((ea.argt & EX_REGSTR), "register", cmd->cmd.data);
-    VALIDATE_EXP((cmd->reg.size == 1),
-                 "reg", "single character", cmd->reg.data, {
-      goto end;
-    });
-    char regname = cmd->reg.data[0];
+    int regname = utf_ptr2char(cmd->reg.data);
     VALIDATE((regname != '='), "%s", "Cannot use register \"=", {
       goto end;
     });
     VALIDATE(valid_yank_reg(regname,
                             (!IS_USER_CMDIDX(ea.cmdidx)
                              && ea.cmdidx != CMD_put && ea.cmdidx != CMD_iput)),
-             "Invalid register: \"%c", regname, {
+             "Invalid register: \"%s", cmd->reg.data, {
       goto end;
     });
     ea.regname = (uint8_t)regname;
@@ -794,7 +790,7 @@ static void build_cmdline_str(char **cmdlinep, exarg_T *eap, CmdParseInfo *cmdin
 
   // Command register.
   if (eap->argt & EX_REGSTR && eap->regname) {
-    kv_printf(cmdline, " %c", eap->regname);
+    kv_printf(cmdline, " %s", reg_to_mb(eap->regname));
   }
 
   eap->argc = argc;

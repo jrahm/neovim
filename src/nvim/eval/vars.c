@@ -34,6 +34,7 @@
 #include "nvim/globals.h"
 #include "nvim/hashtab.h"
 #include "nvim/macros_defs.h"
+#include "nvim/mbyte.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/ops.h"
@@ -599,7 +600,7 @@ const char *skip_var_list(const char *arg, int *var_count, int *semicolon, bool 
 static const char *skip_var_one(const char *arg)
 {
   if (*arg == '@' && arg[1] != NUL) {
-    return arg + 2;
+    return arg + 1 + utfc_ptr2len(arg + 1);
   }
   return find_name_end(*arg == '$' || *arg == '&' ? arg + 1 : arg,
                        NULL, NULL, FNE_INCL_BR | FNE_CHECK_START);
@@ -908,16 +909,18 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
 
   char *arg_end = NULL;
   arg++;
+  int regname = utf_ptr2char(arg);
+  int mblen = utf_ptr2len(arg);
   if (op != NULL && vim_strchr("+-*/%", (uint8_t)(*op)) != NULL) {
     semsg(_(e_letwrong), op);
   } else if (endchars != NULL
-             && vim_strchr(endchars, (uint8_t)(*skipwhite(arg + 1))) == NULL) {
+             && vim_strchr(endchars, (uint8_t)(*skipwhite(arg + mblen))) == NULL) {
     emsg(_(e_letunexp));
   } else {
     char *ptofree = NULL;
     const char *p = tv_get_string_chk(tv);
     if (p != NULL && op != NULL && *op == '.') {
-      char *s = get_reg_contents(*arg == '@' ? '"' : *arg, kGRegExprSrc);
+      char *s = get_reg_contents(regname == '@' ? '"' : regname, kGRegExprSrc);
       if (s != NULL) {
         ptofree = concat_str(s, p);
         p = ptofree;
@@ -925,8 +928,8 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
       }
     }
     if (p != NULL) {
-      write_reg_contents(*arg == '@' ? '"' : *arg, p, (ssize_t)strlen(p), false);
-      arg_end = arg + 1;
+      write_reg_contents(*arg == '@' ? '"' : regname, p, (ssize_t)strlen(p), false);
+      arg_end = arg + mblen;
     }
     xfree(ptofree);
   }
