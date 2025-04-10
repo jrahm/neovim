@@ -1006,6 +1006,7 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
   bool started_profiling = false;
   bool did_save_redo = false;
   save_redo_T save_redo;
+  char* saved_repeat_cmdline = NULL;
 
   // If depth of calling is getting too high, don't execute the function
   if (depth >= p_mfd) {
@@ -1018,6 +1019,9 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
   // Save search patterns and redo buffer.
   save_search_patterns();
   if (!ins_compl_active()) {
+    if (repeat_cmdline) {
+      saved_repeat_cmdline = xstrdup(repeat_cmdline);
+    }
     saveRedobuff(&save_redo);
     did_save_redo = true;
   }
@@ -1362,6 +1366,8 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
   // restore search patterns and redo buffer
   if (did_save_redo) {
     restoreRedobuff(&save_redo);
+    xfree(repeat_cmdline);
+    repeat_cmdline = saved_repeat_cmdline;
   }
   restore_search_patterns();
 }
