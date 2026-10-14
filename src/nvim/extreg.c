@@ -23,12 +23,8 @@
 
 #include "extreg.c.generated.h"
 
-// Global provider storage (fixed-size array)
-extreg_provider_t extreg_provider_list[EXTREG_MAX_PROVIDERS] = { 0 };
-int extreg_provider_count = 0;
-
 // Global storage maps
-dict_T extreg_providers = { 0 };  ///< name (string) -> provider_index (number)
+hashtab_T extreg_providers = { 0 };  ///< name (string) -> provider_index (number)
 dict_T extreg_aliases = { 0 };    ///< alias (1-char string) -> provider_name (string)
 
 // Global state for dynamic register
@@ -79,7 +75,7 @@ void extreg_init(void)
     return;  // Already initialized
   }
 
-  hash_init(&extreg_providers.dv_hashtab);
+  hash_init(&extreg_providers);
   hash_init(&extreg_aliases.dv_hashtab);
   extreg_initialized = true;
 }
@@ -87,31 +83,15 @@ void extreg_init(void)
 // Clear all extregisters (used on exit or reset)
 void extreg_clear_all(void)
 {
-  // Free all providers
-  for (int i = 0; i < extreg_provider_count; i++) {
-    extreg_provider_t *prov = &extreg_provider_list[i];
-    if (prov->registered) {
-      nlua_unref_global(get_global_lstate(), prov->text_yanked_cb);
-      nlua_unref_global(get_global_lstate(), prov->text_put_cb);
-      free_register(&prov->yreg);
-      xfree(prov->name);
-      xfree(prov->alias);
-    }
-  }
+  hash_lock(&extreg_providers);
 
-  // Clear dicts if initialized
-  if (extreg_providers.dv_hashtab.ht_array != NULL) {
-    tv_dict_free(&extreg_providers);
-  }
-  if (extreg_aliases.dv_hashtab.ht_array != NULL) {
-    tv_dict_free(&extreg_aliases);
-  }
+  HASHTAB_ITER(&extreg_providers, hi, {
+    extreg_free_provider(HASH_ITEM_TO_EXTREG_PROVIDER(hi));
+    hash_remove(&extreg_providers, hi);
+  });
 
-  // Reset provider list
-  memset(extreg_provider_list, 0, sizeof(extreg_provider_list));
-  extreg_provider_count = 0;
-  active_extreg = NULL;        // Clear active provider
-  extreg_initialized = false;  // Reset initialization flag
+  hash_clear(&extreg_providers);
+  hash_unlock(&extreg_providers);
 }
 
 /// Prompt user to select an extregister provider
@@ -140,46 +120,41 @@ int get_extreg_register(void)
 /// @param name Unique provider name
 /// @param text_yanked_cb Lua callback for yank operations (LUA_NOREF if not provided)
 /// @param text_put_cb Lua callback for put operations (LUA_NOREF if not provided)
-/// @return Provider ID on success, 0 on failure
+/// @return true on success, false on failure
 int extreg_register(const char *name, LuaRef text_yanked_cb, LuaRef text_put_cb)
 {
   assert(name != NULL);
-  dict_T *prov_dict = &extreg_providers;
+
+  if (strlen(name) > 256) {
+    semsg(_("E356: extregister name is too long")); // Stop nasty things from happening. with
+                                                    // absurdly long register names.
+    return 0;
+  }
+
+  hash_lock(&extreg_providers);
 
   // Check if provider already exists
-  dictitem_T *existing = tv_dict_find(prov_dict, name, strlen(name));
-  if (existing != NULL) {
+  hashitem_T *hi = hash_find(&extreg_providers, name);
+  if (!HASHITEM_EMPTY(hi)) {
+    hash_unlock(&extreg_providers);
     semsg(_("E356: Already have an extregister named '%s'"), name);
     return 0;
   }
 
-  // Check if we have space
-  if (extreg_provider_count >= EXTREG_MAX_PROVIDERS) {
-    semsg(_("E356: Too many extregister providers (max %d)"), EXTREG_MAX_PROVIDERS);
-    return 0;
-  }
-
-  // Allocate provider slot
-  int idx = extreg_provider_count++;
-  extreg_provider_t *prov = &extreg_provider_list[idx];
-  memset(prov, 0, sizeof(*prov));
-
-  prov->name = xstrdup(name);
-  prov->alias = NUL;
+  extreg_provider_t* prov = xcalloc(1, sizeof(*prov) + strlen(name) + 1);
   prov->text_yanked_cb = text_yanked_cb;
   prov->text_put_cb = text_put_cb;
   prov->registered = true;
   prov->recursion_id = 0;
+  strcpy(prov->name, name);
   CLEAR_POINTER(&prov->yreg);
 
-  // Add to dict: name -> index
-  dictitem_T *di = tv_dict_item_alloc(name);
-  di->di_tv.v_type = VAR_NUMBER;
-  di->di_tv.vval.v_number = idx + 1;  // Use 1-based index (0 means invalid)
-  tv_dict_add(prov_dict, di);
+  // Add to hash table
+  hash_add(&extreg_providers, prov->name);
 
-  // Return provider ID (1-based index)
-  return idx + 1;
+  hash_unlock(&extreg_providers);
+
+  return 1;
 }
 
 /// Parse provider name from ~provider syntax
@@ -236,45 +211,32 @@ char *extreg_parse_provider(char *in_arg, char **out)
 /// @return true on success, false if not found
 int extreg_unregister(const char *name)
 {
-  dict_T *prov_dict = &extreg_providers;
+  hash_lock(&extreg_providers);
 
-  dictitem_T *di = tv_dict_find(prov_dict, name, strlen(name));
-  if (di == NULL) {
+  hashitem_T *hi = hash_find(&extreg_providers, name);
+  if (HASHITEM_EMPTY(hi)) {
+    hash_unlock(&extreg_providers);
     semsg(_("E356: Unknown extregister name '%s'"), name);
     return false;
   }
+  extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);
+  hash_remove(&extreg_providers, hi);
 
-  int idx = di->di_tv.vval.v_number - 1;  // Convert back to 0-based index
-  if (idx < 0 || idx >= EXTREG_MAX_PROVIDERS) {
-    semsg(_("E356: Invalid extregister index '%d'"), idx);
-    return false;
-  }
-
-  extreg_provider_t *prov = &extreg_provider_list[idx];
-
-  // Unbind alias if set - use UTF-8 string directly
-  if (prov->alias != NULL) {
-    extreg_unbind(prov->alias);
-  }
+  hash_unlock(&extreg_providers);
 
   // Free Lua callbacks
   nlua_unref_global(get_global_lstate(), prov->text_yanked_cb);
   nlua_unref_global(get_global_lstate(), prov->text_put_cb);
 
-  // Free yank register contents
-  free_register(&prov->yreg);
-
-  // Free alias string
-  xfree(prov->alias);
-
-  // Remove from dict
-  tv_dict_item_remove(prov_dict, di);
-  xfree(prov->name);
-
-  // Clear provider
-  memset(prov, 0, sizeof(*prov));
+  extreg_free_provider(prov);
 
   return true;
+}
+
+void extreg_free_provider(extreg_provider_t* prov)
+{
+  free_register(&prov->yreg);
+  xfree(prov);
 }
 
 /// Bind a character to an extregister provider
@@ -288,52 +250,10 @@ int extreg_bind(const char *alias, const char *provider_name)
     return false;
   }
 
-  dict_T *prov_dict = &extreg_providers;
-  dict_T *alias_dict = &extreg_aliases;
-
-  // Check if provider exists
-  dictitem_T *prov_di = tv_dict_find(prov_dict, provider_name, strlen(provider_name));
-  if (prov_di == NULL) {
-    semsg(_("E356: Unknown extregister name '%s'"), provider_name);
-    return false;
-  }
-
-  int idx = prov_di->di_tv.vval.v_number - 1;  // Convert to 0-based index
-  if (idx < 0 || idx >= EXTREG_MAX_PROVIDERS) {
-    semsg(_("E356: Invalid extregister index '%d'"), idx);
-    return false;
-  }
-
-  extreg_provider_t *prov = &extreg_provider_list[idx];
-
-  // Unbind old provider if alias was already bound
-  // Use the original UTF-8 string as the hash table key
-  dictitem_T *old_di = tv_dict_find(alias_dict, alias, strlen(alias));
-  if (old_di != NULL) {
-    const char *old_name = old_di->di_tv.vval.v_string;
-    dictitem_T *old_prov_di = tv_dict_find(prov_dict, old_name, strlen(old_name));
-    if (old_prov_di != NULL) {
-      int old_idx = old_prov_di->di_tv.vval.v_number - 1;
-      if (old_idx >= 0 && old_idx < EXTREG_MAX_PROVIDERS) {
-        extreg_provider_t *old_prov = &extreg_provider_list[old_idx];
-        xfree(old_prov->alias);
-        old_prov->alias = NULL;
-      }
-    }
-    tv_dict_item_remove(alias_dict, old_di);
-  }
-
-  // Free old alias if any
-  xfree(prov->alias);
-
-  // Bind new provider - store UTF-8 string directly
-  prov->alias = xstrdup(alias);
-
-  // Create hash table entry with UTF-8 string as key
   dictitem_T *di = tv_dict_item_alloc(alias);
   di->di_tv.v_type = VAR_STRING;
   di->di_tv.vval.v_string = xstrdup(provider_name);
-  tv_dict_add(alias_dict, di);
+  tv_dict_add(&extreg_aliases, di);
 
   return true;
 }
@@ -344,24 +264,11 @@ int extreg_bind(const char *alias, const char *provider_name)
 int extreg_unbind(const char *alias)
 {
   dict_T *alias_dict = &extreg_aliases;
-  dict_T *prov_dict = &extreg_providers;
 
   // Use the UTF-8 string directly as the hash table key
   dictitem_T *di = tv_dict_find(alias_dict, alias, strlen(alias));
   if (di == NULL) {
     return false;  // Not bound
-  }
-
-  // Clear alias in provider
-  const char *prov_name = di->di_tv.vval.v_string;
-  dictitem_T *prov_di = tv_dict_find(prov_dict, prov_name, strlen(prov_name));
-  if (prov_di != NULL) {
-    int idx = prov_di->di_tv.vval.v_number - 1;
-    if (idx >= 0 && idx < EXTREG_MAX_PROVIDERS) {
-      extreg_provider_t *prov = &extreg_provider_list[idx];
-      xfree(prov->alias);
-      prov->alias = NULL;
-    }
   }
 
   // Remove from alias dict
@@ -380,64 +287,18 @@ bool extreg_is_alias(const char *alias)
   return (di != NULL);
 }
 
-/// Get provider ID for an alias
-/// @param alias UTF-8 string containing bound character
-/// @return Provider ID on success, 0 if not bound
-int extreg_get_provider_id(const char *alias)
-{
-  // Use the UTF-8 string directly as the hash table key
-  dictitem_T *di = tv_dict_find(&extreg_aliases, alias, strlen(alias));
-  if (di == NULL) {
-    return 0;
-  }
-
-  const char *prov_name = di->di_tv.vval.v_string;
-  dict_T *prov_dict = &extreg_providers;
-  dictitem_T *prov_di = tv_dict_find(prov_dict, prov_name, strlen(prov_name));
-  if (prov_di == NULL) {
-    return 0;
-  }
-
-  return prov_di->di_tv.vval.v_number;  // Return 1-based index
-}
-
-/// Get provider by ID
-/// @param id Provider ID (1-based index)
-/// @return Provider pointer on success, NULL if not found
-extreg_provider_t *extreg_get_provider_by_id(int id)
-{
-  if (id <= 0 || id > EXTREG_MAX_PROVIDERS) {
-    return NULL;
-  }
-
-  extreg_provider_t *prov = &extreg_provider_list[id - 1];
-  if (!prov->registered) {
-    return NULL;
-  }
-  return prov;
-}
-
 /// Get provider by name
 /// @param name Provider name
 /// @return Provider pointer on success, NULL if not found
 extreg_provider_t *extreg_get_provider(const char *name)
 {
-  dict_T *prov_dict = &extreg_providers;
-  dictitem_T *di = tv_dict_find(prov_dict, name, strlen(name));
-  if (di == NULL || di->di_tv.v_type != VAR_NUMBER) {
+  hashitem_T *hi = hash_find(&extreg_providers, name);
+
+  if (HASHITEM_EMPTY(hi)) {
     return NULL;
   }
 
-  int idx = di->di_tv.vval.v_number - 1;
-  if (idx < 0 || idx >= EXTREG_MAX_PROVIDERS) {
-    return NULL;
-  }
-
-  extreg_provider_t *prov = &extreg_provider_list[idx];
-  if (!prov->registered) {
-    return NULL;
-  }
-  return prov;
+  return HASH_ITEM_TO_EXTREG_PROVIDER(hi);
 }
 
 /// Check if provider is currently recursing
@@ -780,23 +641,6 @@ int nlua_extregs_is_alias(lua_State *lstate)
 {
   const char *alias = luaL_checkstring(lstate, 1);
   lua_pushboolean(lstate, extreg_is_alias(alias));
-  return 1;
-}
-
-/// Lua: vim._extregs.get_provider_id(alias)
-int nlua_extregs_get_provider_id(lua_State *lstate)
-{
-  const char *alias = luaL_checkstring(lstate, 1);
-  lua_pushinteger(lstate, extreg_get_provider_id(alias));
-  return 1;
-}
-
-/// Lua: vim._extregs.get_provider_by_id(id)
-int nlua_extregs_get_provider_by_id(lua_State *lstate)
-{
-  int id = luaL_checkinteger(lstate, 1);
-  extreg_provider_t *prov = extreg_get_provider_by_id(id);
-  lua_pushlightuserdata(lstate, (void *)prov);
   return 1;
 }
 

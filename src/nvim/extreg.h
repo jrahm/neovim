@@ -8,25 +8,21 @@
 #include "nvim/eval/typval_defs.h"  // for typval_T, dict_T
 #include "nvim/hashtab_defs.h"  // for hashitem_T
 
-#define EXTREG_MAX_PROVIDERS 20
-
 typedef struct {
-  char *name;                 ///< Provider name (e.g., "file-registry")
-  char *alias;                ///< Bound character as UTF-8 string (NULL if none)
   LuaRef text_yanked_cb;      ///< Lua callback for yank operations
   LuaRef text_put_cb;         ///< Lua callback for put operations
   yankreg_T yreg;             ///< Owned yank register storage
   bool registered;            ///< Is provider currently active
   uint64_t recursion_id;      ///< Recursion guard (os_time())
+  char name[];                ///< Provider name. Used intrusively in a hashmap
 } extreg_provider_t;
 
-// Global provider storage (fixed-size array)
-extern extreg_provider_t extreg_provider_list[EXTREG_MAX_PROVIDERS];
-extern int extreg_provider_count;  ///< Number of active providers
+#define HASH_ITEM_TO_EXTREG_PROVIDER(hi) \
+  ((extreg_provider_t*)((hi)->hi_key - offsetof(extreg_provider_t, name)))
 
 // Global storage maps
-extern dict_T extreg_providers;  ///< name (string) -> provider_index (number)
 extern dict_T extreg_aliases;    ///< alias (1-char string) -> provider_name (string)
+extern hashtab_T extreg_providers; ///< intrusive hash map of extreg_provider_t's;
 
 // Active provider for ~ register
 extern extreg_provider_t *active_extreg;  ///< Currently selected extreg provider
@@ -37,10 +33,9 @@ extern int extreg_unregister(const char *name);
 extern int extreg_bind(const char *alias, const char *provider_name);
 extern int extreg_unbind(const char *alias);
 extern bool extreg_is_alias(const char *alias);
-extern int extreg_get_provider_id(const char *alias);
-extern extreg_provider_t *extreg_get_provider_by_id(int id);
 extern extreg_provider_t *extreg_get_provider(const char *name);
 extern char *extreg_parse_provider(char *in_arg, char **out);
+extern void extreg_free_provider(extreg_provider_t* prov);
 
 // Callback execution
 extern bool extreg_materialize(extreg_provider_t *prov);
@@ -69,6 +64,4 @@ extern int nlua_extregs_unregister(lua_State *lstate);
 extern int nlua_extregs_bind(lua_State *lstate);
 extern int nlua_extregs_unbind(lua_State *lstate);
 extern int nlua_extregs_is_alias(lua_State *lstate);
-extern int nlua_extregs_get_provider_id(lua_State *lstate);
-extern int nlua_extregs_get_provider_by_id(lua_State *lstate);
 extern int nlua_extregs_get_provider(lua_State *lstate);
