@@ -70,6 +70,7 @@
 #include "nvim/os/time.h"
 #include "nvim/plines.h"
 #include "nvim/register.h"
+#include "nvim/extreg.h"
 #include "nvim/search.h"
 #include "nvim/state.h"
 #include "nvim/state_defs.h"

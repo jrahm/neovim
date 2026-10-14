@@ -1213,6 +1213,12 @@ void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
     }
   }
 
+  // Handle extreg register ~ - commit to the extreg provider
+  // This works for both yank and delete operations since both use op_yank_reg()
+  if (oap->regname == '~' && active_extreg != NULL) {
+    extreg_commit(active_extreg);
+  }
+
   if ((cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0) {
     // Set "'[" and "']" marks.
     curbuf->b_op_start = oap->start;
@@ -1424,11 +1430,6 @@ bool op_yank(oparg_T *oap, bool message)
 
   yankreg_T *reg = get_yank_register(oap->regname, YREG_YANK);
   op_yank_reg(oap, message, reg, is_append_register(oap->regname));
-
-  // Handle extreg register ~
-  if (oap->regname == '~' && active_extreg != NULL) {
-    extreg_commit(active_extreg);
-  }
 
   set_clipboard(oap->regname, reg);
   do_autocmd_textyankpost(oap, reg);
