@@ -29,6 +29,7 @@
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
 #include "nvim/autocmd_defs.h"
+#include "nvim/extreg.h"
 #include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/channel.h"
@@ -295,6 +296,9 @@ int main(int argc, char **argv)
   command_line_scan(&params);
 
   set_argf_var();
+
+  extreg_init();
+  TIME_MSG("init extregister");
 
   nlua_init(argv, argc, params.lua_arg0);
   TIME_MSG("init lua interpreter");

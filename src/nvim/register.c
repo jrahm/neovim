@@ -17,6 +17,7 @@
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
+#include "nvim/extreg.h"
 #include "nvim/file_search.h"
 #include "nvim/fold.h"
 #include "nvim/garray.h"
@@ -158,7 +159,8 @@ bool valid_yank_reg(int regname, bool writing)
       || regname == '-'
       || regname == '_'
       || regname == '*'
-      || regname == '+') {
+      || regname == '+'
+      || regname == '~') {
     return true;
   }
   return false;
@@ -362,6 +364,9 @@ yankreg_T *get_yank_register(int regname, int mode)
              && y_previous != NULL) {
     // in case clipboard not available, paste from previous used register
     return y_previous;
+  } else if (regname == '~' && active_extreg != NULL) {
+    // extreg register: return a pointer to the active extreg provider's yreg
+    return &active_extreg->yreg;
   }
 
   int i = op_reg_index(regname);
@@ -453,6 +458,10 @@ static int stuff_yank(int regname, char *p)
     reg->y_array[0] = cbuf_as_string(p, plen);
     reg->y_size = 1;
     reg->y_type = kMTCharWise;
+
+    if (regname == '~') {
+      extreg_commit(active_extreg);
+    }
   }
   reg->timestamp = (Timestamp)os_realtime();
   return OK;
@@ -464,18 +473,25 @@ static int stuff_yank(int regname, char *p)
 int do_record(int c)
 {
   static int regname;
+  static extreg_provider_t* rec_extreg = NUL;
   int retval;
 
   if (reg_recording == 0) {
     // start recording
-    // registers 0-9, a-z and " are allowed
-    if (c < 0 || (!ASCII_ISALNUM(c) && c != '"')) {
+    // registers 0-9, a-z, ~ and " are allowed
+    if (c < 0 || (!ASCII_ISALNUM(c) && c != '~' && c != '"')) {
       retval = FAIL;
     } else {
       reg_recording = c;
       // TODO(bfredl): showmode based messaging is currently missing with cmdheight=0
       showmode();
       regname = c;
+      // For extreg, save the provider so it can't change during recording
+      if (c == '~' && active_extreg != NULL) {
+        rec_extreg = active_extreg;
+      } else {
+        rec_extreg = NUL;
+      }
       retval = OK;
 
       apply_autocmds(EVENT_RECORDINGENTER, NULL, NULL, false, curbuf);
@@ -518,10 +534,16 @@ int do_record(int c)
       // We don't want to change the default register here, so save and
       // restore the current register name.
       yankreg_T *old_y_previous = y_previous;
-
+      extreg_provider_t *old_active_extreg = active_extreg;
+      active_extreg = rec_extreg;
       retval = stuff_yank(regname, p);
+      active_extreg = old_active_extreg;
 
       y_previous = old_y_previous;
+    }
+    // Reset the saved extreg index when recording stops
+    if (regname == '~') {
+      rec_extreg = NUL;
     }
   }
   return retval;
@@ -709,6 +731,12 @@ int do_execreg(int regname, int colon, int addcr, int silent)
     xfree(p);
   } else {
     yankreg_T *reg = get_yank_register(regname, YREG_PASTE);
+    // For extreg, materialize before accessing contents
+    if (regname == '~' && active_extreg != NULL) {
+      if (!extreg_materialize(active_extreg)) {
+        return FAIL;
+      }
+    }
     if (reg->y_array == NULL) {
       return FAIL;
     }
@@ -1393,6 +1421,12 @@ bool op_yank(oparg_T *oap, bool message)
 
   yankreg_T *reg = get_yank_register(oap->regname, YREG_YANK);
   op_yank_reg(oap, message, reg, is_append_register(oap->regname));
+
+  // Handle extreg register ~
+  if (oap->regname == '~' && active_extreg != NULL) {
+    extreg_commit(active_extreg);
+  }
+
   set_clipboard(oap->regname, reg);
   do_autocmd_textyankpost(oap, reg);
   return true;

@@ -43,6 +43,7 @@
 #include "nvim/ex_eval.h"
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
+#include "nvim/extreg.h"
 #include "nvim/file_search.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
@@ -5012,6 +5013,9 @@ static void nv_regname(cmdarg_T *cap)
   if (cap->nchar == '=') {
     cap->nchar = get_expr_register();
   }
+  if (cap->nchar == '~') {
+    cap->nchar = get_extreg_register();
+  }
   if (cap->nchar != NUL && valid_yank_reg(cap->nchar, false)) {
     cap->oap->regname = cap->nchar;
     cap->opcount = cap->count0;         // remember count before '"'
@@ -6458,8 +6462,17 @@ static void nv_q(cmdarg_T *cap)
   } else {
     // (stop) recording into a named register, unless executing a
     // register.
-    if (reg_executing == 0 && do_record(cap->nchar) == FAIL) {
-      clearopbeep(cap->oap);
+    if (reg_executing == 0) {
+      // Handle extreg register ~
+      if (cap->nchar == '~') {
+        cap->nchar = get_extreg_register();
+        if (cap->nchar == NUL) {
+          return;
+        }
+      }
+      if (do_record(cap->nchar) == FAIL) {
+        clearopbeep(cap->oap);
+      }
     }
   }
 }
@@ -6472,6 +6485,11 @@ static void nv_at(cmdarg_T *cap)
   }
   if (cap->nchar == '=') {
     if (get_expr_register() == NUL) {
+      return;
+    }
+  } else if (cap->nchar == '~') {
+    cap->nchar = get_extreg_register();
+    if (cap->nchar == NUL) {
       return;
     }
   }
@@ -6653,10 +6671,32 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
     // May have been reset in do_put().
     Visual.active = true;
   }
+
+  // Handle extreg register ~
+  if (cap->oap->regname == '~') {
+    if (active_extreg == NULL) {
+      semsg(_("E356: Cannot get from extregister: no provider selected"));
+      return;
+    }
+    if (!extreg_materialize(active_extreg)) {
+      semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+      return;
+    }
+    // Get the materialized register (returns &active_extreg->yreg)
+    savereg = get_yank_register(cap->oap->regname, YREG_PASTE);
+    if (savereg->y_array == NULL) {
+      semsg(_("E356: extregister '%s' is empty"), active_extreg->name);
+      return;
+    }
+  } else if (savereg == NULL) {
+    savereg = get_yank_register(cap->oap->regname, YREG_PASTE);
+  }
+
   do_put(cap->oap->regname, savereg, dir, cap->count1, flags);
 
   // If a register was saved, free it
-  if (savereg != NULL) {
+  // Don't free it for ~ register since it points to extreg provider's yreg
+  if (savereg != NULL && cap->oap->regname != '~') {
     free_register(savereg);
     xfree(savereg);
   }
@@ -6690,6 +6730,9 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
   }
   auto_format(false, true);
 }
+
+/// "p", "P", "gp", "gP", "]p", and "[p" commands.
+static void nv_put_opt(cmdarg_T *cap, bool fix_indent);
 
 /// "o" and "O" commands.
 static void nv_open(cmdarg_T *cap)

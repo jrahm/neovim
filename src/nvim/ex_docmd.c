@@ -57,6 +57,7 @@
 #include "nvim/ex_eval.h"
 #include "nvim/ex_eval_defs.h"
 #include "nvim/ex_getln.h"
+#include "nvim/extreg.h"
 #include "nvim/file_search.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
@@ -6651,6 +6652,22 @@ static void ex_put(exarg_T *eap)
   }
   curwin->w_cursor.lnum = eap->line2;
   check_cursor_col(curwin);
+
+  // Handle extreg register ~
+  if (eap->regname == '~') {
+    if (active_extreg == NULL) {
+      semsg(_("E356: Cannot get from extregister: no provider selected"));
+      return;
+    }
+    if (!extreg_materialize(active_extreg)) {
+      semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+      return;
+    }
+    do_put('~', NULL, eap->forceit ? BACKWARD : FORWARD, 1,
+           PUT_LINE|PUT_CURSLINE);
+    return;
+  }
+
   do_put(eap->regname, NULL, eap->forceit ? BACKWARD : FORWARD, 1,
          PUT_LINE|PUT_CURSLINE);
 }
@@ -6665,6 +6682,22 @@ static void ex_iput(exarg_T *eap)
   }
   curwin->w_cursor.lnum = eap->line2;
   check_cursor_col(curwin);
+
+  // Handle extreg register ~
+  if (eap->regname == '~') {
+    if (active_extreg == NULL) {
+      semsg(_("E356: Cannot get from extregister: no provider selected"));
+      return;
+    }
+    if (!extreg_materialize(active_extreg)) {
+      semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+      return;
+    }
+    do_put('~', NULL, eap->forceit ? BACKWARD : FORWARD, 1L,
+           PUT_LINE|PUT_CURSLINE|PUT_FIXINDENT);
+    return;
+  }
+
   do_put(eap->regname, NULL, eap->forceit ? BACKWARD : FORWARD, 1L,
          PUT_LINE|PUT_CURSLINE|PUT_FIXINDENT);
 }

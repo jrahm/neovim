@@ -83,3 +83,6 @@ static inline bool reg_empty(const yankreg_T *const reg)
               && reg->y_type == kMTCharWise
               && reg->y_array[0].size == 0));
 }
+
+extern void free_register(yankreg_T *reg);
+extern int do_record(int c);

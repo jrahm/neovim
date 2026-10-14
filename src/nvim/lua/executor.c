@@ -17,6 +17,7 @@
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/ui.h"
+#include "nvim/extreg.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/change.h"
@@ -757,6 +758,26 @@ static void nlua_common_vim_init(lua_State *lstate, bool is_thread)
   lua_pushvalue(lstate, -1);
   lua_setfield(lstate, LUA_REGISTRYINDEX, "mpack.empty_dict");
   lua_setfield(lstate, -2, "_empty_dict_mt");
+
+  // vim._extregs
+  lua_createtable(lstate, 0, 7);
+  lua_pushcfunction(lstate, &nlua_extregs_register);
+  lua_setfield(lstate, -2, "register");
+  lua_pushcfunction(lstate, &nlua_extregs_unregister);
+  lua_setfield(lstate, -2, "unregister");
+  lua_pushcfunction(lstate, &nlua_extregs_bind);
+  lua_setfield(lstate, -2, "bind");
+  lua_pushcfunction(lstate, &nlua_extregs_unbind);
+  lua_setfield(lstate, -2, "unbind");
+  lua_pushcfunction(lstate, &nlua_extregs_is_alias);
+  lua_setfield(lstate, -2, "is_alias");
+  lua_pushcfunction(lstate, &nlua_extregs_get_provider_id);
+  lua_setfield(lstate, -2, "get_provider_id");
+  lua_pushcfunction(lstate, &nlua_extregs_get_provider_by_id);
+  lua_setfield(lstate, -2, "get_provider_by_id");
+  lua_pushcfunction(lstate, &nlua_extregs_get_provider);
+  lua_setfield(lstate, -2, "get_provider");
+  lua_setfield(lstate, -2, "_extregs");
 
   // vim.uv
   if (is_thread) {

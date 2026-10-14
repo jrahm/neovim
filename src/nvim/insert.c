@@ -31,6 +31,7 @@
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
 #include "nvim/extmark_defs.h"
+#include "nvim/extreg.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
 #include "nvim/gettext_defs.h"
@@ -2973,6 +2974,21 @@ static void ins_reg(void)
     u_sync_once = 2;
 
     regname = get_expr_register();
+
+    // Cursor may be moved back a column.
+    curwin->w_cursor = curpos;
+    check_cursor(curwin);
+  } else if (regname == '~') {
+    pos_T curpos = curwin->w_cursor;
+
+    // Prompt for extregister provider name
+    regname = get_extreg_register();
+    if (active_extreg) {
+      if (!extreg_materialize(active_extreg)) {
+        semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+        regname = NUL;
+      }
+    }
 
     // Cursor may be moved back a column.
     curwin->w_cursor = curpos;
