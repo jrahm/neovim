@@ -2524,6 +2524,13 @@ void *get_reg_contents(int regname, int flags)
     return get_reg_wrap_one_line(get_expr_line(), flags);
   }
 
+  if (regname == '~') {
+    if (!active_extreg) {
+      return NULL;
+    }
+    extreg_materialize(active_extreg);
+  }
+
   if (regname == '@') {     // "@@" is used for unnamed register
     regname = '"';
   }
@@ -2856,6 +2863,10 @@ void write_reg_contents_ex(int name, const char *str, ssize_t len, bool must_app
     return;
   }
   str_to_reg(reg, yank_type, str, (size_t)len, block_len, false);
+
+  if (name == '~') {
+    extreg_commit(active_extreg);
+  }
   finish_write_reg(name, reg, old_y_previous);
 }
 

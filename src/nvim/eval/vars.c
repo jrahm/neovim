@@ -30,6 +30,7 @@
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
+#include "nvim/extreg.h"
 #include "nvim/garray.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
@@ -1161,6 +1162,14 @@ const char *skip_var_list(const char *arg, int *var_count, int *semicolon, bool 
 static const char *skip_var_one(const char *arg)
 {
   if (*arg == '@' && arg[1] != NUL) {
+    if (arg[1] == '~') {
+      arg = arg + 2;
+      while (isalnum(*arg) || *arg == '_' || *arg == '.') {
+        arg ++;
+      }
+      return arg;
+    }
+
     return arg + 2;
   }
   return find_name_end(*arg == '$' || *arg == '&' ? arg + 1 : arg,
@@ -1471,10 +1480,29 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
 
   char *arg_end = NULL;
   arg++;
+  char *after = arg+1;
+  if (*arg == '~') {
+    char buf[256]; // TODO(rahm) make this dynamic
+    int buf_i=0;
+    char ch = *(after++);
+    while (isalnum(ch) || ch == '.' || ch == '_') {
+      buf[buf_i ++] = ch;
+      ch = *(after++);
+    }
+    buf[buf_i] = 0;
+
+    extreg_provider_t* extreg = extreg_get_provider(buf);
+    if (!extreg) {
+      semsg(_("E536: cannot find extreg '%s'"), buf);
+      return NULL;
+    }
+    active_extreg = extreg;
+  }
+
   if (op != NULL && vim_strchr("+-*/%", (uint8_t)(*op)) != NULL) {
     semsg(_(e_letwrong), op);
   } else if (endchars != NULL
-             && vim_strchr(endchars, (uint8_t)(*skipwhite(arg + 1))) == NULL) {
+             && vim_strchr(endchars, (uint8_t)(*skipwhite(after))) == NULL) {
     emsg(_(e_letunexp));
   } else {
     char *ptofree = NULL;
@@ -1489,7 +1517,7 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
     }
     if (p != NULL) {
       write_reg_contents(*arg == '@' ? '"' : *arg, p, (ssize_t)strlen(p), false);
-      arg_end = arg + 1;
+      arg_end = after;
     }
     xfree(ptofree);
   }
