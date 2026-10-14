@@ -38,6 +38,7 @@
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
+#include "nvim/extreg.h"
 #include "nvim/garray.h"
 #include "nvim/garray_defs.h"
 #include "nvim/gettext_defs.h"
@@ -2735,12 +2736,32 @@ static int eval7(char **arg, typval_T *rettv, evalarg_T *const evalarg, bool wan
     }
     break;
 
-  // Register contents: @r.
+  // Register contents: @r or @~provider.
   case '@':
     (*arg)++;
+    int regname = (int) (**arg);
+    if (regname == '~') {
+      char *next_arg = NULL;
+      char *extreg_name = extreg_parse_provider(*arg, &next_arg);
+      if (!extreg_name) {
+        semsg(_("E536: Invalid extregister provider name"));
+        ret = FAIL;
+        break;
+      }
+      extreg_provider_t *extreg = extreg_get_provider(extreg_name);
+      if (!extreg) {
+        semsg(_("E536: cannot find extreg '%s'"), extreg_name);
+        xfree(extreg_name);
+        ret = FAIL;
+        break;
+      }
+      xfree(extreg_name);
+      active_extreg = extreg;
+      *arg = next_arg;
+    }
     if (evaluate) {
       rettv->v_type = VAR_STRING;
-      rettv->vval.v_string = get_reg_contents(**arg, kGRegExprSrc);
+      rettv->vval.v_string = get_reg_contents(regname, kGRegExprSrc);
     }
     if (**arg != NUL) {
       (*arg)++;

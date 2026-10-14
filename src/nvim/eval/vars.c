@@ -1163,11 +1163,13 @@ static const char *skip_var_one(const char *arg)
 {
   if (*arg == '@' && arg[1] != NUL) {
     if (arg[1] == '~') {
-      arg = arg + 2;
-      while (isalnum(*arg) || *arg == '_' || *arg == '.') {
-        arg ++;
+      char *next_arg = NULL;
+      char *extreg_name = extreg_parse_provider((char *)(arg + 1), &next_arg);
+      if (!extreg_name) {
+        return arg;  // Invalid, return early
       }
-      return arg;
+      xfree(extreg_name);
+      return next_arg;
     }
 
     return arg + 2;
@@ -1480,23 +1482,23 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
 
   char *arg_end = NULL;
   arg++;
-  char *after = arg+1;
+  char *after = arg + 1;
   if (*arg == '~') {
-    char buf[256]; // TODO(rahm) make this dynamic
-    int buf_i=0;
-    char ch = *(after++);
-    while (isalnum(ch) || ch == '.' || ch == '_') {
-      buf[buf_i ++] = ch;
-      ch = *(after++);
-    }
-    buf[buf_i] = 0;
-
-    extreg_provider_t* extreg = extreg_get_provider(buf);
-    if (!extreg) {
-      semsg(_("E536: cannot find extreg '%s'"), buf);
+    char *next_arg = NULL;
+    char *extreg_name = extreg_parse_provider(arg, &next_arg);
+    if (!extreg_name) {
+      semsg(_("E536: Invalid extregister provider name"));
       return NULL;
     }
+    extreg_provider_t *extreg = extreg_get_provider(extreg_name);
+    if (!extreg) {
+      semsg(_("E536: cannot find extreg '%s'"), extreg_name);
+      xfree(extreg_name);
+      return NULL;
+    }
+    xfree(extreg_name);
     active_extreg = extreg;
+    after = next_arg;
   }
 
   if (op != NULL && vim_strchr("+-*/%", (uint8_t)(*op)) != NULL) {

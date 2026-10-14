@@ -41,6 +41,7 @@
 #include "nvim/ex_eval.h"
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
+#include "nvim/extreg.h"
 #include "nvim/garray.h"
 #include "nvim/garray_defs.h"
 #include "nvim/gettext_defs.h"
@@ -1785,6 +1786,16 @@ static int command_line_insert_reg(CommandLineState *s)
       s->c = ESC;
     } else {
       s->c = get_expr_register();
+    }
+  }
+
+  if (s->c == '~') {
+    if (ccline.cmdfirstc == '~'   // can't do this recursively
+        || cmdline_star > 0) {    // or when typing a password
+      beep_flush();
+      s->c = ESC;
+    } else {
+      s->c = get_extreg_register();
     }
   }
 

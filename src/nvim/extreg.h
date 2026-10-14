@@ -40,6 +40,7 @@ extern bool extreg_is_alias(const char *alias);
 extern int extreg_get_provider_id(const char *alias);
 extern extreg_provider_t *extreg_get_provider_by_id(int id);
 extern extreg_provider_t *extreg_get_provider(const char *name);
+extern char *extreg_parse_provider(char *in_arg, char **out);
 
 // Callback execution
 extern bool extreg_materialize(extreg_provider_t *prov);

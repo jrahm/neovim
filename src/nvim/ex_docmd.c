@@ -1346,7 +1346,7 @@ void set_cmd_dflall_range(exarg_T *eap)
   }
 }
 
-static void parse_register(exarg_T *eap)
+static int parse_register(exarg_T *eap)
 {
   // Accept numbered register only when no count allowed (:put)
   if ((eap->argt & EX_REGSTR)
@@ -1365,9 +1365,31 @@ static void parse_register(exarg_T *eap)
         }
         eap->arg += strlen(eap->arg);
       }
+      if (eap->regname == '~') {
+        // Parse ~provider syntax
+        char *next_arg = NULL;
+        char *extreg_name = extreg_parse_provider(eap->arg - 1, &next_arg);
+        if (!extreg_name) {
+          semsg(_("E536: Invalid extregister provider name"));
+          eap->regname = NUL;
+        } else {
+          extreg_provider_t *extreg = extreg_get_provider(extreg_name);
+          if (!extreg) {
+            semsg(_("E536: cannot find extreg '%s'"), extreg_name);
+            xfree(extreg_name);
+            eap->regname = NUL;
+            return FAIL;
+          } else {
+            xfree(extreg_name);
+            active_extreg = extreg;
+          }
+        }
+        eap->arg = next_arg;
+      }
       eap->arg = skipwhite(eap->arg);
     }
   }
+  return 1;
 }
 
 // Change line1 and line2 of Ex command to use count
@@ -1396,7 +1418,7 @@ void set_cmd_count(exarg_T *eap, linenr_T count, bool validate)
 static int parse_count(exarg_T *eap, const char **errormsg, bool validate)
 {
   // Check for a count.  When accepting a EX_BUFNAME, don't use "123foo" as a
-  // count, it's a buffer name.
+  // coent, it's a buffer name.
   char *p;
 
   if ((eap->argt & EX_COUNT) && ascii_isdigit(*eap->arg)
@@ -1622,7 +1644,9 @@ bool parse_cmdline(char **cmdline, exarg_T *eap, cmdmod_T *cmod, const char **er
 
   // Parse register and count
   if (!skipmods) {
-    parse_register(eap);
+    if (parse_register(eap) == FAIL) {
+      goto end;
+    };
     if (parse_count(eap, errormsg, false) == FAIL) {
       goto end;
     }
@@ -2335,7 +2359,10 @@ static char *do_one_cmd(char **cmdlinep, int flags, cstack_T *cstack, LineGetter
   }
 
   // Parse register and count
-  parse_register(&ea);
+  if (parse_register(&ea) == FAIL) {
+    goto doend;
+  }
+
   if (parse_count(&ea, &errormsg, true) == FAIL) {
     goto doend;
   }

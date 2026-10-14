@@ -182,6 +182,55 @@ int extreg_register(const char *name, LuaRef text_yanked_cb, LuaRef text_put_cb)
   return idx + 1;
 }
 
+/// Parse provider name from ~provider syntax
+///
+/// Extracts provider name from string starting with '~'.
+/// Returns the provider name as an allocated string (caller must free).
+/// Advances input pointer past the provider name.
+///
+/// @param[in]  in_arg  Input string starting with '~provider ...'
+/// @param[out] out     Output: pointer to char after provider name
+/// @return Allocated provider name string, or NULL on error (empty/invalid name)
+char *extreg_parse_provider(char *in_arg, char **out)
+  FUNC_ATTR_NONNULL_ARG(1) FUNC_ATTR_NONNULL_ARG(2) FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  assert(*in_arg == '~');
+
+  *out = in_arg + 1;
+
+  // Must have something after '~'
+  if (in_arg[1] == NUL) {
+    return NULL;
+  }
+
+  // Allocate buffer for provider name
+  size_t buf_size = 16;  // Start with small buffer
+  char *buf = xmalloc(buf_size);
+  size_t buf_i = 0;
+
+  // Parse provider name: allow [A-Za-z0-9._]
+  char *p = in_arg + 1;
+  while (*p && (ASCII_ISALNUM(*p) || *p == '.' || *p == '_')) {
+    // Expand buffer if needed
+    if (buf_i >= buf_size - 1) {
+      buf_size *= 2;
+      buf = xrealloc(buf, buf_size);
+    }
+    buf[buf_i++] = *p;
+    p++;
+  }
+  buf[buf_i] = NUL;
+
+  // Must have at least one valid character
+  if (buf_i == 0) {
+    xfree(buf);
+    return NULL;
+  }
+
+  *out = p;
+  return buf;  // Caller must free
+}
+
 /// Unregister an extregister provider
 /// @param name Provider name to unregister
 /// @return true on success, false if not found

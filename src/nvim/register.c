@@ -972,6 +972,9 @@ bool cmdline_paste_reg(int regname, bool literally_arg, bool remcr)
   const bool literally = literally_arg || is_literal_register(regname);
 
   yankreg_T *reg = get_yank_register(regname, YREG_PASTE);
+  if (regname == '~' && active_extreg) {
+    extreg_materialize(active_extreg);
+  }
   if (reg->y_array == NULL) {
     return FAIL;
   }
