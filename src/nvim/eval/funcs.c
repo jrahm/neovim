@@ -114,6 +114,7 @@
 #include "nvim/regexp.h"
 #include "nvim/regexp_defs.h"
 #include "nvim/register.h"
+#include "nvim/extreg.h"
 #include "nvim/runtime.h"
 #include "nvim/runtime_defs.h"
 #include "nvim/search.h"
@@ -2274,6 +2275,24 @@ static int getreg_get_regname(typval_T *argvars)
   } else {
     // Default to v:register
     strregname = get_vim_var_str(VV_REG);
+  }
+
+  // Handle ~provider syntax
+  if (*strregname == '~') {
+    char *next_arg = NULL;
+    char *extreg_name = extreg_parse_provider((char *)strregname, &next_arg);
+    if (!extreg_name) {
+      semsg(_("E536: Invalid extregister provider name"));
+      return 0;
+    }
+    extreg_provider_t *extreg = extreg_get_provider(extreg_name);
+    xfree(extreg_name);
+    if (!extreg) {
+      semsg(_("E536: cannot find extreg '%s'"), extreg_name);
+      return 0;
+    }
+    active_extreg = extreg;
+    return '~';
   }
 
   return *strregname == 0 ? '"' : (uint8_t)(*strregname);
@@ -6382,8 +6401,23 @@ static void f_setreg(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
     return;  // Type error; errmsg already given.
   }
   char regname = *strregname;
-  if (regname == 0 || regname == '@') {
+  if (regname == 0) {
     regname = '"';
+  } else if (regname == '~') {
+    // Handle ~provider syntax
+    char *next_arg = NULL;
+    char *extreg_name = extreg_parse_provider((char *)strregname, &next_arg);
+    if (!extreg_name) {
+      semsg(_("E536: Invalid extregister provider name"));
+      return;
+    }
+    extreg_provider_t *extreg = extreg_get_provider(extreg_name);
+    xfree(extreg_name);
+    if (!extreg) {
+      semsg(_("E536: cannot find extreg '%s'"), "???");
+      return;
+    }
+    active_extreg = extreg;
   }
 
   const typval_T *regcontents = NULL;
