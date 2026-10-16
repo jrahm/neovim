@@ -30,9 +30,11 @@ extern extreg_provider_t *active_extreg;  ///< Currently selected extreg provide
 // Provider management
 extern int extreg_register(const char *name, LuaRef text_yanked_cb, LuaRef text_put_cb);
 extern int extreg_unregister(const char *name);
-extern int extreg_bind(const char *alias, const char *provider_name);
-extern int extreg_unbind(const char *alias);
-extern bool extreg_is_alias(const char *alias);
+extern int extreg_bind(int alias_codepoint, const char *provider_name);
+extern int extreg_unbind(int alias_codepoint);
+extern bool extreg_is_alias(int alias_codepoint);
+extern extreg_provider_t *extreg_get_provider_for_alias(int alias_codepoint);
+extern const char *extreg_get_provider_name_for_alias(int alias_codepoint);
 extern extreg_provider_t *extreg_get_provider(const char *name);
 extern char *extreg_parse_provider(char *in_arg, char **out);
 extern void extreg_free_provider(extreg_provider_t* prov);
@@ -46,6 +48,8 @@ extern void extreg_yreg_from_string(extreg_provider_t *prov, const char *str, si
 
 // Register prompt
 extern int get_extreg_register(void);
+extern int get_alias_register(int reg);
+extern int get_extreg_or_alias_register(int reg);
 
 // Recursion guard
 extern bool extreg_is_recursing(extreg_provider_t *prov);
@@ -64,4 +68,5 @@ extern int nlua_extregs_unregister(lua_State *lstate);
 extern int nlua_extregs_bind(lua_State *lstate);
 extern int nlua_extregs_unbind(lua_State *lstate);
 extern int nlua_extregs_is_alias(lua_State *lstate);
+extern int nlua_extregs_get_provider_name_for_alias(lua_State *lstate);
 extern int nlua_extregs_get_provider(lua_State *lstate);

@@ -1779,6 +1779,7 @@ static int command_line_insert_reg(CommandLineState *s)
   allow_keys--;
   // Insert the result of an expression.
   new_cmdpos = -1;
+  s->c = get_extreg_or_alias_register(s->c);
   if (s->c == '=') {
     if (ccline.cmdfirstc == '='   // can't do this recursively
         || cmdline_star > 0) {    // or when typing a password
@@ -1794,8 +1795,6 @@ static int command_line_insert_reg(CommandLineState *s)
         || cmdline_star > 0) {    // or when typing a password
       beep_flush();
       s->c = ESC;
-    } else {
-      s->c = get_extreg_register();
     }
   }
 

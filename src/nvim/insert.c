@@ -2966,6 +2966,8 @@ static void ins_reg(void)
   // Don't call u_sync() while typing the expression or giving an error
   // message for it. Only call it explicitly.
   no_u_sync++;
+
+  regname = get_extreg_or_alias_register(regname);
   if (regname == '=') {
     pos_T curpos = curwin->w_cursor;
 
@@ -2981,8 +2983,6 @@ static void ins_reg(void)
   } else if (regname == '~') {
     pos_T curpos = curwin->w_cursor;
 
-    // Prompt for extregister provider name
-    regname = get_extreg_register();
     if (active_extreg) {
       if (!extreg_materialize(active_extreg)) {
         semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);

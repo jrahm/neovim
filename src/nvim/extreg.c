@@ -31,22 +31,25 @@ dict_T extreg_aliases = { 0 };    ///< alias (1-char string) -> provider_name (s
 extreg_provider_t *active_extreg = NULL;  ///< Currently selected extreg provider
 
 // Check if alias character is valid for binding
-static bool is_valid_alias(const char *alias)
+static bool is_valid_alias(int codepoint)
 {
-  if (alias == NULL || *alias == NUL) {
+  if (codepoint <= 0) {
+    return false;  // Invalid codepoint
+  }
+  
+  // Reject all control characters (C0: 0x00-0x1F, DEL: 0x7F, C1: 0x80-0x9F)
+  if (codepoint <= 0x1F || (codepoint >= 0x7F && codepoint <= 0x9F)) {
     return false;
   }
-  int codepoint = utf_ptr2char(alias);
-  if (codepoint < 0) {
-    return false;  // Invalid UTF-8
-  }
-  // For ASCII (0-127), validate against special characters
+  
+  // For ASCII printable (0x20-0x7E), validate against special characters
   if (codepoint <= 127) {
     const char *invalid = "=_#%./:;+";
     return vim_strchr(invalid, (char)codepoint) == NULL && !ascii_isdigit(codepoint)
            && (codepoint < 'A' || codepoint > 'Z') && (codepoint < 'a' || codepoint > 'z')
-           && !ascii_iswhite(codepoint);
+           && codepoint != ' ';  // Reject space explicitly
   }
+  
   // For non-ASCII Unicode codepoints, allow anything in valid Unicode range
   // except private use areas and surrogates
   if (codepoint > 0x10FFFF) {
@@ -114,6 +117,29 @@ int get_extreg_register(void)
     return NUL;
   }
   return '~';  // Use extreg register
+}
+
+int get_alias_register(int alias)
+{
+  extreg_provider_t *prov = extreg_get_provider_for_alias(alias);
+  
+  if (prov) {
+    active_extreg = prov;
+    return '~';
+  }
+  
+  // Not an extreg alias - clear any stale active_extreg state
+  active_extreg = NULL;
+  return alias;
+}
+
+int get_extreg_or_alias_register(int reg)
+{
+  if (reg == '~') {
+    return get_extreg_register();
+  } else {
+    return get_alias_register(reg);
+  }
 }
 
 /// Register a new extregister provider
@@ -243,17 +269,31 @@ void extreg_free_provider(extreg_provider_t* prov)
 }
 
 /// Bind a character to an extregister provider
-/// @param alias String containing single UTF-8 character to bind
+/// @param alias_codepoint Codepoint to bind
 /// @param provider_name Name of provider to bind to
 /// @return true on success, false on failure
-int extreg_bind(const char *alias, const char *provider_name)
+int extreg_bind(int alias_codepoint, const char *provider_name)
 {
-  if (!is_valid_alias(alias)) {
-    semsg(_("E356: '%s' cannot be used as an extregister alias"), alias);
+  if (!is_valid_alias(alias_codepoint)) {
+    char buf[MB_MAXBYTES + 1];
+    int len = utf_char2bytes(alias_codepoint, buf);
+    buf[len] = NUL;
+    semsg(_("E356: '%s' cannot be used as an extregister alias"), buf);
     return false;
   }
 
-  dictitem_T *di = tv_dict_item_alloc(alias);
+  // Reject empty provider names
+  if (!provider_name || *provider_name == NUL) {
+    semsg(_("E356: provider name cannot be empty"));
+    return false;
+  }
+
+  // Convert codepoint to UTF-8 string for dict storage
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
+  dictitem_T *di = tv_dict_item_alloc_len(utf8_buf, (size_t)utf8_len);
   di->di_tv.v_type = VAR_STRING;
   di->di_tv.vval.v_string = xstrdup(provider_name);
   tv_dict_add(&extreg_aliases, di);
@@ -262,14 +302,19 @@ int extreg_bind(const char *alias, const char *provider_name)
 }
 
 /// Unbind a character from an extregister provider
-/// @param alias UTF-8 string containing character to unbind
+/// @param alias_codepoint Codepoint to unbind
 /// @return true on success, false if not bound
-int extreg_unbind(const char *alias)
+int extreg_unbind(int alias_codepoint)
 {
   dict_T *alias_dict = &extreg_aliases;
 
-  // Use the UTF-8 string directly as the hash table key
-  dictitem_T *di = tv_dict_find(alias_dict, alias, strlen(alias));
+  // Convert codepoint to UTF-8 string for hash table lookup
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
+  // Use the UTF-8 string as the hash table key
+  dictitem_T *di = tv_dict_find(alias_dict, utf8_buf, (ptrdiff_t)utf8_len);
   if (di == NULL) {
     return false;  // Not bound
   }
@@ -281,13 +326,61 @@ int extreg_unbind(const char *alias)
 }
 
 /// Check if a character is bound to an extregister
-/// @param alias UTF-8 string containing character to check
+/// @param alias_codepoint Codepoint to check
 /// @return true if bound, false otherwise
-bool extreg_is_alias(const char *alias)
+bool extreg_is_alias(int alias_codepoint)
 {
-  // Use the UTF-8 string directly as the hash table key
-  dictitem_T *di = tv_dict_find(&extreg_aliases, alias, strlen(alias));
+  // Convert codepoint to UTF-8 string for hash table lookup
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
+  // Use the UTF-8 string as the hash table key
+  dictitem_T *di = tv_dict_find(&extreg_aliases, utf8_buf, (ptrdiff_t)utf8_len);
   return (di != NULL);
+}
+
+/// Get provider for an alias codepoint
+/// @param alias_codepoint Codepoint to look up
+/// @return Provider pointer if bound, NULL if not found
+/// @note Returns pointer to provider in extreg_providers hash table
+extreg_provider_t *extreg_get_provider_for_alias(int alias_codepoint)
+{
+  // Convert codepoint to UTF-8 string for hash table lookup
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
+  // Use the UTF-8 string as the hash table key
+  dictitem_T *di = tv_dict_find(&extreg_aliases, utf8_buf, (ptrdiff_t)utf8_len);
+  if (di == NULL) {
+    return NULL;  // Not bound
+  }
+
+  // Look up the provider by name (no allocation needed)
+  // The provider name is stored in the dict value
+  return extreg_get_provider(di->di_tv.vval.v_string);
+}
+
+/// Get provider name aliased to a codepoint
+/// @param alias_codepoint Codepoint to look up
+/// @return Provider name string if found (dictionary-owned), NULL if not found
+/// @note Do NOT free the returned string - it's owned by the dictionary
+const char *extreg_get_provider_name_for_alias(int alias_codepoint)
+{
+  // Convert codepoint to UTF-8 string for hash table lookup
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
+  // Use the UTF-8 string as the hash table key
+  dictitem_T *di = tv_dict_find(&extreg_aliases, utf8_buf, (ptrdiff_t)utf8_len);
+  if (di == NULL) {
+    return NULL;  // Not bound
+  }
+
+  // Return the provider name (dictionary-owned, do not free)
+  return di->di_tv.vval.v_string;
 }
 
 /// Get provider by name
@@ -406,7 +499,7 @@ static bool lua_tv_to_yankreg(typval_T *tv, yankreg_T *reg)
   reg->y_size = (size_t)valid_count;
   reg->y_type = motion_type;
   reg->y_width = width;
-  reg->y_array = xcalloc(valid_count, sizeof(String));
+  reg->y_array = xcalloc((size_t)valid_count, sizeof(String));
   reg->timestamp = os_time();
 
   // Copy lines
@@ -614,6 +707,45 @@ bool extreg_commit(extreg_provider_t *prov)
 // Lua binding functions
 #include "nvim/lua/executor.h"
 
+/// Validate that an alias argument is exactly one valid UTF-8 codepoint
+/// @param alias Lua string to validate
+/// @param alias_len Length of the string
+/// @param codepoint Out parameter for the codepoint
+/// @param err_buf Error message buffer
+/// @param err_buf_len Size of error buffer
+/// @return true if valid, false if invalid
+static bool validate_lua_alias(const char *alias, size_t alias_len, int *codepoint,
+                               char *err_buf, size_t err_buf_len)
+{
+  if (alias_len == 0) {
+    snprintf(err_buf, err_buf_len, "alias cannot be empty");
+    return false;
+  }
+
+  if (alias_len > MB_MAXBYTES) {
+    snprintf(err_buf, err_buf_len, "alias too long (maximum %d bytes)", MB_MAXBYTES);
+    return false;
+  }
+
+  // Get the codepoint and check that we consumed the entire string
+  int bytes_consumed = utf_ptr2len(alias);
+
+  // Check if UTF-8 is valid (bytes_consumed > 0 means valid UTF-8 sequence)
+  if (bytes_consumed <= 0) {
+    snprintf(err_buf, err_buf_len, "invalid UTF-8 sequence");
+    return false;
+  }
+
+  // Check if there are extra characters after the first codepoint
+  if ((size_t)bytes_consumed != alias_len) {
+    snprintf(err_buf, err_buf_len, "alias must be exactly one character, got %zu bytes", alias_len);
+    return false;
+  }
+
+  *codepoint = utf_ptr2char(alias);
+  return true;
+}
+
 /// Lua: vim._extregs.register(name, text_yanked_cb?, text_put_cb?)
 int nlua_extregs_register(lua_State *lstate)
 {
@@ -640,25 +772,72 @@ int nlua_extregs_unregister(lua_State *lstate)
 /// Lua: vim._extregs.bind(alias, provider_name)
 int nlua_extregs_bind(lua_State *lstate)
 {
-  const char *alias = luaL_checkstring(lstate, 1);
+  size_t alias_len;
+  const char *alias = luaL_checklstring(lstate, 1, &alias_len);
   const char *provider_name = luaL_checkstring(lstate, 2);
-  lua_pushboolean(lstate, extreg_bind(alias, provider_name));
+
+  int codepoint;
+  char err_buf[256];
+  if (!validate_lua_alias(alias, alias_len, &codepoint, err_buf, sizeof(err_buf))) {
+    return luaL_error(lstate, "extregs.bind: %s", err_buf);
+  }
+
+  lua_pushboolean(lstate, extreg_bind(codepoint, provider_name));
   return 1;
 }
 
 /// Lua: vim._extregs.unbind(alias)
 int nlua_extregs_unbind(lua_State *lstate)
 {
-  const char *alias = luaL_checkstring(lstate, 1);
-  lua_pushboolean(lstate, extreg_unbind(alias));
+  size_t alias_len;
+  const char *alias = luaL_checklstring(lstate, 1, &alias_len);
+
+  int codepoint;
+  char err_buf[256];
+  if (!validate_lua_alias(alias, alias_len, &codepoint, err_buf, sizeof(err_buf))) {
+    return luaL_error(lstate, "extregs.unbind: %s", err_buf);
+  }
+
+  lua_pushboolean(lstate, extreg_unbind(codepoint));
   return 1;
 }
 
 /// Lua: vim._extregs.is_alias(alias)
 int nlua_extregs_is_alias(lua_State *lstate)
 {
-  const char *alias = luaL_checkstring(lstate, 1);
-  lua_pushboolean(lstate, extreg_is_alias(alias));
+  size_t alias_len;
+  const char *alias = luaL_checklstring(lstate, 1, &alias_len);
+
+  int codepoint;
+  char err_buf[256];
+  if (!validate_lua_alias(alias, alias_len, &codepoint, err_buf, sizeof(err_buf))) {
+    return luaL_error(lstate, "extregs.is_alias: %s", err_buf);
+  }
+
+  lua_pushboolean(lstate, extreg_is_alias(codepoint));
+  return 1;
+}
+
+/// Lua: vim._extregs.get_provider_name_for_alias(alias)
+int nlua_extregs_get_provider_name_for_alias(lua_State *lstate)
+{
+  size_t alias_len;
+  const char *alias = luaL_checklstring(lstate, 1, &alias_len);
+
+  int codepoint;
+  char err_buf[256];
+  if (!validate_lua_alias(alias, alias_len, &codepoint, err_buf, sizeof(err_buf))) {
+    return luaL_error(lstate, "extregs.get_provider_name_for_alias: %s", err_buf);
+  }
+
+  const char *provider_name = extreg_get_provider_name_for_alias(codepoint);
+  
+  if (provider_name) {
+    lua_pushstring(lstate, provider_name);
+  } else {
+    lua_pushnil(lstate);
+  }
+  
   return 1;
 }
 

@@ -608,4 +608,36 @@ describe('extregs', function()
 
     eq(1, exec_lua([[ return _G.put_calls ]]))
   end)
+
+  it('alias use followed by ordinary register does not leak active_extreg', function()
+    -- Setup: register an extreg provider that tracks yank calls
+    exec_lua([[
+      _G.yank_calls = 0
+      vim._extregs.register('test', function()
+        _G.yank_calls = _G.yank_calls + 1
+        return { lines = { 'from-extreg' }, size = 1, type = 'v' }
+      end, function(data)
+        return data.lines[1]
+      end)
+      vim._extregs.bind('~', 'test')
+    ]])
+
+    -- Set up buffer content
+    api.nvim_buf_set_lines(0, 0, -1, true, { 'hello', 'world' })
+
+    -- Use the extreg alias (should trigger yank callback)
+    feed([[gg"~test<CR>yy]])
+
+    eq(1, exec_lua([[ return _G.yank_calls ]]))
+
+    -- Now use an ordinary register - extreg should NOT be called again
+    feed([[gg"a<CR>yy]])
+    eq(1, exec_lua([[ return _G.yank_calls ]])) -- Still 1, not 2!
+
+    -- Cleanup
+    exec_lua([[
+      vim._extregs.unbind('~')
+      vim._extregs.unregister('test')
+    ]])
+  end)
 end)

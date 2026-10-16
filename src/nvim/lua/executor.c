@@ -760,7 +760,7 @@ static void nlua_common_vim_init(lua_State *lstate, bool is_thread)
   lua_setfield(lstate, -2, "_empty_dict_mt");
 
   // vim._extregs
-  lua_createtable(lstate, 0, 7);
+  lua_createtable(lstate, 0, 8);
   lua_pushcfunction(lstate, &nlua_extregs_register);
   lua_setfield(lstate, -2, "register");
   lua_pushcfunction(lstate, &nlua_extregs_unregister);
@@ -771,6 +771,8 @@ static void nlua_common_vim_init(lua_State *lstate, bool is_thread)
   lua_setfield(lstate, -2, "unbind");
   lua_pushcfunction(lstate, &nlua_extregs_is_alias);
   lua_setfield(lstate, -2, "is_alias");
+  lua_pushcfunction(lstate, &nlua_extregs_get_provider_name_for_alias);
+  lua_setfield(lstate, -2, "get_provider_name_for_alias");
   lua_pushcfunction(lstate, &nlua_extregs_get_provider);
   lua_setfield(lstate, -2, "get_provider");
   lua_setfield(lstate, -2, "_extregs");

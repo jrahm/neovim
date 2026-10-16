@@ -5010,11 +5010,9 @@ static void nv_regname(cmdarg_T *cap)
   if (checkclearop(cap->oap)) {
     return;
   }
+  cap->nchar = get_extreg_or_alias_register(cap->nchar);
   if (cap->nchar == '=') {
     cap->nchar = get_expr_register();
-  }
-  if (cap->nchar == '~') {
-    cap->nchar = get_extreg_register();
   }
   if (cap->nchar != NUL && valid_yank_reg(cap->nchar, false)) {
     cap->oap->regname = cap->nchar;
@@ -6463,13 +6461,7 @@ static void nv_q(cmdarg_T *cap)
     // (stop) recording into a named register, unless executing a
     // register.
     if (reg_executing == 0) {
-      // Handle extreg register ~
-      if (cap->nchar == '~') {
-        cap->nchar = get_extreg_register();
-        if (cap->nchar == NUL) {
-          return;
-        }
-      }
+      cap->nchar = get_extreg_or_alias_register(cap->nchar);
       if (do_record(cap->nchar) == FAIL) {
         clearopbeep(cap->oap);
       }
@@ -6483,13 +6475,9 @@ static void nv_at(cmdarg_T *cap)
   if (checkclearop(cap->oap)) {
     return;
   }
+  cap->nchar = get_extreg_or_alias_register(cap->nchar);
   if (cap->nchar == '=') {
     if (get_expr_register() == NUL) {
-      return;
-    }
-  } else if (cap->nchar == '~') {
-    cap->nchar = get_extreg_register();
-    if (cap->nchar == NUL) {
       return;
     }
   }
