@@ -224,10 +224,6 @@ int extreg_unregister(const char *name)
 
   hash_unlock(&extreg_providers);
 
-  // Free Lua callbacks
-  nlua_unref_global(get_global_lstate(), prov->text_yanked_cb);
-  nlua_unref_global(get_global_lstate(), prov->text_put_cb);
-
   extreg_free_provider(prov);
 
   return true;
@@ -235,6 +231,13 @@ int extreg_unregister(const char *name)
 
 void extreg_free_provider(extreg_provider_t* prov)
 {
+  if (active_extreg == prov) {
+    active_extreg = NULL;
+  }
+  // Free Lua callbacks
+  nlua_unref_global(get_global_lstate(), prov->text_yanked_cb);
+  nlua_unref_global(get_global_lstate(), prov->text_put_cb);
+
   free_register(&prov->yreg);
   xfree(prov);
 }
@@ -510,6 +513,7 @@ bool extreg_materialize(extreg_provider_t *prov)
   nlua_pop_typval(lstate, &tv);
 
   // Convert Lua dict to yankreg_T and store in provider's yreg
+  free_register(&prov->yreg); // Clear register before overwriting it.
   if (!lua_tv_to_yankreg(&tv, &prov->yreg)) {
     tv_clear(&tv);
     prov->recursion_id = 0;
@@ -560,7 +564,21 @@ bool extreg_commit(extreg_provider_t *prov)
 
   // Push yankreg as a Lua table
   lua_createtable(lstate, (int)prov->yreg.y_size, 2);  // array + 2 fields
-  lua_pushinteger(lstate, (lua_Integer)prov->yreg.y_type);
+   
+  const char* type;
+  switch (prov->yreg.y_type) {
+  case kMTUnknown:
+  case kMTCharWise:
+    type = "v";
+    break;
+  case kMTLineWise:
+    type = "V";
+    break;
+  case kMTBlockWise:
+    type = "b";
+    break;
+  }
+  lua_pushstring(lstate, type);
   lua_setfield(lstate, -2, "type");
   lua_pushinteger(lstate, (lua_Integer)prov->yreg.y_size);
   lua_setfield(lstate, -2, "size");

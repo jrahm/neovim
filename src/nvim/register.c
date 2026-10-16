@@ -1215,7 +1215,10 @@ void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
 
   // Handle extreg register ~ - commit to the extreg provider
   // This works for both yank and delete operations since both use op_yank_reg()
-  if (oap->regname == '~' && active_extreg != NULL) {
+  //
+  // However we ensure that the register we're yanking into is the active_extreg before committing,
+  // otherwise we get commits for other registers updating (i.e. numbered registers).
+  if (oap->regname == '~' && active_extreg != NULL && &active_extreg->yreg == reg) {
     extreg_commit(active_extreg);
   }
 
@@ -2739,6 +2742,10 @@ static void finish_write_reg(int name, yankreg_T *reg, yankreg_T *old_y_previous
   if (name != '"') {
     y_previous = old_y_previous;
   }
+
+  if (name == '~') {
+    extreg_commit(active_extreg);
+  }
 }
 
 /// store `str` in register `name`
@@ -2868,9 +2875,6 @@ void write_reg_contents_ex(int name, const char *str, ssize_t len, bool must_app
   }
   str_to_reg(reg, yank_type, str, (size_t)len, block_len, false);
 
-  if (name == '~') {
-    extreg_commit(active_extreg);
-  }
   finish_write_reg(name, reg, old_y_previous);
 }
 

@@ -6607,6 +6607,17 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
   }
 
   if (Visual.active) {
+    // Handle extreg register ~
+    if (cap->oap->regname == '~') {
+      if (active_extreg == NULL) {
+        semsg(_("E356: Cannot get from extregister: no provider selected"));
+        return;
+      }
+      if (!extreg_materialize(active_extreg)) {
+        semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+        return;
+      }
+    }
     // Putting in Visual mode: The put text replaces the selected
     // text.  First delete the selected text, then put the new text.
     // Need to save and restore the registers that the delete
@@ -6618,7 +6629,7 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
     bool clipoverwrite = (regname == '+' || regname == '*')
                          && (cb_flags & (kOptCbFlagUnnamed | kOptCbFlagUnnamedplus));
     if (regname == 0 || regname == '"' || clipoverwrite
-        || ascii_isdigit(regname) || regname == '-') {
+        || ascii_isdigit(regname) || regname == '-' || (regname == '~' && active_extreg != NULL)) {
       // The delete might overwrite the register we want to put, save it first
       savereg = copy_register(regname);
     }
@@ -6672,31 +6683,10 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
     Visual.active = true;
   }
 
-  // Handle extreg register ~
-  if (cap->oap->regname == '~') {
-    if (active_extreg == NULL) {
-      semsg(_("E356: Cannot get from extregister: no provider selected"));
-      return;
-    }
-    if (!extreg_materialize(active_extreg)) {
-      semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
-      return;
-    }
-    // Get the materialized register (returns &active_extreg->yreg)
-    savereg = get_yank_register(cap->oap->regname, YREG_PASTE);
-    if (savereg->y_array == NULL) {
-      semsg(_("E356: extregister '%s' is empty"), active_extreg->name);
-      return;
-    }
-  } else if (savereg == NULL) {
-    savereg = get_yank_register(cap->oap->regname, YREG_PASTE);
-  }
-
   do_put(cap->oap->regname, savereg, dir, cap->count1, flags);
 
   // If a register was saved, free it
-  // Don't free it for ~ register since it points to extreg provider's yreg
-  if (savereg != NULL && cap->oap->regname != '~') {
+  if (savereg != NULL) {
     free_register(savereg);
     xfree(savereg);
   }

@@ -20,6 +20,7 @@
 #include "nvim/drawline.h"
 #include "nvim/errors.h"
 #include "nvim/eval.h"
+#include "nvim/extreg.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
@@ -968,6 +969,7 @@ void free_all_mem(void)
   // Clear registers.
   clear_registers();
   redo_free_all();
+  extreg_clear_all();
 
   // highlight info
   free_highlight();
