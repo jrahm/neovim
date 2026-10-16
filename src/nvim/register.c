@@ -2460,8 +2460,8 @@ void ex_display(exarg_T *eap)
   }
 
   // display extreg providers
-  msg_puts_title(_("\nExtregs"));
   if (extreg_providers.ht_used > 0 && !got_int) {
+    msg_puts_title(_("\nExtregs"));
     hash_lock(&extreg_providers);
     HASHTAB_ITER(&extreg_providers, hi, {
       extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);
@@ -2500,8 +2500,8 @@ void ex_display(exarg_T *eap)
   }
 
   // display extreg aliases
-  msg_puts_title(_("\nAliases"));
   if (extreg_aliases.dv_hashtab.ht_used > 0 && !got_int) {
+    msg_puts_title(_("\nAliases"));
     TV_DICT_ITER(&extreg_aliases, di, {
       const char *alias_key = di->di_key;
       const char *provider_name = di->di_tv.vval.v_string;
