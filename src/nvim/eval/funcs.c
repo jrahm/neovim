@@ -2513,6 +2513,7 @@ static void f_has(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
     "eval",         // always present, of course!
     "ex_extra",
     "extra_search",
+    "extregs",
     "file_in_path",
     "filterpipe",
     "find_in_path",

@@ -273,11 +273,12 @@ void extreg_free_provider(extreg_provider_t* prov)
 /// @return true on success, false on failure
 int extreg_bind(int alias_codepoint, const char *provider_name)
 {
+  char utf8_buf[MB_MAXBYTES + 1];
+  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
+  utf8_buf[utf8_len] = NUL;
+
   if (!is_valid_alias(alias_codepoint)) {
-    char buf[MB_MAXBYTES + 1];
-    int len = utf_char2bytes(alias_codepoint, buf);
-    buf[len] = NUL;
-    semsg(_("E356: '%s' cannot be used as an extregister alias"), buf);
+    semsg(_("E356: '%s' cannot be used as an extregister alias"), utf8_buf);
     return false;
   }
 
@@ -287,12 +288,14 @@ int extreg_bind(int alias_codepoint, const char *provider_name)
     return false;
   }
 
-  // Convert codepoint to UTF-8 string for dict storage
-  char utf8_buf[MB_MAXBYTES + 1];
-  int utf8_len = utf_char2bytes(alias_codepoint, utf8_buf);
-  utf8_buf[utf8_len] = NUL;
+  // Don't allow overriding bindings. Must explicitly unbind()
+  dictitem_T *di = tv_dict_find(&extreg_aliases, utf8_buf, (ptrdiff_t)utf8_len);
+  if (di != NULL) {
+    semsg(_("E356: alias '%s' already bound."), utf8_buf);
+    return false;
+  }
 
-  dictitem_T *di = tv_dict_item_alloc_len(utf8_buf, (size_t)utf8_len);
+  di = tv_dict_item_alloc_len(utf8_buf, (size_t)utf8_len);
   di->di_tv.v_type = VAR_STRING;
   di->di_tv.vval.v_string = xstrdup(provider_name);
   tv_dict_add(&extreg_aliases, di);
@@ -320,7 +323,6 @@ int extreg_unbind(int alias_codepoint)
 
   // Remove from alias dict
   tv_dict_item_remove(alias_dict, di);
-
   return true;
 }
 
@@ -756,7 +758,12 @@ int nlua_extregs_register(lua_State *lstate)
   LuaRef tp_ref
     = lua_gettop(lstate) >= 3 && !lua_isnil(lstate, 3) ? nlua_ref_global(lstate, -1) : LUA_NOREF;
 
-  lua_pushinteger(lstate, extreg_register(name, ty_ref, tp_ref));
+  int ec = extreg_register(name, ty_ref, tp_ref);
+  lua_pushinteger(lstate, ec);
+  if (!ec) {
+    nlua_unref_global(lstate, ty_ref);
+    nlua_unref_global(lstate, tp_ref);
+  }
   return 1;
 }
 
