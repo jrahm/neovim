@@ -242,7 +242,6 @@ int extreg_unregister(const char *name)
   hashitem_T *hi = hash_find(&extreg_providers, name);
   if (HASHITEM_EMPTY(hi)) {
     hash_unlock(&extreg_providers);
-    semsg(_("E356: Unknown extregister name '%s'"), name);
     return false;
   }
   extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);

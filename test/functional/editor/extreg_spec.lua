@@ -640,4 +640,126 @@ describe('extregs', function()
       vim._extregs.unregister('test')
     ]])
   end)
+
+  it('displays extregs in :registers command without materializing them', function()
+    exec_lua([[
+      _G.yank_calls = 0
+      _G.put_calls = 0
+
+      vim._extregs.register(
+        'test',
+        function(_)
+          _G.yank_calls = _G.yank_calls + 1
+          return true
+        end,
+        function()
+          _G.put_calls = _G.put_calls + 1
+          return {
+            lines = { 'a', 'b', 'c' },
+            size = 3,
+            type = 'v',
+          }
+        end
+      )
+    ]])
+
+    local msg = api.nvim_cmd({ cmd = 'registers' }, { output = true })
+
+    eq(true, msg:find('\nExtregs\n', 1, true) ~= nil)
+    eq(true, msg:find('\n  c  "~test\n', 1, true) ~= nil)
+
+    eq(
+      { yank_calls = 0, put_calls = 0 },
+      exec_lua([[
+        return {
+          yank_calls = _G.yank_calls,
+          put_calls = _G.put_calls,
+        }
+      ]])
+    )
+
+    exec_lua([[
+      vim._extregs.unregister('test')
+      _G.yank_calls = nil
+      _G.put_calls = nil
+    ]])
+  end)
+
+  it('displays extreg aliases in :registers command', function()
+    exec_lua([[
+      _G.yank_calls = 0
+      _G.put_calls = 0
+
+      vim._extregs.register(
+        'test',
+        function(_)
+          _G.yank_calls = _G.yank_calls + 1
+          return true
+        end,
+        function()
+          _G.put_calls = _G.put_calls + 1
+          return {
+            lines = { 'content' },
+            size = 1,
+            type = 'v',
+          }
+        end
+      )
+
+      vim._extregs.bind('&', 'test')
+    ]])
+
+    local msg = api.nvim_cmd({ cmd = 'registers' }, { output = true })
+
+    eq(true, msg:find('\nExtregs\n', 1, true) ~= nil)
+    eq(true, msg:find('\n  c  "~test\n', 1, true) ~= nil)
+
+    eq(true, msg:find('\nAliases\n', 1, true) ~= nil)
+    eq(true, msg:find('\n  *  "& -> "~test', 1, true) ~= nil)
+
+    eq(
+      { yank_calls = 0, put_calls = 0 },
+      exec_lua([[
+        return {
+          yank_calls = _G.yank_calls,
+          put_calls = _G.put_calls,
+        }
+      ]])
+    )
+
+    exec_lua([[
+      vim._extregs.unbind('&')
+      vim._extregs.unregister('test')
+      _G.yank_calls = nil
+      _G.put_calls = nil
+    ]])
+  end)
+
+  it('displays multiple extregs in :registers command', function()
+    exec_lua([[
+      vim._extregs.register(
+        'alpha',
+        function(_) return true end,
+        function() return 'alpha-content' end
+      )
+
+      vim._extregs.register(
+        'beta',
+        function(_) return true end,
+        function() return 'beta-content' end
+      )
+    ]])
+
+    local msg = api.nvim_cmd({ cmd = 'registers' }, { output = true })
+
+    eq(true, msg:find('\nExtregs\n', 1, true) ~= nil)
+    eq(true, msg:find('\n  c  "~alpha\n', 1, true) ~= nil)
+    eq(true, msg:find('\n  c  "~beta\n', 1, true) ~= nil)
+
+    exec_lua([[
+      vim._extregs.unregister('alpha')
+      vim._extregs.unregister('beta')
+    ]])
+  end)
 end)
+

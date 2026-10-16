@@ -18,6 +18,8 @@
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
 #include "nvim/extreg.h"
+#include "nvim/hashtab.h"
+#include "nvim/eval/typval.h"
 #include "nvim/file_search.h"
 #include "nvim/fold.h"
 #include "nvim/garray.h"
@@ -2456,6 +2458,71 @@ void ex_display(exarg_T *eap)
     msg_puts("\n  c  \"=   ");
     dis_msg(expr_line, false);
   }
+
+  // display extreg providers
+  msg_puts_title(_("\nExtregs"));
+  if (extreg_providers.ht_used > 0 && !got_int) {
+    hash_lock(&extreg_providers);
+    HASHTAB_ITER(&extreg_providers, hi, {
+      extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);
+
+      if (arg != NULL && vim_strchr(arg, '~') == NULL) {
+        continue;  // did not ask for extregs
+      }
+
+      // Get the type from the y_reg
+      char type = 'c';  // default to charwise
+      if (prov->yreg.y_array != NULL && prov->yreg.y_size > 0) {
+        switch (prov->yreg.y_type) {
+        case kMTLineWise:
+          type = 'l';
+          break;
+        case kMTCharWise:
+          type = 'c';
+          break;
+        case kMTBlockWise:
+          type = 'b';
+          break;
+        default:
+          type = 'c';
+          break;
+        }
+      }
+
+      msg_putchar('\n');
+      msg_puts("  ");
+      msg_putchar(type);
+      msg_puts("  \"~");
+      msg_puts(prov->name);
+      os_breakcheck();
+    });
+    hash_unlock(&extreg_providers);
+  }
+
+  // display extreg aliases
+  msg_puts_title(_("\nAliases"));
+  if (extreg_aliases.dv_hashtab.ht_used > 0 && !got_int) {
+    TV_DICT_ITER(&extreg_aliases, di, {
+      const char *alias_key = di->di_key;
+      const char *provider_name = di->di_tv.vval.v_string;
+
+      if (arg != NULL) {
+        // Check if the alias character is in the filter
+        char alias_char = alias_key[0];
+        if (vim_strchr(arg, alias_char) == NULL && vim_strchr(arg, '~') == NULL) {
+          continue;  // did not ask for this alias
+        }
+      }
+
+      msg_putchar('\n');
+      msg_puts("  *  \"");
+      msg_puts(alias_key);
+      msg_puts(" -> \"~");
+      msg_puts(provider_name);
+      os_breakcheck();
+    });
+  }
+
   msg_ext_skip_flush = false;
 }
 
