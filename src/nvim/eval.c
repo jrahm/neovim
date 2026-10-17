@@ -2758,6 +2758,12 @@ static int eval7(char **arg, typval_T *rettv, evalarg_T *const evalarg, bool wan
       xfree(extreg_name);
       active_extreg = extreg;
       *arg = next_arg;
+    } else {
+      extreg_provider_t* provider = extreg_get_provider_for_alias(regname);
+      if (provider) {
+        regname = '~';
+        active_extreg = provider;
+      }
     }
     if (evaluate) {
       rettv->v_type = VAR_STRING;

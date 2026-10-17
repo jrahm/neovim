@@ -1354,9 +1354,9 @@ static int parse_register(exarg_T *eap)
       // Do not allow register = for user commands
       && (!IS_USER_CMDIDX(eap->cmdidx) || *eap->arg != '=')
       && !((eap->argt & EX_COUNT) && ascii_isdigit(*eap->arg))) {
-    if (valid_yank_reg(*eap->arg,
-                       (!IS_USER_CMDIDX(eap->cmdidx)
-                        && eap->cmdidx != CMD_put && eap->cmdidx != CMD_iput))) {
+    if (valid_yank_reg(*eap->arg, (!IS_USER_CMDIDX(eap->cmdidx) && eap->cmdidx != CMD_put
+                                   && eap->cmdidx != CMD_iput))
+        || extreg_is_alias(*eap->arg)) {
       eap->regname = (uint8_t)(*eap->arg++);
       // for '=' register: accept the rest of the line as an expression
       if (eap->arg[-1] == '=' && eap->arg[0] != NUL) {
@@ -1385,6 +1385,12 @@ static int parse_register(exarg_T *eap)
           }
         }
         eap->arg = next_arg;
+      } else {
+        extreg_provider_t* provider = extreg_get_provider_for_alias(eap->regname);
+        if (provider) {
+          eap->regname = '~';
+          active_extreg = provider;
+        }
       }
       eap->arg = skipwhite(eap->arg);
     }

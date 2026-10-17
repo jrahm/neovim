@@ -1483,7 +1483,8 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
   char *arg_end = NULL;
   arg++;
   char *after = arg + 1;
-  if (*arg == '~') {
+  int regname = (int) *arg;
+  if (regname == '~') {
     char *next_arg = NULL;
     char *extreg_name = extreg_parse_provider(arg, &next_arg);
     if (!extreg_name) {
@@ -1499,6 +1500,12 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
     xfree(extreg_name);
     active_extreg = extreg;
     after = next_arg;
+  } else {
+    extreg_provider_t* extreg_provider = extreg_get_provider_for_alias(regname);
+    if (extreg_provider) {
+      regname = '~';
+      active_extreg = extreg_provider;
+    }
   }
 
   if (op != NULL && vim_strchr("+-*/%", (uint8_t)(*op)) != NULL) {
@@ -1510,7 +1517,7 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
     char *ptofree = NULL;
     const char *p = tv_get_string_chk(tv);
     if (p != NULL && op != NULL && *op == '.') {
-      char *s = get_reg_contents(*arg == '@' ? '"' : *arg, kGRegExprSrc);
+      char *s = get_reg_contents(regname == '@' ? '"' : regname, kGRegExprSrc);
       if (s != NULL) {
         ptofree = concat_str(s, p);
         p = ptofree;
@@ -1518,7 +1525,7 @@ static char *ex_let_register(char *arg, typval_T *const tv, const bool is_const,
       }
     }
     if (p != NULL) {
-      write_reg_contents(*arg == '@' ? '"' : *arg, p, (ssize_t)strlen(p), false);
+      write_reg_contents(regname == '@' ? '"' : regname, p, (ssize_t)strlen(p), false);
       arg_end = after;
     }
     xfree(ptofree);
@@ -2214,19 +2221,32 @@ void set_vim_var_partial(const VimVarIndex idx, partial_T *val)
 /// Set v:register if needed.
 void set_reg_var(int c)
 {
-  char regname[2];
+  char *regname;
+  size_t len;
 
-  if (c == 0 || c == ' ') {
-    regname[0] = '"';
+  if (c == '~') {
+    // Need to fit the full regname in here.
+    len = strlen(active_extreg->name) + 1;
+    regname = xmalloc(len + 1);
+    regname[0] = '~';
+    strcpy(regname + 1, active_extreg->name);
   } else {
-    regname[0] = (char)c;
+    len = 1;
+    regname = xmalloc(2);
+    if (c == 0 || c == ' ') {
+      regname[0] = '"';
+    } else {
+      regname[0] = (char)c;
+    }
+    regname[1] = NUL;
   }
-  regname[1] = NUL;
   // Avoid free/alloc when the value is already right.
   typval_T *tv = get_vim_var_tv(VV_REG);
   if (tv->vval.v_string == NULL || tv->vval.v_string[0] != c) {
-    set_vim_var_string(VV_REG, regname, 1);
+    set_vim_var_string(VV_REG, regname, (long) len);
   }
+
+  free(regname);
 }
 
 /// Get or set v:exception.  If "oldval" == NULL, return the current value.

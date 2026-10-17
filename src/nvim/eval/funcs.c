@@ -2293,6 +2293,12 @@ static int getreg_get_regname(typval_T *argvars)
     }
     active_extreg = extreg;
     return '~';
+  } else {
+    extreg_provider_t* provider = extreg_get_provider_for_alias(*strregname);
+    if (provider) {
+      active_extreg = provider;
+      return '~';
+    }
   }
 
   return *strregname == 0 ? '"' : (uint8_t)(*strregname);
@@ -6419,6 +6425,12 @@ static void f_setreg(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
       return;
     }
     active_extreg = extreg;
+  } else {
+    extreg_provider_t *provider = extreg_get_provider_for_alias(regname);
+    if (provider) {
+      active_extreg = provider;
+      regname = '~';
+    }
   }
 
   const typval_T *regcontents = NULL;

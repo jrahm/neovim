@@ -761,5 +761,42 @@ describe('extregs', function()
       vim._extregs.unregister('beta')
     ]])
   end)
+  it('sets v:register for extreg yank and put', function()
+    exec_lua([[
+      _G.yank_v_register = nil
+      _G.put_v_register = nil
+
+      vim._extregs.register('vreg.test',
+        function(yankreg)
+          _G.yank_v_register = vim.v.register
+          return true
+        end,
+
+        function()
+          _G.put_v_register = vim.v.register
+          return {
+            lines = { 'from-vreg' },
+            type = 'v',
+          }
+        end
+      )
+    ]])
+
+    api.nvim_buf_set_lines(0, 0, -1, true, {
+      'hello',
+    })
+
+    feed('gg"~vreg.test<CR>yy')
+
+    eq('~vreg.test', exec_lua([[
+      return _G.yank_v_register
+    ]]))
+
+    feed('gg"~vreg.test<CR>p')
+
+    eq('~vreg.test', exec_lua([[
+      return _G.put_v_register
+    ]]))
+  end)
 end)
 
