@@ -70,6 +70,7 @@
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/ex_getln_defs.h"
+#include "nvim/extreg.h"
 #include "nvim/garray.h"
 #include "nvim/garray_defs.h"
 #include "nvim/gettext_defs.h"
@@ -243,6 +244,11 @@ static void redo_prefix(const CmdSpec *spec, StringBuilder *buf, bool replay)
     sb_add_char(buf, '"');
     sb_add_char(buf, spec->regname);
     if (replay && spec->regname == '=') {
+      sb_add_char(buf, CAR);
+    }
+    if (replay && spec->regname == '~' && active_extreg != NULL) {
+      const char* name = active_extreg->name;
+      sb_add_lit(buf, name, strlen(name));
       sb_add_char(buf, CAR);
     }
   }

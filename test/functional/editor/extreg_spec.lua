@@ -799,5 +799,71 @@ describe('extregs', function()
       return _G.put_v_register
     ]]))
   end)
-end)
 
+  it('dot-repeat calls extreg put callback each time', function()
+    exec_lua([[
+      _G.put_counter = 0
+      vim._extregs.register('counter',
+        function(_)
+          return true
+        end,
+        function()
+          _G.put_counter = _G.put_counter + 1
+          return {
+            lines = { 'counter: ' .. _G.put_counter },
+            size = 1,
+            type = 'V',
+          }
+        end
+      )
+    ]])
+
+    api.nvim_buf_set_lines(0, 0, -1, true, {
+      'line one',
+      'line two',
+      'line three',
+      'line four',
+      'line five',
+    })
+
+    -- Perform initial linewise put with extreg at end of file
+    feed('G"~counter<CR>p')
+
+    eq(1, exec_lua([[ return _G.put_counter ]]))
+
+    -- First dot-repeat
+    feed('.')
+
+    -- Extreg callback should be called again for dot-repeat
+    eq(2, exec_lua([[ return _G.put_counter ]]))
+
+    -- Second dot-repeat
+    feed('.')
+
+    eq(3, exec_lua([[ return _G.put_counter ]]))
+
+    -- Third dot-repeat
+    feed('.')
+
+    eq(4, exec_lua([[ return _G.put_counter ]]))
+
+    -- Verify that content was actually put each time (linewise puts after cursor)
+    eq({
+      'line one',
+      'line two',
+      'line three',
+      'line four',
+      'line five',
+      'counter: 1',
+      'counter: 2',
+      'counter: 3',
+      'counter: 4',
+    }, api.nvim_buf_get_lines(0, 0, -1, true))
+
+    -- Cleanup
+    exec_lua([[
+      vim._extregs.unregister('counter')
+      _G.put_counter = nil
+    ]])
+  end)
+end)
