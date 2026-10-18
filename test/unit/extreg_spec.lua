@@ -1,5 +1,6 @@
 local t = require('test.unit.testutil')
 
+local describe, it = t.describe, t.it
 local itp = t.gen_itp(it)
 local cimport = t.cimport
 local child_call_once = t.child_call_once
@@ -23,10 +24,10 @@ describe('extreg provider registration', function()
   itp('provider can be registered successfully', function()
     local result = lib.extreg_register('test-provider', -1, -1)
     eq(1, result) -- extreg_register returns int (1 = success)
-    
+
     local prov = lib.extreg_get_provider('test-provider')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
@@ -35,7 +36,7 @@ describe('extreg provider registration', function()
     lib.extreg_register('test-provider', -1, -1)
     local result = lib.extreg_register('test-provider', -1, -1)
     eq(0, result) -- Duplicate should fail (0 = failure)
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
@@ -48,10 +49,10 @@ describe('extreg provider registration', function()
 
   itp('provider can be retrieved by name', function()
     lib.extreg_register('named-provider', -1, -1)
-    
+
     local prov = lib.extreg_get_provider('named-provider')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('named-provider')
   end)
@@ -65,10 +66,10 @@ end)
 describe('extreg provider unregistering', function()
   itp('provider can be unregistered successfully', function()
     lib.extreg_register('to-unregister', -1, -1)
-    
+
     local result = lib.extreg_unregister('to-unregister')
     eq(1, result) -- 1 = success
-    
+
     -- Provider should be gone
     local prov = lib.extreg_get_provider('to-unregister')
     eq(nil, prov)
@@ -82,7 +83,7 @@ describe('extreg provider unregistering', function()
   itp('unregistering already unregistered provider fails', function()
     lib.extreg_register('once-only', -1, -1)
     lib.extreg_unregister('once-only')
-    
+
     local result = lib.extreg_unregister('once-only')
     eq(0, result) -- 0 = failure
   end)
@@ -91,12 +92,12 @@ end)
 describe('extreg alias binding', function()
   itp('alias can be bound to provider', function()
     lib.extreg_register('alias-target', -1, -1)
-    
+
     local result = lib.extreg_bind(char2codepoint('@'), 'alias-target')
     eq(1, result) -- 1 = success
-    
+
     eq(true, lib.extreg_is_alias(char2codepoint('@')))
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('@'))
     lib.extreg_unregister('alias-target')
@@ -104,29 +105,29 @@ describe('extreg alias binding', function()
 
   itp('lowercase letters cannot be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     eq(0, lib.extreg_bind(char2codepoint('a'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('b'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('z'), 'test-provider'))
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
 
   itp('uppercase letters cannot be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     eq(0, lib.extreg_bind(char2codepoint('A'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('B'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('Z'), 'test-provider'))
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
 
   itp('special characters cannot be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     eq(0, lib.extreg_bind(char2codepoint('='), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('#'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('%'), 'test-provider'))
@@ -135,44 +136,44 @@ describe('extreg alias binding', function()
     eq(0, lib.extreg_bind(char2codepoint(':'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint(';'), 'test-provider'))
     eq(0, lib.extreg_bind(char2codepoint('+'), 'test-provider'))
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
 
   itp('digits cannot be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     for i = 0, 9 do
       eq(0, lib.extreg_bind(char2codepoint(tostring(i)), 'test-provider'))
     end
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
 
   itp('control characters cannot be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
-    eq(0, lib.extreg_bind(char2codepoint(string.char(32)), 'test-provider')) -- space
-    eq(0, lib.extreg_bind(char2codepoint(string.char(9)), 'test-provider'))  -- tab
-    eq(0, lib.extreg_bind(char2codepoint(string.char(10)), 'test-provider')) -- newline
-    eq(0, lib.extreg_bind(char2codepoint(string.char(13)), 'test-provider')) -- carriage return
-    eq(0, lib.extreg_bind(char2codepoint(string.char(0)), 'test-provider'))  -- NUL
+
+    eq(0, lib.extreg_bind(char2codepoint(string.char(32)), 'test-provider'))  -- space
+    eq(0, lib.extreg_bind(char2codepoint(string.char(9)), 'test-provider'))   -- tab
+    eq(0, lib.extreg_bind(char2codepoint(string.char(10)), 'test-provider'))  -- newline
+    eq(0, lib.extreg_bind(char2codepoint(string.char(13)), 'test-provider'))  -- carriage return
+    eq(0, lib.extreg_bind(char2codepoint(string.char(0)), 'test-provider'))   -- NUL
     eq(0, lib.extreg_bind(char2codepoint(string.char(127)), 'test-provider')) -- DEL
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
 
   itp('valid special characters can be used as aliases', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     eq(1, lib.extreg_bind(char2codepoint('@'), 'test-provider'))
     eq(1, lib.extreg_bind(char2codepoint('$'), 'test-provider'))
     eq(1, lib.extreg_bind(char2codepoint('!'), 'test-provider'))
     eq(1, lib.extreg_bind(char2codepoint('`'), 'test-provider'))
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('@'))
     lib.extreg_unbind(char2codepoint('$'))
@@ -184,13 +185,14 @@ describe('extreg alias binding', function()
   itp('alias can be rebound to different provider', function()
     lib.extreg_register('provider-1', -1, -1)
     lib.extreg_register('provider-2', -1, -1)
-    
+
     eq(1, lib.extreg_bind(char2codepoint('@'), 'provider-1'))
     eq(true, lib.extreg_is_alias(char2codepoint('@')))
-    
+
+    eq(1, lib.extreg_unbind(char2codepoint('@')))
     eq(1, lib.extreg_bind(char2codepoint('@'), 'provider-2'))
     eq(true, lib.extreg_is_alias(char2codepoint('@'))) -- Alias still exists
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('@'))
     lib.extreg_unregister('provider-1')
@@ -202,14 +204,14 @@ describe('extreg alias unbinding', function()
   itp('alias can be unbound successfully', function()
     lib.extreg_register('unbind-target', -1, -1)
     eq(1, lib.extreg_bind(char2codepoint('`'), 'unbind-target'))
-    
+
     eq(true, lib.extreg_is_alias(char2codepoint('`')))
-    
+
     local result = lib.extreg_unbind(char2codepoint('`'))
     eq(1, result) -- 1 = success
-    
+
     eq(false, lib.extreg_is_alias(char2codepoint('`')))
-    
+
     -- Cleanup
     lib.extreg_unregister('unbind-target')
   end)
@@ -217,7 +219,7 @@ describe('extreg alias unbinding', function()
   itp('unbinding non-bound alias fails', function()
     local result = lib.extreg_unbind(char2codepoint('@'))
     eq(0, result) -- 0 = failure
-    
+
     eq(false, lib.extreg_is_alias(char2codepoint('@')))
   end)
 end)
@@ -226,9 +228,9 @@ describe('extreg alias checking', function()
   itp('is_alias returns true for bound alias', function()
     lib.extreg_register('alias-test', -1, -1)
     eq(1, lib.extreg_bind(char2codepoint('$'), 'alias-test'))
-    
+
     eq(true, lib.extreg_is_alias(char2codepoint('$')))
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('$'))
     lib.extreg_unregister('alias-test')
@@ -243,12 +245,12 @@ describe('extreg clear all', function()
   itp('clear_all removes all providers', function()
     lib.extreg_register('clear-1', -1, -1)
     lib.extreg_register('clear-2', -1, -1)
-    
+
     eq(true, lib.extreg_get_provider('clear-1') ~= nil)
     eq(true, lib.extreg_get_provider('clear-2') ~= nil)
-    
+
     lib.extreg_clear_all()
-    
+
     eq(nil, lib.extreg_get_provider('clear-1'))
     eq(nil, lib.extreg_get_provider('clear-2'))
   end)
@@ -256,14 +258,14 @@ describe('extreg clear all', function()
   itp('clear_all does not clear aliases (per user preference)', function()
     lib.extreg_register('alias-provider', -1, -1)
     eq(1, lib.extreg_bind(char2codepoint('^'), 'alias-provider'))
-    
+
     eq(true, lib.extreg_is_alias(char2codepoint('^')))
-    
+
     lib.extreg_clear_all()
-    
+
     -- Aliases are NOT cleared per user preference (simple alias semantics)
     eq(true, lib.extreg_is_alias(char2codepoint('^')))
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('^'))
   end)
@@ -273,10 +275,10 @@ describe('extreg get provider for alias', function()
   itp('get_provider_name_for_alias returns provider name for bound alias', function()
     lib.extreg_register('my-provider', -1, -1)
     eq(1, lib.extreg_bind(char2codepoint('&'), 'my-provider'))
-    
+
     local provider_name = lib.extreg_get_provider_name_for_alias(char2codepoint('&'))
     eq('my-provider', ffi.string(provider_name))
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('&'))
     lib.extreg_unregister('my-provider')
@@ -290,10 +292,10 @@ describe('extreg get provider for alias', function()
   itp('get_provider_name_for_alias handles Unicode codepoints', function()
     lib.extreg_register('unicode-prov', -1, -1)
     eq(1, lib.extreg_bind(9786, 'unicode-prov')) -- U+263A WHITE SMILING FACE
-    
+
     local provider_name = lib.extreg_get_provider_name_for_alias(9786)
     eq('unicode-prov', ffi.string(provider_name))
-    
+
     -- Cleanup
     lib.extreg_unbind(9786)
     lib.extreg_unregister('unicode-prov')
@@ -303,10 +305,10 @@ end)
 describe('extreg Lua callbacks', function()
   itp('provider can be registered with -1 for callbacks', function()
     lib.extreg_register('no-callbacks', -1, -1)
-    
+
     local prov = lib.extreg_get_provider('no-callbacks')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('no-callbacks')
   end)
@@ -315,13 +317,13 @@ end)
 describe('extreg recursion guard', function()
   itp('recursion guard exists and works', function()
     lib.extreg_register('recursion-test', -1, -1)
-    
+
     local prov = lib.extreg_get_provider('recursion-test')
     eq(true, prov ~= nil)
-    
+
     -- Initially not recursing
     eq(false, lib.extreg_is_recursing(prov))
-    
+
     -- Cleanup
     lib.extreg_unregister('recursion-test')
   end)
@@ -331,18 +333,18 @@ describe('extreg parse provider', function()
   itp('parse_provider extracts name from ~provider syntax', function()
     local input = ffi.new('char[16]', '~provider-extra')
     local output = ffi.new('char*[1]')
-    
+
     local result = lib.extreg_parse_provider(input, output)
     eq(true, result ~= nil)
     eq('provider', ffi.string(result))
-    
+
     ffi.gc(result, ffi.free)
   end)
 
   itp('parse_provider fails with just ~', function()
     local input = ffi.new('char[2]', '~')
     local output = ffi.new('char*[1]')
-    
+
     local result = lib.extreg_parse_provider(input, output)
     eq(nil, result)
   end)
@@ -350,7 +352,7 @@ describe('extreg parse provider', function()
   itp('parse_provider stops at invalid characters', function()
     local input = ffi.new('char[10]', '~provider!name')
     local output = ffi.new('char*[1]')
-    
+
     local result = lib.extreg_parse_provider(input, output)
     -- Should stop at the '!' character
     if result then
@@ -365,12 +367,12 @@ describe('extreg Lua validation', function()
   -- Unit tests test the C API which doesn't have the Lua-level validation
   itp('control character aliases rejected', function()
     lib.extreg_register('test-provider', -1, -1)
-    
+
     -- Try to bind control characters through the C API
     eq(0, lib.extreg_bind(char2codepoint(string.char(10)), 'test-provider')) -- newline
     eq(0, lib.extreg_bind(char2codepoint(string.char(13)), 'test-provider')) -- carriage return
     eq(0, lib.extreg_bind(char2codepoint(string.char(0)), 'test-provider'))  -- NUL
-    
+
     -- Cleanup
     lib.extreg_unregister('test-provider')
   end)
@@ -393,14 +395,14 @@ end)
 describe('extreg Unicode aliases', function()
   itp('Unicode codepoints can be used as aliases', function()
     lib.extreg_register('unicode-provider', -1, -1)
-    
+
     -- Test various Unicode codepoints
     -- U+263A WHITE SMILING FACE = 9786 in decimal
     eq(1, lib.extreg_bind(9786, 'unicode-provider'))
-    
+
     -- Verify alias exists
     eq(true, lib.extreg_is_alias(9786))
-    
+
     -- Cleanup
     lib.extreg_unbind(9786)
     lib.extreg_unregister('unicode-provider')
@@ -408,10 +410,10 @@ describe('extreg Unicode aliases', function()
 
   itp('Unicode private use areas cannot be used as aliases', function()
     lib.extreg_register('pu-provider', -1, -1)
-    
+
     -- Test PUA codepoint U+E000 = 57344 in decimal
     eq(0, lib.extreg_bind(57344, 'pu-provider'))
-    
+
     -- Cleanup
     lib.extreg_unregister('pu-provider')
   end)
@@ -422,7 +424,7 @@ describe('extreg edge cases', function()
     lib.extreg_register('', -1, -1)
     local prov = lib.extreg_get_provider('')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('')
   end)
@@ -431,7 +433,7 @@ describe('extreg edge cases', function()
     lib.extreg_register('provider-with-spaces', -1, -1)
     local prov = lib.extreg_get_provider('provider-with-spaces')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('provider-with-spaces')
   end)
@@ -440,7 +442,7 @@ describe('extreg edge cases', function()
     lib.extreg_register('provider.with_special-chars', -1, -1)
     local prov = lib.extreg_get_provider('provider.with_special-chars')
     eq(true, prov ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('provider.with_special-chars')
   end)
@@ -449,11 +451,11 @@ describe('extreg edge cases', function()
     lib.extreg_register('prov-1', -1, -1)
     lib.extreg_register('prov-2', -1, -1)
     lib.extreg_register('prov-3', -1, -1)
-    
+
     eq(true, lib.extreg_get_provider('prov-1') ~= nil)
     eq(true, lib.extreg_get_provider('prov-2') ~= nil)
     eq(true, lib.extreg_get_provider('prov-3') ~= nil)
-    
+
     -- Cleanup
     lib.extreg_unregister('prov-1')
     lib.extreg_unregister('prov-2')
@@ -463,13 +465,14 @@ describe('extreg edge cases', function()
   itp('alias rebind updates binding', function()
     lib.extreg_register('prov-a', -1, -1)
     lib.extreg_register('prov-b', -1, -1)
-    
+
     eq(1, lib.extreg_bind(char2codepoint('@'), 'prov-a'))
     eq(true, lib.extreg_is_alias(char2codepoint('@')))
-    
+
+    eq(1, lib.extreg_unbind(char2codepoint('@')))
     eq(1, lib.extreg_bind(char2codepoint('@'), 'prov-b'))
     eq(true, lib.extreg_is_alias(char2codepoint('@'))) -- Alias still exists
-    
+
     -- Cleanup
     lib.extreg_unbind(char2codepoint('@'))
     lib.extreg_unregister('prov-a')

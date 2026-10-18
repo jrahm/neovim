@@ -1195,7 +1195,8 @@ void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
       if (oap->regname == NUL) {
         *namebuf = NUL;
       } else {
-        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%c"), oap->regname);
+        vim_snprintf(namebuf, sizeof(namebuf), _(" into \"%c%s"), oap->regname,
+            oap->regname == '~' && active_extreg != NULL ? active_extreg->name : "");
       }
 
       // redisplay now, so message is not deleted

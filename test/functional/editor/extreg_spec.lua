@@ -866,4 +866,27 @@ describe('extregs', function()
       _G.put_counter = nil
     ]])
   end)
+
+  it('properly displays yanked status line', function()
+    exec_lua([[
+      vim._extregs.register('empty.reg',
+        function(_)
+          return true
+        end,
+        -1
+      )
+    ]])
+
+    api.nvim_buf_set_lines(0, 0, -1, true, {
+      'line one',
+      'line two',
+      'line three',
+      'line four',
+      'line five',
+    })
+
+    -- Perform initial linewise put with extreg at end of file
+    feed(':%yank ~empty.reg<CR>')
+    eq('5 lines yanked into "~empty.reg', exec_lua([[ return vim.v.statusmsg ]]))
+  end)
 end)
