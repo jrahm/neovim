@@ -6594,18 +6594,18 @@ static void nv_put_opt(cmdarg_T *cap, bool fix_indent)
     flags |= PUT_BLOCK_INNER;
   }
 
-  if (Visual.active) {
-    // Handle extreg register ~
-    if (cap->oap->regname == '~') {
-      if (active_extreg == NULL) {
-        semsg(_("E356: Cannot get from extregister: no provider selected"));
-        return;
-      }
-      if (!extreg_materialize(active_extreg)) {
-        semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
-        return;
-      }
+  // Handle extreg register ~
+  if (cap->oap->regname == '~') {
+    if (active_extreg == NULL) {
+      semsg(_("E356: Cannot get from extregister: no provider selected"));
+      return;
     }
+    if (!extreg_materialize(active_extreg)) {
+      semsg(_("E356: Cannot get from extregister '%s'"), active_extreg->name);
+      return;
+    }
+  }
+  if (Visual.active) {
     // Putting in Visual mode: The put text replaces the selected
     // text.  First delete the selected text, then put the new text.
     // Need to save and restore the registers that the delete

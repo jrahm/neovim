@@ -1,6 +1,7 @@
 local t = require('test.testutil')
 local n = require('test.functional.testnvim')()
 
+local describe, it, before_each = t.describe, t.it, t.before_each
 local clear = n.clear
 local feed = n.feed
 local exec_lua = n.exec_lua
@@ -84,14 +85,14 @@ describe('extregs', function()
 
     feed([[G"~test<CR>p]])
 
-    eq(1, exec_lua([[ return _G.put_calls ]]))
-
     eq({
       'hello',
       'world',
       'from',
       'callback',
     }, api.nvim_buf_get_lines(0, 0, -1, true))
+
+    eq(1, exec_lua([[ return _G.put_calls ]]))
   end)
 
   it('supports Vimscript register read/write semantics', function()
