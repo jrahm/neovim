@@ -1508,6 +1508,14 @@ void set_expand_context(expand_T *xp)
     return;
   }
 
+  if (ccline->cmdfirstc == '~') {
+    xp->xp_context = EXPAND_EXTREGS;
+    xp->xp_pattern = ccline->cmdbuff;
+    xp->xp_line = ccline->cmdbuff;
+    xp->xp_col = ccline->cmdpos;
+    return;
+  }
+
   // Only handle ':', '>', or '=' command-lines, or expression input
   if (ccline->cmdfirstc != ':'
       && ccline->cmdfirstc != '>' && ccline->cmdfirstc != '='
@@ -2970,6 +2978,11 @@ static char *get_arg1_from_lua(char *lua, expand_T *xp, int idx)
   return NULL;
 }
 
+static char* get_extreg_arg(expand_T *xp, int idx) {
+  char* ret = get_arg1_from_lua("return vim._extregs.get_provider_names(...)", xp, idx);
+  return ret;
+}
+
 /// Completion for the |:marks| command. Given to ExpandGeneric().
 /// @param[in] xp  Expandy thing 🤷
 /// @param[in] idx  Index of the item.
@@ -3057,6 +3070,7 @@ static int ExpandOther(char *pat, expand_T *xp, regmatch_T *rmp, char ***matches
     { EXPAND_LSP, get_lsp_arg, true, false },
     { EXPAND_PACKDEL, get_packdel_arg, true, false },
     { EXPAND_PACKUPDATE, get_packupdate_arg, true, false },
+    { EXPAND_EXTREGS, get_extreg_arg, true, false },
   };
   int ret = FAIL;
 

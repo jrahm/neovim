@@ -3,6 +3,10 @@
 
 local M = {}
 
+function M.complete()
+  return vim._C._extregs.get_provider_names()
+end
+
 --- Register a new extregister provider
 ---@param name string Provider name
 ---@param text_yanked_cb? fun(content:table) Callback for yank operations

@@ -70,3 +70,4 @@ extern int nlua_extregs_unbind(lua_State *lstate);
 extern int nlua_extregs_is_alias(lua_State *lstate);
 extern int nlua_extregs_get_provider_name_for_alias(lua_State *lstate);
 extern int nlua_extregs_get_provider(lua_State *lstate);
+extern int nlua_extregs_get_provider_names(lua_State *lstate);

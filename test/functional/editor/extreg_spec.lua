@@ -889,4 +889,93 @@ describe('extregs', function()
     feed(':%yank ~empty.reg<CR>')
     eq('5 lines yanked into "~empty.reg', exec_lua([[ return vim.v.statusmsg ]]))
   end)
+
+  it('get_provider_names returns registered provider names', function()
+    exec_lua([[
+      vim._extregs.register('alpha',
+        function(_)
+          return true
+        end,
+        function()
+          return { lines = {'alpha'}, size = 1, type = 'v' }
+        end
+      )
+      vim._extregs.register('beta',
+        function(_)
+          return true
+        end,
+        function()
+          return { lines = {'beta'}, size = 1, type = 'v' }
+        end
+      )
+      vim._extregs.register('gamma',
+        function(_)
+          return true
+        end,
+        function()
+          return { lines = {'gamma'}, size = 1, type = 'v' }
+        end
+      )
+    ]])
+
+    local names = exec_lua([[ return vim._extregs.get_provider_names() ]])
+
+    eq('table', type(names))
+    -- 'test' provider exists from before_each, so we expect 6 providers total
+    eq(6, #names)
+
+    -- Check that all expected providers are present
+    local provider_map = {}
+    for i, name in ipairs(names) do
+      provider_map[name] = true
+    end
+    eq(true, provider_map.test)  -- from before_each
+    eq(true, provider_map['let.test'])  -- from before_each
+    eq(true, provider_map.alpha)
+    eq(true, provider_map.beta)
+    eq(true, provider_map.gamma)
+
+    -- Cleanup
+    exec_lua([[
+      vim._extregs.unregister('alpha')
+      vim._extregs.unregister('beta')
+      vim._extregs.unregister('gamma')
+    ]])
+  end)
+
+  it('get_provider_names handles empty and unregistered providers', function()
+    -- Unregister providers from before_each
+    exec_lua([[
+      vim._extregs.unregister('test')
+      vim._extregs.unregister('let.test')
+      vim._extregs.unregister('macro.replay')
+    ]])
+
+    -- Test with no providers
+    local names = exec_lua([[ return vim._extregs.get_provider_names() ]])
+    eq('table', type(names))
+    eq(0, #names)
+
+    -- Register one provider but then unregister it
+    exec_lua([[
+      vim._extregs.register('temp',
+        function(_)
+          return true
+        end,
+        function()
+          return { lines = {'temp'}, size = 1, type = 'v' }
+        end
+      )
+    ]])
+
+    names = exec_lua([[ return vim._extregs.get_provider_names() ]])
+    eq(1, #names)
+    eq('temp', names[1])
+
+    -- Unregister the provider
+    exec_lua([[ vim._extregs.unregister('temp') ]])
+
+    names = exec_lua([[ return vim._extregs.get_provider_names() ]])
+    eq(0, #names)
+  end)
 end)

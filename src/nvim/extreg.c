@@ -855,3 +855,36 @@ int nlua_extregs_get_provider(lua_State *lstate)
   lua_pushlightuserdata(lstate, (void *)prov);
   return 1;
 }
+
+/// Lua: vim._extregs.get_provider_names()
+/// Returns a table of all registered extreg provider names
+int nlua_extregs_get_provider_names(lua_State *lstate)
+{
+  hash_lock(&extreg_providers);
+  
+  // First, count the registered providers
+  size_t count = 0;
+  HASHTAB_ITER(&extreg_providers, hi, {
+    extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);
+    if (prov->registered) {
+      count++;
+    }
+  });
+  
+  // Create table with pre-allocated size
+  lua_createtable(lstate, (int)count, 0);
+  
+  // Now fill the table
+  size_t idx = 1;
+  HASHTAB_ITER(&extreg_providers, hi, {
+    extreg_provider_t *prov = HASH_ITEM_TO_EXTREG_PROVIDER(hi);
+    if (prov->registered && idx <= count) {
+      lua_pushstring(lstate, prov->name);
+      lua_rawseti(lstate, -2, (int)idx++);
+    }
+  });
+  
+  hash_unlock(&extreg_providers);
+  
+  return 1;  // return the table
+}
